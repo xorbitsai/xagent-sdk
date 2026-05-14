@@ -73,8 +73,10 @@ class TaskTimeout(XAgentError):
     """``wait()`` / ``run()`` exceeded its local deadline waiting for a task
     to reach a terminal state.
 
-    Not yet raised by any code path; reserved for the polling layer added
-    in a later commit.
+    Raised by ``TasksAPI.wait`` (and indirectly by ``TasksAPI.run``) when
+    the wall-clock budget elapses with the task still in a non-terminal
+    state. ``http_status`` is ``None`` because no HTTP exchange surfaced
+    the failure -- the deadline is purely client-side.
     """
 
 

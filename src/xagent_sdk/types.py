@@ -9,8 +9,12 @@ from pydantic import TypeAdapter
 class TaskStatus(str, Enum):
     """Lifecycle states a task can hold.
 
-    The full set the SDK may observe is fixed at 5 values; ``run()`` and
-    ``wait()`` treat ``COMPLETED``, ``FAILED``, and ``PAUSED`` as terminal.
+    The full set the SDK may observe is fixed at 5 values. ``run()`` and
+    ``wait()`` treat only ``COMPLETED`` and ``FAILED`` as terminal,
+    mirroring the backend's own definition. ``PAUSED`` is non-terminal
+    because the backend allows ``append()`` onto a paused task, which
+    transitions it back to ``RUNNING``; a polling caller should observe
+    that transition rather than return early.
     """
 
     PENDING = "pending"
