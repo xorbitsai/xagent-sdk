@@ -1,4 +1,5 @@
 from xagent_sdk._version import __version__
+from xagent_sdk.client import XAgentClient
 from xagent_sdk.errors import (
     AgentNotFound,
     InternalError,
@@ -37,6 +38,7 @@ __all__ = [
     "TaskNotFound",
     "TaskStatus",
     "TaskTimeout",
+    "XAgentClient",
     "XAgentError",
     "XAgentTransportError",
     "__version__",
