@@ -38,7 +38,6 @@ dev = [
     "ruff>=0.12.3",
     "mypy>=1.19.0",
     "pytest>=8.0",
-    "pytest-httpx>=0.30",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -64,5 +63,8 @@ show_error_codes = true
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
-addopts = "-ra -q"
+addopts = "-ra -q -m 'not e2e'"
 testpaths = ["tests"]
+markers = [
+    "e2e: requires a running xAgent backend (env XAGENT_API_KEY + XAGENT_BASE_URL); skipped by default and not run in CI",
+]
