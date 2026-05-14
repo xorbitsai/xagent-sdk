@@ -119,6 +119,28 @@ class Step:
     data: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class RunResult:
+    """Bundled result of ``client.tasks.run()``.
+
+    Carries the final ``TaskInfo`` snapshot together with the full step
+    timeline so callers do not need to re-fetch either after a
+    convenience run. The ``status`` and ``output`` properties shortcut
+    the most common reads (``result.output`` vs ``result.info.output``).
+    """
+
+    info: TaskInfo
+    steps: list[Step]
+
+    @property
+    def output(self) -> str | None:
+        return self.info.output
+
+    @property
+    def status(self) -> TaskStatus:
+        return self.info.status
+
+
 # --- Private parsers --------------------------------------------------
 # TypeAdapter caches schema per type at module import; cheap to keep at
 # module scope. ``validate_python`` handles ISO datetime parsing, enum

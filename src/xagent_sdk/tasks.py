@@ -1,10 +1,14 @@
+import time
 from typing import TYPE_CHECKING, Any
 
+from xagent_sdk.errors import TaskTimeout
 from xagent_sdk.types import (
     AppendResult,
     CreateTaskResult,
+    RunResult,
     Step,
     TaskInfo,
+    TaskStatus,
     _parse_append,
     _parse_create_task,
     _parse_steps,
@@ -15,12 +19,22 @@ if TYPE_CHECKING:
     from xagent_sdk.client import XAgentClient
 
 
+# Mirrors backend ``v1/tasks.py:170``: ``_TERMINAL_STATUSES = (COMPLETED,
+# FAILED)``. PAUSED is *not* terminal -- backend allows append() onto a
+# PAUSED task (the atomic claim is ``WHERE status != RUNNING``), and
+# ``completed_at`` is only populated in COMPLETED/FAILED. SDK stays
+# consistent so multi-process workflows (A wait()s while B append()s a
+# resume) observe the RUNNING transition rather than return early.
+_TERMINAL_STATUSES = frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED})
+
+
 class TasksAPI:
     """The ``client.tasks`` namespace.
 
-    All four methods are thin wrappers over the v1 endpoints: build a
-    request body, hand it to ``XAgentClient._request`` for transport +
-    error mapping, then parse the success body into a frozen dataclass.
+    All four endpoint methods are thin wrappers over the v1 endpoints:
+    build a request body, hand it to ``XAgentClient._request`` for
+    transport + error mapping, then parse the success body into a frozen
+    dataclass.
 
     ``message`` arguments take a plain ``str`` rather than a structured
     object: the SDK only sends user-role messages (the v1 contract pins
@@ -29,6 +43,10 @@ class TasksAPI:
 
     ``agent_id`` is keyword-only on every write to prevent positional
     swaps with ``message``.
+
+    ``wait()`` and ``run()`` add client-side polling on top of those
+    endpoints; they raise ``TaskTimeout`` on deadline but propagate any
+    other error from the underlying calls.
     """
 
     def __init__(self, client: "XAgentClient") -> None:
@@ -92,3 +110,85 @@ class TasksAPI:
         """
         resp = self._client._request("GET", f"/v1/chat/tasks/{task_id}/steps")
         return _parse_steps(resp.json())
+
+    def wait(
+        self,
+        task_id: int,
+        *,
+        timeout: float = 120.0,
+        poll_interval: float = 1.0,
+    ) -> TaskInfo:
+        """Poll ``get()`` until the task reaches a terminal state.
+
+        Terminal states are ``COMPLETED`` and ``FAILED`` -- mirroring the
+        backend's own definition. ``PENDING``, ``RUNNING``, and ``PAUSED``
+        keep the loop going; a PAUSED task can be resumed by an
+        ``append()`` from another caller, and waiting through it lets one
+        observer see the resulting RUNNING transition.
+
+        Returns the final ``TaskInfo`` once a terminal state is observed.
+        Raises ``TaskTimeout`` if the wall-clock deadline elapses first.
+        Any other exception raised by ``get()`` (``XAgentTransportError``,
+        ``TaskNotFound``, ``InvalidAPIKey``, ...) propagates immediately
+        -- this helper deliberately does not retry transient failures,
+        because retry semantics belong to the caller's business logic.
+
+        Args:
+            task_id: The task to poll.
+            timeout: Maximum wall-clock seconds to wait. Default 120.
+            poll_interval: Seconds to sleep between polls. Default 1.0.
+
+        Returns:
+            The final ``TaskInfo`` snapshot.
+
+        Raises:
+            TaskTimeout: when ``timeout`` elapses without a terminal state.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            info = self.get(task_id)
+            if info.status in _TERMINAL_STATUSES:
+                return info
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TaskTimeout(
+                    "task_timeout",
+                    (
+                        f"Task {task_id} did not reach a terminal state "
+                        f"within {timeout}s "
+                        f"(last observed status: {info.status.value})"
+                    ),
+                    http_status=None,
+                )
+            # Cap the sleep so a long ``poll_interval`` cannot overshoot
+            # the caller's requested wall-clock timeout.
+            time.sleep(min(poll_interval, remaining))
+
+    def run(
+        self,
+        *,
+        agent_id: int,
+        message: str,
+        timeout: float = 120.0,
+        poll_interval: float = 1.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> RunResult:
+        """Single-turn convenience: ``create()`` + ``wait()`` + ``steps()``.
+
+        Equivalent to::
+
+            created = client.tasks.create(agent_id=..., message=...)
+            info    = client.tasks.wait(created.task_id, timeout=...)
+            steps   = client.tasks.steps(created.task_id)
+
+        bundled into one call with a single deadline. Use the lower-level
+        trio when you need to send multiple turns or interleave other work.
+
+        Raises ``TaskTimeout`` if the task does not terminate within
+        ``timeout`` seconds. Other errors propagate from the underlying
+        ``create`` / ``get`` / ``steps`` calls.
+        """
+        created = self.create(agent_id=agent_id, message=message, metadata=metadata)
+        info = self.wait(created.task_id, timeout=timeout, poll_interval=poll_interval)
+        steps = self.steps(created.task_id)
+        return RunResult(info=info, steps=steps)
