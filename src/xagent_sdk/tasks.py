@@ -135,15 +135,25 @@ class TasksAPI:
 
         Args:
             task_id: The task to poll.
-            timeout: Maximum wall-clock seconds to wait. Default 120.
-            poll_interval: Seconds to sleep between polls. Default 1.0.
+            timeout: Maximum wall-clock seconds to wait. Must be
+                non-negative; ``0`` polls exactly once and raises
+                ``TaskTimeout`` immediately if the task is still
+                non-terminal. Default 120.
+            poll_interval: Seconds to sleep between polls. Must be
+                non-negative; ``0`` tight-loops (yields the GIL each
+                iteration via ``time.sleep(0)``). Default 1.0.
 
         Returns:
             The final ``TaskInfo`` snapshot.
 
         Raises:
-            TaskTimeout: when ``timeout`` elapses without a terminal state.
+            ValueError: ``timeout`` or ``poll_interval`` is negative.
+            TaskTimeout: ``timeout`` elapsed without a terminal state.
         """
+        if timeout < 0:
+            raise ValueError("timeout must be non-negative")
+        if poll_interval < 0:
+            raise ValueError("poll_interval must be non-negative")
         deadline = time.monotonic() + timeout
         while True:
             info = self.get(task_id)
@@ -181,14 +191,25 @@ class TasksAPI:
             info    = client.tasks.wait(created.task_id, timeout=...)
             steps   = client.tasks.steps(created.task_id)
 
-        bundled into one call with a single deadline. Use the lower-level
-        trio when you need to send multiple turns or interleave other work.
+        ``timeout`` is the wall-clock budget for ``create`` + ``wait``
+        combined: the time spent in ``create()`` is subtracted from the
+        budget passed to ``wait()`` so the caller does not pay it twice.
+        ``steps()`` is invoked after a terminal state is observed and is
+        a single cheap GET; its latency is additional but expected to be
+        a small constant.
 
-        Raises ``TaskTimeout`` if the task does not terminate within
-        ``timeout`` seconds. Other errors propagate from the underlying
-        ``create`` / ``get`` / ``steps`` calls.
+        Use the lower-level trio when you need to send multiple turns or
+        interleave other work.
+
+        Raises ``TaskTimeout`` if the task does not terminate within the
+        combined ``create`` + ``wait`` budget. Other errors propagate
+        from the underlying ``create`` / ``get`` / ``steps`` calls.
         """
+        start = time.monotonic()
         created = self.create(agent_id=agent_id, message=message, metadata=metadata)
-        info = self.wait(created.task_id, timeout=timeout, poll_interval=poll_interval)
+        remaining = max(0.0, timeout - (time.monotonic() - start))
+        info = self.wait(
+            created.task_id, timeout=remaining, poll_interval=poll_interval
+        )
         steps = self.steps(created.task_id)
         return RunResult(info=info, steps=steps)

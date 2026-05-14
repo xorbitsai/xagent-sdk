@@ -381,6 +381,25 @@ class TestWait:
 
         assert elapsed < 0.5
 
+    def test_negative_timeout_rejected(
+        self, make_client: Callable[..., XAgentClient]
+    ) -> None:
+        # The handler is never invoked; validation rejects before any HTTP.
+        with (
+            make_client(lambda req: httpx.Response(200)) as c,  # noqa: ARG005
+            pytest.raises(ValueError, match="timeout"),
+        ):
+            c.tasks.wait(10, timeout=-1.0, poll_interval=0.05)
+
+    def test_negative_poll_interval_rejected(
+        self, make_client: Callable[..., XAgentClient]
+    ) -> None:
+        with (
+            make_client(lambda req: httpx.Response(200)) as c,  # noqa: ARG005
+            pytest.raises(ValueError, match="poll_interval"),
+        ):
+            c.tasks.wait(10, timeout=1.0, poll_interval=-0.05)
+
 
 class TestRun:
     def test_full_flow(self, make_client: Callable[..., XAgentClient]) -> None:
@@ -487,3 +506,55 @@ class TestRun:
                 timeout=0.1,
                 poll_interval=0.02,
             )
+
+    def test_shared_deadline(self, make_client: Callable[..., XAgentClient]) -> None:
+        # Inject latency into create() so that the time it consumes is
+        # observable. Old behavior passed the full timeout to wait(),
+        # producing total elapsed of (create_delay + timeout). New
+        # behavior subtracts create's elapsed, so total is bounded by
+        # timeout itself.
+        create_delay = 0.1
+
+        def h(req: httpx.Request) -> httpx.Response:
+            method, path = req.method, req.url.path
+            if method == "POST" and path == "/v1/chat/tasks":
+                time.sleep(create_delay)
+                return httpx.Response(
+                    202,
+                    json={
+                        "task_id": 42,
+                        "agent_id": 7,
+                        "status": "pending",
+                        "created_at": "2026-05-10T03:00:00Z",
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": 42,
+                    "agent_id": 7,
+                    "status": "running",
+                    "input": "hi",
+                    "output": None,
+                    "error": None,
+                    "created_at": "2026-05-10T03:00:00Z",
+                    "completed_at": None,
+                },
+            )
+
+        timeout = 0.2
+        with make_client(h) as c:
+            t0 = time.monotonic()
+            with pytest.raises(TaskTimeout):
+                c.tasks.run(
+                    agent_id=7,
+                    message="hi",
+                    timeout=timeout,
+                    poll_interval=0.02,
+                )
+            elapsed = time.monotonic() - t0
+
+        # Old (broken) behavior: elapsed ≈ create_delay + timeout ≈ 0.3s
+        # New (correct) behavior: elapsed ≈ timeout ≈ 0.2s
+        # Assert < timeout + create_delay/2 so we strictly distinguish.
+        assert elapsed < timeout + create_delay / 2
