@@ -4,6 +4,7 @@ from typing import Any, Self
 import httpx
 
 from xagent_sdk._version import __version__
+from xagent_sdk.errors import XAgentTransportError
 
 _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_CONNECT_TIMEOUT = 10.0
@@ -56,7 +57,12 @@ class HTTPClient:
         *,
         json: dict[str, Any] | None = None,
     ) -> httpx.Response:
-        return self._client.request(method, path, json=json)
+        try:
+            return self._client.request(method, path, json=json)
+        except httpx.HTTPError as exc:
+            raise XAgentTransportError(
+                "transport_error", str(exc), http_status=None
+            ) from exc
 
     def close(self) -> None:
         self._client.close()
