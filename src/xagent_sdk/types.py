@@ -173,12 +173,20 @@ def _parse_task_info(data: dict[str, Any]) -> TaskInfo:
     return _TASK_INFO_ADAPTER.validate_python(data)
 
 
-def _parse_steps(data: dict[str, Any]) -> list[Step]:
+def _parse_steps(data: Any) -> list[Step]:
     """Extract and parse the ``steps`` array from a ``StepsResponse`` body.
 
     The backend wraps the array in a top-level object with ``task_id`` and
     ``agent_id`` repeated for self-description; the SDK caller invoked
     ``client.tasks.steps(task_id)`` so those wrapper fields are redundant
     and dropped here.
+
+    Defensive against malformed bodies: if ``data`` is not a dict (the
+    server or an upstream proxy returned a non-canonical shape) the
+    function returns ``[]`` rather than raising ``AttributeError`` from
+    inside ``dict.get``. The signature is widened to ``Any`` so callers
+    passing ``resp.json()`` (typed ``Any``) do not need to pre-validate.
     """
+    if not isinstance(data, dict):
+        return []
     return _STEP_LIST_ADAPTER.validate_python(data.get("steps", []))

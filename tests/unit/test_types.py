@@ -164,6 +164,15 @@ class TestParseSteps:
     def test_empty_list(self) -> None:
         assert _parse_steps({"task_id": 1, "agent_id": 1, "steps": []}) == []
 
+    @pytest.mark.parametrize(
+        "data",
+        [None, [1, 2, 3], "garbage", 42, True],
+    )
+    def test_non_dict_returns_empty(self, data: object) -> None:
+        # Defensive: malformed response (server bug or upstream proxy
+        # rewriting the body) should not crash with AttributeError.
+        assert _parse_steps(data) == []
+
     def test_unknown_step_type_rejected(self) -> None:
         with pytest.raises(ValidationError):
             _parse_steps(

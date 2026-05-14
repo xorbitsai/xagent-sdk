@@ -65,6 +65,7 @@ class TestFromResponseStableCodes:
 
 class TestFromResponseFallback:
     def test_422_detail_list(self) -> None:
+        # msg-only dict (no loc): falls back to msg verbatim.
         resp = httpx.Response(
             422,
             json={"detail": [{"msg": "field required"}]},
@@ -73,6 +74,35 @@ class TestFromResponseFallback:
         err = from_response(resp)
         assert isinstance(err, InvalidInput)
         assert err.code == "invalid_input"
+        assert err.message == "field required"
+
+    def test_422_detail_list_with_loc(self) -> None:
+        # Standard FastAPI 422 entry: loc + msg + type.
+        # Preserves loc as dotted path so the caller knows which field
+        # failed, not just what failed.
+        resp = httpx.Response(
+            422,
+            json={
+                "detail": [
+                    {
+                        "loc": ["body", "message", "content"],
+                        "msg": "field required",
+                        "type": "missing",
+                    }
+                ]
+            },
+            request=_req(),
+        )
+        err = from_response(resp)
+        assert isinstance(err, InvalidInput)
+        assert err.message == "body.message.content: field required"
+
+    def test_422_detail_list_of_strings(self) -> None:
+        # detail may legitimately be a list of strings; pass through.
+        resp = httpx.Response(422, json={"detail": ["something broke"]}, request=_req())
+        err = from_response(resp)
+        assert isinstance(err, InvalidInput)
+        assert err.message == "something broke"
 
     def test_422_detail_string(self) -> None:
         resp = httpx.Response(422, json={"detail": "bad"}, request=_req())

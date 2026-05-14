@@ -132,5 +132,25 @@ def _format_422_detail(detail: Any) -> str:
     if isinstance(detail, str):
         return detail
     if isinstance(detail, list):
-        return "; ".join(str(item) for item in detail)
+        return "; ".join(_format_422_item(i) for i in detail)
     return str(detail)
+
+
+def _format_422_item(item: Any) -> str:
+    """Compact one FastAPI 422 detail entry into ``loc.path: msg`` form.
+
+    FastAPI typically emits ``{"loc": [...], "msg": "...", "type": "..."}``
+    per entry; preserving ``loc`` is more useful than ``msg`` alone
+    because it tells the caller which field failed. Falls back to ``msg``
+    when ``loc`` is missing, or to ``str(item)`` when neither field is
+    a string.
+    """
+    if not isinstance(item, dict):
+        return str(item)
+    msg = item.get("msg")
+    loc = item.get("loc")
+    if isinstance(msg, str) and isinstance(loc, list) and loc:
+        return f"{'.'.join(str(p) for p in loc)}: {msg}"
+    if isinstance(msg, str):
+        return msg
+    return str(item)
