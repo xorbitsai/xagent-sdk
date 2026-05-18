@@ -1,10 +1,20 @@
-name: CI
+name: Python CI
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "python/**"
+      - "shared/**"
+      - ".pre-commit-config.yaml"
+      - ".github/workflows/python-ci.yml"
   push:
     branches: [main]
+    paths:
+      - "python/**"
+      - "shared/**"
+      - ".pre-commit-config.yaml"
+      - ".github/workflows/python-ci.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,9 +31,10 @@ jobs:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v3
       - name: Install dependencies
+        working-directory: python
         run: uv sync --group dev
       - name: Run pre-commit
-        run: uv run pre-commit run --all-files
+        run: uv run --project python pre-commit run --all-files
 
   pytest:
     needs: pre-commit
@@ -39,6 +50,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v3
       - name: Install dependencies
+        working-directory: python
         run: uv sync --group dev
       - name: Run tests
+        working-directory: python
         run: uv run pytest

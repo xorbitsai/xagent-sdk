@@ -4,18 +4,23 @@ repos:
     hooks:
       - id: ruff-check
         args: [--fix]
+        files: ^python/
       - id: ruff-format
+        files: ^python/
         types_or: [python, pyi]
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.0
+  - repo: local
+    # mypy is wrapped as a local hook so it runs from python/ with the
+    # project's own venv (uv). This keeps python/pyproject.toml's
+    # [tool.mypy] mypy_path = "src" resolvable both here and via direct
+    # invocation (`cd python && uv run mypy --package xagent_sdk`).
     hooks:
       - id: mypy
-        args: ["--package", "xagent_sdk"]
+        name: mypy
+        entry: bash -c 'cd python && uv run mypy --package xagent_sdk'
+        language: system
         pass_filenames: false
-        additional_dependencies:
-          - httpx>=0.27
-          - pydantic>=2.5
+        files: ^python/(src/xagent_sdk|pyproject\.toml)
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
