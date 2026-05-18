@@ -1,4 +1,11 @@
-"""Tests for the V1 envelope parser and exception hierarchy."""
+"""Tests for the V1 envelope parser and exception hierarchy.
+
+The stable-code parametrize below loads each error body from
+``shared/fixtures/v1/errors/`` so the test consumes the same canonical
+JSON future language clients will use. Status codes and the
+fixture-name to exception-class mapping live as parametrize data here,
+because they are language-agnostic facts about the wire contract.
+"""
 
 import httpx
 import pytest
@@ -14,6 +21,8 @@ from xagent_sdk import (
     XAgentError,
 )
 from xagent_sdk.errors import from_response
+
+from ._fixtures import error_envelope
 
 
 def _req() -> httpx.Request:
@@ -36,7 +45,7 @@ class TestXAgentError:
 
 class TestFromResponseStableCodes:
     @pytest.mark.parametrize(
-        ("status", "code", "expected"),
+        ("status", "name", "expected"),
         [
             (401, "invalid_api_key", InvalidAPIKey),
             (404, "agent_not_found", AgentNotFound),
@@ -49,17 +58,15 @@ class TestFromResponseStableCodes:
     def test_envelope_maps_to_subclass(
         self,
         status: int,
-        code: str,
+        name: str,
         expected: type[XAgentError],
     ) -> None:
-        resp = httpx.Response(
-            status,
-            json={"error": {"code": code, "message": "m"}},
-            request=_req(),
-        )
+        body = error_envelope(name)
+        resp = httpx.Response(status, json=body, request=_req())
         err = from_response(resp)
         assert isinstance(err, expected)
-        assert err.code == code
+        # Each fixture's error.code matches its filename by construction.
+        assert err.code == name
         assert err.http_status == status
 
 

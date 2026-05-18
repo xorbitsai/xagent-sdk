@@ -1,0 +1,9 @@
+{
+  "detail": [
+    {
+      "loc": ["body", "message", "content"],
+      "msg": "field required",
+      "type": "missing"
+    }
+  ]
+}

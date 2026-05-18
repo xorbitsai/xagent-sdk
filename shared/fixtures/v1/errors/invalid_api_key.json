@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "invalid_api_key",
+    "message": "API key is missing, invalid, or revoked."
+  }
+}
