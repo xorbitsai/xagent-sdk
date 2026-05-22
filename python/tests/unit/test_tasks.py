@@ -507,6 +507,34 @@ class TestRun:
                 poll_interval=0.02,
             )
 
+    def test_negative_timeout_rejected_before_create(
+        self, make_client: Callable[..., XAgentClient]
+    ) -> None:
+        calls = {"n": 0}
+
+        def h(req: httpx.Request) -> httpx.Response:  # noqa: ARG001
+            calls["n"] += 1
+            return httpx.Response(500)
+
+        with make_client(h) as c, pytest.raises(ValueError, match="timeout"):
+            c.tasks.run(agent_id=7, message="hi", timeout=-1.0)
+
+        assert calls["n"] == 0
+
+    def test_negative_poll_interval_rejected_before_create(
+        self, make_client: Callable[..., XAgentClient]
+    ) -> None:
+        calls = {"n": 0}
+
+        def h(req: httpx.Request) -> httpx.Response:  # noqa: ARG001
+            calls["n"] += 1
+            return httpx.Response(500)
+
+        with make_client(h) as c, pytest.raises(ValueError, match="poll_interval"):
+            c.tasks.run(agent_id=7, message="hi", poll_interval=-0.01)
+
+        assert calls["n"] == 0
+
     def test_shared_deadline(self, make_client: Callable[..., XAgentClient]) -> None:
         # Inject latency into create() so that the time it consumes is
         # observable. Old behavior passed the full timeout to wait(),

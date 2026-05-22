@@ -205,6 +205,10 @@ class TasksAPI:
         combined ``create`` + ``wait`` budget. Other errors propagate
         from the underlying ``create`` / ``get`` / ``steps`` calls.
         """
+        if timeout < 0:
+            raise ValueError("timeout must be non-negative")
+        if poll_interval < 0:
+            raise ValueError("poll_interval must be non-negative")
         start = time.monotonic()
         created = self.create(agent_id=agent_id, message=message, metadata=metadata)
         remaining = max(0.0, timeout - (time.monotonic() - start))

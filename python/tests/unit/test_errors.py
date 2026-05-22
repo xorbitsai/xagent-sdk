@@ -135,6 +135,12 @@ class TestFromResponseFallback:
         assert "bad gateway" in err.message
         assert err.http_status == 502
 
+    def test_non_json_body_truncated(self) -> None:
+        resp = httpx.Response(502, text="x" * 1500, request=_req())
+        err = from_response(resp)
+        assert isinstance(err, InternalError)
+        assert err.message == ("x" * 1000) + "..."
+
     def test_empty_body(self) -> None:
         resp = httpx.Response(500, text="", request=_req())
         err = from_response(resp)
@@ -146,7 +152,25 @@ class TestFromResponseFallback:
         err = from_response(resp)
         assert isinstance(err, InternalError)
 
+    def test_missing_error_key_truncated(self) -> None:
+        resp = httpx.Response(500, json={"body": "x" * 1500}, request=_req())
+        err = from_response(resp)
+        assert isinstance(err, InternalError)
+        assert len(err.message) == 1003
+        assert err.message.endswith("...")
+
     def test_malformed_error_object(self) -> None:
         resp = httpx.Response(500, json={"error": "just a string"}, request=_req())
         err = from_response(resp)
         assert isinstance(err, InternalError)
+
+    def test_malformed_envelope_truncated(self) -> None:
+        resp = httpx.Response(
+            500,
+            json={"error": {"code": "internal_error", "message": ["x" * 1500]}},
+            request=_req(),
+        )
+        err = from_response(resp)
+        assert isinstance(err, InternalError)
+        assert len(err.message) == 1003
+        assert err.message.endswith("...")

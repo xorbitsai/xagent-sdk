@@ -2,6 +2,8 @@ from typing import Any
 
 import httpx
 
+_MAX_FALLBACK_ERROR_MESSAGE_LENGTH = 1000
+
 
 class XAgentError(Exception):
     """Base class for all SDK exceptions.
@@ -106,7 +108,7 @@ def from_response(resp: httpx.Response) -> XAgentError:
     try:
         body: Any = resp.json()
     except ValueError:
-        return InternalError("internal_error", resp.text or "<empty body>", status)
+        return InternalError("internal_error", _fallback_message(resp.text), status)
 
     if status == 422:
         detail = body.get("detail") if isinstance(body, dict) else None
@@ -114,15 +116,25 @@ def from_response(resp: httpx.Response) -> XAgentError:
 
     error_obj = body.get("error") if isinstance(body, dict) else None
     if not isinstance(error_obj, dict):
-        return InternalError("internal_error", str(body), status)
+        return InternalError("internal_error", _fallback_message(body), status)
 
     code = error_obj.get("code")
     message = error_obj.get("message", "")
     if not isinstance(code, str) or not isinstance(message, str):
-        return InternalError("internal_error", str(body), status)
+        return InternalError("internal_error", _fallback_message(body), status)
 
     cls = _CODE_MAP.get(code, InternalError)
     return cls(code, message, status)
+
+
+def _fallback_message(value: Any) -> str:
+    """Normalize fallback error payloads before exposing them on exceptions."""
+    message = value if isinstance(value, str) else str(value)
+    if not message:
+        message = "<empty body>"
+    if len(message) > _MAX_FALLBACK_ERROR_MESSAGE_LENGTH:
+        return message[:_MAX_FALLBACK_ERROR_MESSAGE_LENGTH] + "..."
+    return message
 
 
 def _format_422_detail(detail: Any) -> str:
