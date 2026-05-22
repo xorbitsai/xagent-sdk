@@ -229,7 +229,7 @@ persistent connection pool).
 - **Always pin to a git tag** in production:
 
   ```bash
-  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk-python@v0.1.0"
+  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.1.0#subdirectory=python"
   ```
 
   Installing from `@main` will eventually break you when the surface

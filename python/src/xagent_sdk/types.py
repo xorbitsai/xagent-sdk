@@ -1,12 +1,12 @@
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import TypeAdapter
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Lifecycle states a task can hold.
 
     The full set the SDK may observe is fixed at 5 values. ``run()`` and
@@ -24,12 +24,14 @@ class TaskStatus(str, Enum):
     PAUSED = "paused"
 
 
-class StepType(str, Enum):
+class StepType(StrEnum):
     """Public timeline step types.
 
     Backend collapses ~32 internal trace event types into these 4 stable
-    surface values. New step types may be added in future server versions;
-    callers should treat unknown types as forward-compat extensions.
+    surface values. The v1 SDK treats this as a closed public contract;
+    adding a new public step type requires a coordinated SDK update.
+    Type-specific ``data`` dictionaries may still grow new keys over time,
+    so callers should ignore unknown keys inside ``Step.data``.
     """
 
     THINKING = "thinking"
