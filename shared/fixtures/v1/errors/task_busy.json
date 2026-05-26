@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "task_busy",
+    "message": "Task is currently running; retry after polling for its status."
+  }
+}

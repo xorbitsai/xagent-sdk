@@ -1,0 +1,34 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.3
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: ^python/
+      - id: ruff-format
+        files: ^python/
+        types_or: [python, pyi]
+
+  - repo: local
+    # mypy is wrapped as a local hook so it runs from python/ with the
+    # project's own venv (uv). This keeps python/pyproject.toml's
+    # [tool.mypy] mypy_path = "src" resolvable both here and via direct
+    # invocation (`cd python && uv run mypy --package xagent_sdk`).
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: bash -c 'cd python && uv run mypy --package xagent_sdk'
+        language: system
+        pass_filenames: false
+        files: ^python/(src/xagent_sdk|pyproject\.toml)
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+      - id: codespell

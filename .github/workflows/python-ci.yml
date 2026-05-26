@@ -1,0 +1,57 @@
+name: Python CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "python/**"
+      - "shared/**"
+      - ".pre-commit-config.yaml"
+      - ".github/workflows/python-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "python/**"
+      - "shared/**"
+      - ".pre-commit-config.yaml"
+      - ".github/workflows/python-ci.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync --group dev
+      - name: Run pre-commit
+        run: uv run --project python pre-commit run --all-files
+
+  pytest:
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v3
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync --group dev
+      - name: Run tests
+        working-directory: python
+        run: uv run pytest
