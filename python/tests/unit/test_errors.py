@@ -51,6 +51,7 @@ class TestFromResponseStableCodes:
             (404, "agent_not_found", AgentNotFound),
             (404, "task_not_found", TaskNotFound),
             (409, "task_busy", TaskBusy),
+            (422, "validation_422", InvalidInput),
             (429, "rate_limited", RateLimited),
             (500, "internal_error", InternalError),
         ],
@@ -65,13 +66,24 @@ class TestFromResponseStableCodes:
         resp = httpx.Response(status, json=body, request=_req())
         err = from_response(resp)
         assert isinstance(err, expected)
-        # Each fixture's error.code matches its filename by construction.
-        assert err.code == name
+        expected_code = "invalid_input" if name == "validation_422" else name
+        assert err.code == expected_code
         assert err.http_status == status
 
 
 class TestFromResponseFallback:
-    def test_422_detail_list(self) -> None:
+    def test_v1_invalid_input_envelope_preserves_message(self) -> None:
+        resp = httpx.Response(
+            422,
+            json={"error": {"code": "invalid_input", "message": "custom bad input"}},
+            request=_req(),
+        )
+        err = from_response(resp)
+        assert isinstance(err, InvalidInput)
+        assert err.code == "invalid_input"
+        assert err.message == "custom bad input"
+
+    def test_legacy_422_detail_list(self) -> None:
         # msg-only dict (no loc): falls back to msg verbatim.
         resp = httpx.Response(
             422,
@@ -83,7 +95,7 @@ class TestFromResponseFallback:
         assert err.code == "invalid_input"
         assert err.message == "field required"
 
-    def test_422_detail_list_with_loc(self) -> None:
+    def test_legacy_422_detail_list_with_loc(self) -> None:
         # Standard FastAPI 422 entry: loc + msg + type.
         # Preserves loc as dotted path so the caller knows which field
         # failed, not just what failed.
@@ -104,14 +116,14 @@ class TestFromResponseFallback:
         assert isinstance(err, InvalidInput)
         assert err.message == "body.message.content: field required"
 
-    def test_422_detail_list_of_strings(self) -> None:
+    def test_legacy_422_detail_list_of_strings(self) -> None:
         # detail may legitimately be a list of strings; pass through.
         resp = httpx.Response(422, json={"detail": ["something broke"]}, request=_req())
         err = from_response(resp)
         assert isinstance(err, InvalidInput)
         assert err.message == "something broke"
 
-    def test_422_detail_string(self) -> None:
+    def test_legacy_422_detail_string(self) -> None:
         resp = httpx.Response(422, json={"detail": "bad"}, request=_req())
         err = from_response(resp)
         assert isinstance(err, InvalidInput)

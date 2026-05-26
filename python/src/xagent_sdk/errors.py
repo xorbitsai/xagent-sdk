@@ -54,15 +54,16 @@ class InternalError(XAgentError):
     """
 
 
-# SDK-coined errors (server has no equivalent code).
 class InvalidInput(XAgentError):
-    """HTTP 422 from FastAPI request validation.
+    """HTTP 422, code ``invalid_input``.
 
-    FastAPI uses ``{"detail": [...]}`` instead of the V1 envelope; the SDK
-    coins the code ``invalid_input`` for uniformity.
+    Current ``/v1/*`` endpoints return this through the V1 envelope.
+    The SDK also accepts FastAPI's legacy ``{"detail": [...]}`` validation
+    shape as a compatibility fallback.
     """
 
 
+# SDK-coined errors (server has no equivalent code).
 class XAgentTransportError(XAgentError):
     """Network, DNS, TLS, or local timeout below the HTTP layer.
 
@@ -87,6 +88,7 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "agent_not_found": AgentNotFound,
     "task_not_found": TaskNotFound,
     "task_busy": TaskBusy,
+    "invalid_input": InvalidInput,
     "rate_limited": RateLimited,
     "internal_error": InternalError,
 }
@@ -99,7 +101,8 @@ def from_response(resp: httpx.Response) -> XAgentError:
 
     Recognizes:
       - V1 envelope: ``{"error": {"code": ..., "message": ...}}``
-      - FastAPI validation: HTTP 422 with ``{"detail": [...]}`` -> InvalidInput
+      - Legacy FastAPI validation fallback: HTTP 422 with ``{"detail": [...]}``
+        -> InvalidInput
       - Anything else (non-JSON body, missing ``error`` key, unknown ``code``)
         falls back to InternalError with the raw body as the message.
     """
@@ -110,12 +113,11 @@ def from_response(resp: httpx.Response) -> XAgentError:
     except ValueError:
         return InternalError("internal_error", _fallback_message(resp.text), status)
 
-    if status == 422:
-        detail = body.get("detail") if isinstance(body, dict) else None
-        return InvalidInput("invalid_input", _format_422_detail(detail), status)
-
     error_obj = body.get("error") if isinstance(body, dict) else None
     if not isinstance(error_obj, dict):
+        if status == 422:
+            detail = body.get("detail") if isinstance(body, dict) else None
+            return InvalidInput("invalid_input", _format_422_detail(detail), status)
         return InternalError("internal_error", _fallback_message(body), status)
 
     code = error_obj.get("code")

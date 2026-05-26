@@ -29,7 +29,7 @@ def response(name: str) -> dict[str, Any]:
 
 
 def error_envelope(name: str) -> dict[str, Any]:
-    """Load a canonical error body (V1 envelope or FastAPI 422) by name."""
+    """Load a canonical V1 error envelope body by name."""
     return _load("errors", name)
 
 

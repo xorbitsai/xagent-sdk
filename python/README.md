@@ -146,12 +146,12 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `TaskBusy` | 409 | `task_busy` |
 | `RateLimited` | 429 | `rate_limited` (reserved; backend does not yet emit) |
 | `InternalError` | 500 | `internal_error` |
+| `InvalidInput` | 422 | `invalid_input` |
 
-Three SDK-coined codes:
+Two SDK-coined codes:
 
 | Exception | Cause |
 |---|---|
-| `InvalidInput` | 422 from FastAPI validation (e.g., empty `message.content`) |
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer |
 | `TaskTimeout` | `wait()` / `run()` deadline elapsed |
 

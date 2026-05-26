@@ -239,7 +239,10 @@ class TestErrorMappingPerEndpoint:
 
     def test_steps_422(self, make_client: Callable[..., XAgentClient]) -> None:
         def h(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(422, json={"detail": [{"msg": "bad"}]})
+            return httpx.Response(
+                422,
+                json={"error": {"code": "invalid_input", "message": "bad"}},
+            )
 
         with make_client(h) as c, pytest.raises(InvalidInput):
             c.tasks.steps(10)

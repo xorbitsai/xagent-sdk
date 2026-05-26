@@ -1,9 +1,6 @@
 {
-  "detail": [
-    {
-      "loc": ["body", "message", "content"],
-      "msg": "field required",
-      "type": "missing"
-    }
-  ]
+  "error": {
+    "code": "invalid_input",
+    "message": "Field required (message.content)"
+  }
 }

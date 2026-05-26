@@ -24,9 +24,8 @@ implicit and documented below.
 
 ### `fixtures/v1/errors/`
 
-Six stable backend codes (V1 envelope shape:
-`{"error": {"code": "...", "message": "..."}}`) plus FastAPI's 422
-default (`{"detail": [...]}`).
+Seven stable backend codes using the V1 envelope shape:
+`{"error": {"code": "...", "message": "..."}}`.
 
 | File | HTTP status | Wire shape |
 |---|---|---|
@@ -34,9 +33,9 @@ default (`{"detail": [...]}`).
 | `agent_not_found.json` | 404 | V1 envelope |
 | `task_not_found.json` | 404 | V1 envelope |
 | `task_busy.json` | 409 | V1 envelope |
+| `validation_422.json` | 422 | V1 envelope (`invalid_input`) |
 | `rate_limited.json` | 429 | V1 envelope (reserved; backend does not currently emit it) |
 | `internal_error.json` | 500 | V1 envelope |
-| `validation_422.json` | 422 | FastAPI `{"detail": [...]}` — each entry carries `loc` / `msg` / `type` |
 
 ## Usage from a language client
 
