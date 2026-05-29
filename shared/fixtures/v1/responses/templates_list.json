@@ -1,24 +1,41 @@
-{
-  "templates": [
-    {
-      "template_id": "content_generator",
-      "name": "Content Generator",
-      "description": "Generate text, documents, contracts, and policies from a brief."
-    },
-    {
-      "template_id": "analyzer",
-      "name": "Analyzer",
-      "description": "Accepts uploaded files and returns structured insights, scores, or summaries."
-    },
-    {
-      "template_id": "q_and_a",
-      "name": "Q&A",
-      "description": "Conversational chat agent grounded in a knowledge base."
-    },
-    {
-      "template_id": "assistant",
-      "name": "Assistant",
-      "description": "Persistent assistant that can take actions based on rules."
-    }
-  ]
-}
+[
+  {
+    "id": "support-email-agent",
+    "name": "Email Agent (Support)",
+    "category": "Support",
+    "featured": false,
+    "description": "Monitors the support inbox, triages and responds to customer enquiries, and follows up on open tickets.",
+    "features": ["Sorts support tickets by urgency and deadlines"],
+    "connections": [{"name": "Gmail", "logo": "https://www.google.com/s2/favicons?domain=mail.google.com&sz=64"}],
+    "setup_time": "5 min setup",
+    "tags": [],
+    "author": "Xagent",
+    "version": "1.0"
+  },
+  {
+    "id": "sales-inbound-agent",
+    "name": "Inbound Agent",
+    "category": "Sales",
+    "featured": true,
+    "description": "Processes inbound leads, researches prospect, scores and qualifies leads.",
+    "features": ["Captures leads from forms, chat, and email"],
+    "connections": [],
+    "setup_time": "5 min setup",
+    "tags": [],
+    "author": "Xagent",
+    "version": "1.0"
+  },
+  {
+    "id": "support-ai-chatbot-agent",
+    "name": "AI Chatbot Agent",
+    "category": "Support",
+    "featured": true,
+    "description": "Responds to live chat enquiries instantly",
+    "features": ["Answers commonly asked questions for a company/group"],
+    "connections": [],
+    "setup_time": "5 min setup",
+    "tags": [],
+    "author": "Xagent",
+    "version": "1.0"
+  }
+]

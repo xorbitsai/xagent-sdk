@@ -1,10 +1,19 @@
 {
-  "template_id": "q_and_a",
-  "name": "Q&A",
-  "description": "Conversational chat agent grounded in a knowledge base.",
+  "id": "support-ai-chatbot-agent",
+  "name": "AI Chatbot Agent",
+  "category": "Support",
+  "featured": true,
+  "description": "Responds to live chat enquiries instantly",
+  "features": ["Answers commonly asked questions for a company/group"],
+  "connections": [{"name": "Google Drive", "logo": "https://www.google.com/s2/favicons?domain=drive.google.com&sz=64"}],
+  "setup_time": "5 min setup",
+  "tags": [],
+  "author": "Xagent",
+  "version": "1.0",
   "agent_config": {
-    "instructions": "You are a helpful Q&A assistant. Answer concisely and cite sources when possible.",
-    "mode": "balanced",
-    "tools_default": []
+    "instructions": "You are an AI Support Chatbot. Resolve customer enquiries directly in the chat where possible.",
+    "execution_mode": "flash",
+    "skills": [],
+    "tool_categories": ["basic", "knowledge"]
   }
 }

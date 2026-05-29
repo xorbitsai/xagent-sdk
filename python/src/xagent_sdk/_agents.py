@@ -97,19 +97,21 @@ class AgentsAPI:
     ) -> AgentCreateResult:
         """``POST /v1/agents/from-template`` -- create an agent by template.
 
-        The backend loads the template's ``agent_config`` and merges it
-        with ``overrides`` (caller-supplied dict, deep-merged server-side)
-        before persisting the agent. The SDK passes ``overrides`` through
-        verbatim and does **not** validate keys against any template
-        schema -- the backend rejects invalid overrides with 422
-        ``invalid_input``.
+        The backend loads the template's ``agent_config`` and overlays
+        any caller-supplied fields on top before persisting. ``overrides``
+        keys (``name``, ``description``, ``instructions``,
+        ``execution_mode``, ``models``, ``knowledge_bases``, ``skills``,
+        ``tool_categories``, ``suggested_prompts``) are spread into the
+        request body alongside ``template_id`` and ``generate_runtime_key``;
+        unknown keys are dropped by the backend and have no effect.
 
         Args:
             template_id: Template identifier from
                 ``templates.list()`` / ``templates.get()``.
             overrides: Optional dict of fields to override on the
-                template's ``agent_config`` (e.g. a new ``name``, custom
-                ``instructions``). Omitted from the wire when None.
+                template (e.g. ``{"name": "My Bot"}``). Spread flat into
+                the wire body; ``template_id`` and ``generate_runtime_key``
+                always win over collisions.
             generate_runtime_key: Same semantics as ``create()``.
 
         Returns:
@@ -118,16 +120,14 @@ class AgentsAPI:
         Raises:
             TemplateNotFound: 404 ``template_not_found`` -- unknown
                 ``template_id``.
-            InvalidInput: 422 -- overrides contain disallowed fields or
-                malformed values.
+            InvalidInput: 422 -- overrides contain malformed values.
             InvalidAPIKey: 401 -- personal key invalid / revoked.
         """
         body: dict[str, Any] = {
+            **(dict(overrides) if overrides else {}),
             "template_id": template_id,
             "generate_runtime_key": generate_runtime_key,
         }
-        if overrides is not None:
-            body["overrides"] = dict(overrides)
         resp = self._client._request("POST", "/v1/agents/from-template", json=body)
         return _parse_agent_create(resp.json())
 

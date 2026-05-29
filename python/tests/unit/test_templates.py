@@ -41,25 +41,25 @@ class TestList:
 
         assert captured[0].method == "GET"
         assert captured[0].url.path == "/v1/templates"
-        assert len(templates) == 4
+        assert len(templates) == 3
         assert all(isinstance(t, Template) for t in templates)
-        # Spot-check a couple
         ids = [t.template_id for t in templates]
-        assert "content_generator" in ids
-        assert "q_and_a" in ids
+        assert "support-email-agent" in ids
+        assert "support-ai-chatbot-agent" in ids
 
     def test_empty_list(self) -> None:
+        # Canonical empty: backend returns a bare empty array.
         def h(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"templates": []})
+            return httpx.Response(200, json=[])
 
         with _make_user(h) as c:
             assert c.templates.list() == []
 
-    def test_non_dict_body_defensive(self) -> None:
-        # Mirrors _parse_steps: malformed body returns [] rather than
-        # raising AttributeError.
+    def test_non_list_body_defensive(self) -> None:
+        # Malformed body (dict instead of list) returns [] rather than
+        # raising. Mirrors _parse_steps' defense-in-depth pattern.
         def h(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=[])
+            return httpx.Response(200, json={"templates": []})
 
         with _make_user(h) as c:
             assert c.templates.list() == []
@@ -74,16 +74,16 @@ class TestGet:
             return httpx.Response(200, json=response("templates_detail"))
 
         with _make_user(handler) as c:
-            detail = c.templates.get("q_and_a")
+            detail = c.templates.get("support-ai-chatbot-agent")
 
         assert captured[0].method == "GET"
-        assert captured[0].url.path == "/v1/templates/q_and_a"
+        assert captured[0].url.path == "/v1/templates/support-ai-chatbot-agent"
         assert isinstance(detail, TemplateDetail)
-        assert detail.template_id == "q_and_a"
-        assert detail.name == "Q&A"
+        assert detail.template_id == "support-ai-chatbot-agent"
+        assert detail.name == "AI Chatbot Agent"
         # agent_config is the merge target for create_from_template overrides
         assert "instructions" in detail.agent_config
-        assert detail.agent_config["mode"] == "balanced"
+        assert detail.agent_config["execution_mode"] == "flash"
 
     def test_404_template_not_found(self) -> None:
         with _make_user(_404_handler) as c, pytest.raises(TemplateNotFound):

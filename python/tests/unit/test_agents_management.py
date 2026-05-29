@@ -46,6 +46,16 @@ class TestList:
         assert {"active", "draft", "paused"} <= statuses
 
     def test_empty_list(self) -> None:
+        # Canonical empty: backend returns a bare empty array.
+        def h(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=[])
+
+        with _make_user(h) as c:
+            assert c.agents.list() == []
+
+    def test_non_list_body_defensive(self) -> None:
+        # Malformed body (dict instead of list) returns [] rather than
+        # raising. Mirrors _parse_steps' defense-in-depth pattern.
         def h(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"agents": []})
 
@@ -88,13 +98,15 @@ class TestCreate:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
+            # When generate_runtime_key=False the backend omits the
+            # api_key block; only the agent block is present.
             return httpx.Response(
                 201,
                 json={
-                    "agent_id": 42,
-                    "name": "HR Leave Assistant",
-                    "runtime_full_key": None,
-                    "runtime_key_prefix": None,
+                    "agent": {
+                        "id": 42,
+                        "name": "HR Leave Assistant",
+                    },
                 },
             )
 
@@ -165,13 +177,15 @@ class TestCreateFromTemplate:
         assert captured[0].method == "POST"
         assert captured[0].url.path == "/v1/agents/from-template"
         body = json.loads(captured[0].content)
+        # Overrides spread flat alongside template_id (matches backend
+        # V1AgentTemplateCreateRequest schema).
         assert body == {
             "template_id": "q_and_a",
             "generate_runtime_key": True,
-            "overrides": {"name": "HR Bot"},
+            "name": "HR Bot",
         }
 
-    def test_no_overrides_field_when_none(self) -> None:
+    def test_no_override_fields_when_none(self) -> None:
         captured: list[httpx.Request] = []
 
         def handler(req: httpx.Request) -> httpx.Response:
@@ -182,7 +196,29 @@ class TestCreateFromTemplate:
             c.agents.create_from_template("q_and_a")
 
         body = json.loads(captured[0].content)
-        assert "overrides" not in body
+        assert body == {
+            "template_id": "q_and_a",
+            "generate_runtime_key": True,
+        }
+
+    def test_template_id_wins_over_collision_in_overrides(self) -> None:
+        # Defensive: a caller who passes template_id inside overrides
+        # should not be able to override the explicit positional arg.
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(201, json=response("agents_create"))
+
+        with _make_user(handler) as c:
+            c.agents.create_from_template(
+                "real_template",
+                overrides={"template_id": "hijacked", "name": "X"},
+            )
+
+        body = json.loads(captured[0].content)
+        assert body["template_id"] == "real_template"
+        assert body["name"] == "X"
 
     def test_template_not_found(self) -> None:
         def h(req: httpx.Request) -> httpx.Response:

@@ -272,33 +272,67 @@ def _parse_user_principal(data: dict[str, Any]) -> UserPrincipal:
 
 
 def _parse_template_list(data: Any) -> list[Template]:
-    """Extract and parse the ``templates`` array from a list response.
+    """Parse the raw template array returned by ``GET /v1/templates``.
 
-    Mirrors ``_parse_steps`` defense-in-depth: non-dict body or missing
-    ``templates`` key returns an empty list rather than raising
-    ``AttributeError``.
+    Backend returns a bare JSON array of template objects whose primary
+    key is ``id``; the SDK surfaces that as ``Template.template_id`` to
+    avoid shadowing the ``id`` builtin on public dataclass instances.
+    Non-list bodies degrade to an empty list (defense-in-depth against
+    upstream proxies returning a non-canonical shape).
     """
-    if not isinstance(data, dict):
+    if not isinstance(data, list):
         return []
-    return _TEMPLATE_LIST_ADAPTER.validate_python(data.get("templates", []))
+    normalized = [_template_dict(item) for item in data if isinstance(item, dict)]
+    return _TEMPLATE_LIST_ADAPTER.validate_python(normalized)
 
 
 def _parse_template_detail(data: dict[str, Any]) -> TemplateDetail:
-    return _TEMPLATE_DETAIL_ADAPTER.validate_python(data)
+    return _TEMPLATE_DETAIL_ADAPTER.validate_python(_template_dict(data))
 
 
 def _parse_agent_list(data: Any) -> list[AgentSummary]:
-    """Extract and parse the ``agents`` array from a list response.
+    """Parse the raw agent array returned by ``GET /v1/agents``.
 
-    Same defensive shape as ``_parse_template_list`` / ``_parse_steps``.
+    Same bare-array + ``id`` -> ``agent_id`` rename as
+    ``_parse_template_list``.
     """
-    if not isinstance(data, dict):
+    if not isinstance(data, list):
         return []
-    return _AGENT_LIST_ADAPTER.validate_python(data.get("agents", []))
+    normalized = [_agent_summary_dict(item) for item in data if isinstance(item, dict)]
+    return _AGENT_LIST_ADAPTER.validate_python(normalized)
 
 
 def _parse_agent_create(data: dict[str, Any]) -> AgentCreateResult:
-    return _AGENT_CREATE_ADAPTER.validate_python(data)
+    """Parse the nested ``{"agent": {...}, "api_key": {...}}`` payload.
+
+    Backend returns the new agent row and (when ``generate_runtime_key``
+    is true) the one-time runtime key as two siblings under separate
+    keys; SDK flattens them into ``AgentCreateResult`` so callers see one
+    record. When ``generate_runtime_key=False`` the ``api_key`` block is
+    absent and the runtime fields stay ``None`` -- caller is expected to
+    materialize a key via ``rotate_key()`` later.
+    """
+    agent = data.get("agent") or {}
+    api_key = data.get("api_key") or {}
+    flat = {
+        "agent_id": agent.get("id"),
+        "name": agent.get("name"),
+        "runtime_full_key": api_key.get("full_key"),
+        "runtime_key_prefix": api_key.get("key_prefix"),
+    }
+    return _AGENT_CREATE_ADAPTER.validate_python(flat)
+
+
+def _template_dict(item: dict[str, Any]) -> dict[str, Any]:
+    """Rename backend ``id`` -> ``template_id`` while passing every other
+    key through; pydantic drops fields the dataclass does not declare.
+    """
+    return {**item, "template_id": item.get("id")}
+
+
+def _agent_summary_dict(item: dict[str, Any]) -> dict[str, Any]:
+    """Rename backend ``id`` -> ``agent_id`` for the agent list entry."""
+    return {**item, "agent_id": item.get("id")}
 
 
 def _parse_rotate_key(data: dict[str, Any]) -> RotateKeyResult:
