@@ -15,22 +15,22 @@ from collections.abc import Iterator
 
 import pytest
 
-from xagent_sdk import XAgentClient
+from xagent_sdk import AgentClient
 
 
 @pytest.fixture
-def client() -> Iterator[XAgentClient]:
+def client() -> Iterator[AgentClient]:
     """Default e2e client with the SDK's 30s per-request HTTP timeout."""
     api_key = os.environ.get("XAGENT_API_KEY")
     base_url = os.environ.get("XAGENT_BASE_URL")
     if not (api_key and base_url):
         pytest.skip("e2e requires XAGENT_API_KEY and XAGENT_BASE_URL")
-    with XAgentClient(api_key=api_key, base_url=base_url) as c:
+    with AgentClient(api_key=api_key, base_url=base_url) as c:
         yield c
 
 
 @pytest.fixture
-def patient_client() -> Iterator[XAgentClient]:
+def patient_client() -> Iterator[AgentClient]:
     """Same as ``client`` but with a 60s per-request HTTP timeout.
 
     Used by tests that want to *observe* an operation whose latency may
@@ -44,5 +44,5 @@ def patient_client() -> Iterator[XAgentClient]:
     base_url = os.environ.get("XAGENT_BASE_URL")
     if not (api_key and base_url):
         pytest.skip("e2e requires XAGENT_API_KEY and XAGENT_BASE_URL")
-    with XAgentClient(api_key=api_key, base_url=base_url, timeout=60.0) as c:
+    with AgentClient(api_key=api_key, base_url=base_url, timeout=60.0) as c:
         yield c

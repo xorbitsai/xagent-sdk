@@ -15,19 +15,19 @@ import time
 
 import pytest
 
-from xagent_sdk import RunResult, TaskStatus, XAgentClient
+from xagent_sdk import AgentClient, RunResult, TaskStatus
 
 pytestmark = pytest.mark.e2e
 
 
-def test_me(client: XAgentClient) -> None:
+def test_me(client: AgentClient) -> None:
     me = client.me()
     assert me.agent_id > 0
     assert me.agent_name
     assert me.key_prefix
 
 
-def test_create_is_async(patient_client: XAgentClient) -> None:
+def test_create_is_async(patient_client: AgentClient) -> None:
     """POST /v1/chat/tasks must return asynchronously per v1 contract.
 
     The contract is "create the task, return 202 immediately, run LLM in
@@ -62,7 +62,7 @@ def test_create_is_async(patient_client: XAgentClient) -> None:
     )
 
 
-def test_run_single_turn(client: XAgentClient) -> None:
+def test_run_single_turn(client: AgentClient) -> None:
     agent_id = int(os.environ.get("E2E_AGENT_ID", str(client.me().agent_id)))
     result = client.tasks.run(
         agent_id=agent_id,
