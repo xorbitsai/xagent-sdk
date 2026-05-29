@@ -19,8 +19,9 @@ class HTTPClient:
     """Thin httpx.Client wrapper for the xAgent v1 API.
 
     Owns a single httpx.Client (connection pool) for the lifetime of the
-    enclosing XAgentClient. Returns raw httpx.Response objects;
-    HTTP-status-to-exception mapping is layered on top in a later commit.
+    enclosing public client (AgentClient or UserClient). Returns raw
+    httpx.Response objects; HTTP-status-to-exception mapping is layered
+    on top in ``_BaseClient._request``.
     """
 
     def __init__(

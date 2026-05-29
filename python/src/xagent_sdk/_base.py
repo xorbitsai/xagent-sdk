@@ -1,7 +1,7 @@
 """Internal base class shared by every public SDK client.
 
-The two public clients (``XAgentClient`` / ``AgentClient`` for runtime, and
-the upcoming ``UserClient`` for management) only differ in which env var
+The two public clients (``AgentClient`` for runtime chat tasks and
+``UserClient`` for management endpoints) only differ in which env var
 provides the API key fallback and which surface methods they expose.
 Everything else -- env resolution, ``HTTPClient`` ownership, the
 4xx/5xx-to-exception mapping in ``_request``, ``close()``, and the

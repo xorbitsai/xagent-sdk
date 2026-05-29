@@ -45,7 +45,7 @@ class UserPrincipal:
     """``GET /v1/me`` payload (0.2.0+) -- user identity bound to the
     presented personal key.
 
-    Replaces the 0.1.0 ``MeResponse`` shape (``agent_id`` / ``agent_name`` /
+    Replaces the 0.1.0 agent-identity shape (``agent_id`` / ``agent_name`` /
     ``key_prefix``) since ``/v1/me`` is now a personal-key endpoint that
     returns the **user** the key belongs to. To look up which agent a
     runtime key corresponds to in 0.2.0, list agents via
