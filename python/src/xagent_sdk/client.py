@@ -1,16 +1,11 @@
-import os
-from types import TracebackType
-from typing import Self
-
 import httpx
 
-from xagent_sdk._http import HTTPClient
-from xagent_sdk.errors import from_response
+from xagent_sdk._base import _BaseClient
 from xagent_sdk.tasks import TasksAPI
 from xagent_sdk.types import MeResponse, _parse_me
 
 
-class XAgentClient:
+class XAgentClient(_BaseClient):
     """Synchronous Python client for the xAgent v1 HTTP API.
 
     Constructor argument resolution order for ``api_key`` and ``base_url``:
@@ -46,18 +41,9 @@ class XAgentClient:
         user_agent: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        api_key = api_key or os.environ.get("XAGENT_API_KEY")
-        base_url = base_url or os.environ.get("XAGENT_BASE_URL")
-        if not api_key:
-            raise ValueError("api_key required: pass api_key=... or set XAGENT_API_KEY")
-        if not base_url:
-            raise ValueError(
-                "base_url required: pass base_url=... or set XAGENT_BASE_URL"
-            )
-
-        self._http = HTTPClient(
-            base_url=base_url,
+        super().__init__(
             api_key=api_key,
+            base_url=base_url,
             timeout=timeout,
             max_connections=max_connections,
             user_agent=user_agent,
@@ -77,41 +63,3 @@ class XAgentClient:
         """
         resp = self._request("GET", "/v1/me")
         return _parse_me(resp.json())
-
-    def close(self) -> None:
-        self._http.close()
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        self.close()
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        json: dict[str, object] | None = None,
-    ) -> httpx.Response:
-        """Send a request and map any 4xx/5xx response to an XAgentError.
-
-        Protected by package convention: called by ``TasksAPI`` within
-        ``xagent_sdk`` but not part of the user-facing API. The single
-        underscore signals "internal to the package" not "internal to
-        this class".
-
-        Transport-level failures are already wrapped in
-        ``XAgentTransportError`` by ``HTTPClient.request``; this helper
-        only adds the V1-envelope-to-exception mapping for HTTP error
-        responses that do have a body.
-        """
-        resp = self._http.request(method, path, json=json)
-        if resp.is_error:
-            raise from_response(resp)
-        return resp
