@@ -63,6 +63,17 @@ class InvalidInput(XAgentError):
     """
 
 
+class TemplateNotFound(XAgentError):
+    """HTTP 404, code ``template_not_found``.
+
+    Raised when ``UserClient.templates.get(template_id)`` or
+    ``UserClient.agents.create_from_template(template_id, ...)`` is
+    given an unknown ``template_id``. Distinct from ``AgentNotFound``
+    because the SaaS UI path treats template-picker mismatch differently
+    from agent-lookup mismatch.
+    """
+
+
 # SDK-coined errors (server has no equivalent code).
 class XAgentTransportError(XAgentError):
     """Network, DNS, TLS, or local timeout below the HTTP layer.
@@ -89,6 +100,7 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "task_not_found": TaskNotFound,
     "task_busy": TaskBusy,
     "invalid_input": InvalidInput,
+    "template_not_found": TemplateNotFound,
     "rate_limited": RateLimited,
     "internal_error": InternalError,
 }

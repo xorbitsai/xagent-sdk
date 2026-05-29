@@ -41,12 +41,115 @@ class StepType(StrEnum):
 
 
 @dataclass(frozen=True)
-class MeResponse:
-    """``GET /v1/me`` payload -- agent identity bound to the presented key."""
+class UserPrincipal:
+    """``GET /v1/me`` payload (0.2.0+) -- user identity bound to the
+    presented personal key.
+
+    Replaces the 0.1.0 ``MeResponse`` shape (``agent_id`` / ``agent_name`` /
+    ``key_prefix``) since ``/v1/me`` is now a personal-key endpoint that
+    returns the **user** the key belongs to. To look up which agent a
+    runtime key corresponds to in 0.2.0, list agents via
+    ``UserClient.agents.list()`` and match against ``AgentSummary.name``
+    or ``agent_id``.
+
+    ``principal_type`` is a stable enum string today (``"user"``); future
+    backends may add new principal kinds (e.g., service accounts) which
+    would land as new ``UserClient`` subclasses, not as silent additions
+    here.
+    """
+
+    principal_type: str
+    user_id: int
+    email: str
+    name: str
+    key_prefix: str
+
+
+@dataclass(frozen=True)
+class Template:
+    """``GET /v1/templates`` list entry.
+
+    The list endpoint returns a slim summary suitable for showing in a
+    SaaS-app picker; the full ``agent_config`` (system prompt, tools,
+    model defaults) is only included in the per-template
+    ``GET /v1/templates/{template_id}`` response (``TemplateDetail``).
+    """
+
+    template_id: str
+    name: str
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class TemplateDetail:
+    """``GET /v1/templates/{template_id}`` payload.
+
+    Extends ``Template`` with ``agent_config``, the dict that
+    ``UserClient.agents.create_from_template()`` merges with the caller's
+    ``overrides`` before posting to the backend. The shape of
+    ``agent_config`` is intentionally typed as ``dict[str, Any]``: it is
+    the backend's evolving template-config envelope (currently includes
+    things like ``instructions`` / ``mode`` / ``tools_default``), and
+    pinning a strict schema here would force SDK releases for every
+    backend template-config change.
+    """
+
+    template_id: str
+    name: str
+    description: str | None
+    agent_config: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AgentSummary:
+    """``GET /v1/agents`` list entry.
+
+    Slim shape for listing agents owned by the personal key's user.
+    The optional ``status`` reflects the agent's published-state
+    (e.g. ``"active"`` / ``"draft"`` / ``"paused"``); backend may omit it
+    in early Phase 2 wire shapes.
+    """
 
     agent_id: int
-    agent_name: str
+    name: str
+    status: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentCreateResult:
+    """``POST /v1/agents`` / ``POST /v1/agents/from-template`` payload.
+
+    Carries the new agent's identity plus the **one-time** runtime key
+    when ``generate_runtime_key=True`` was passed (the backend default).
+    ``runtime_full_key`` is ``None`` only when the caller explicitly set
+    ``generate_runtime_key=False`` and intends to call ``rotate_key()``
+    later to materialize the first runtime key.
+
+    The ``runtime_full_key`` is the only chance the SDK or its caller
+    have to read the secret in cleartext; store it in a secret vault
+    immediately and never log it. ``runtime_key_prefix`` is the
+    public-safe 6-char lookup handle and is safe to log for tracing.
+    """
+
+    agent_id: int
+    name: str
+    runtime_full_key: str | None
+    runtime_key_prefix: str | None
+
+
+@dataclass(frozen=True)
+class RotateKeyResult:
+    """``POST /v1/agents/{agent_id}/api-key`` payload.
+
+    Rotation is destructive: the previous runtime key for this agent is
+    revoked atomically with the new key insertion. The ``full_key`` is a
+    one-time payload exposed only on this response; storing it is the
+    caller's responsibility.
+    """
+
+    full_key: str
     key_prefix: str
+    created_at: datetime
 
 
 @dataclass(frozen=True)
@@ -152,15 +255,54 @@ class RunResult:
 # module scope. ``validate_python`` handles ISO datetime parsing, enum
 # coercion, and Optional handling without bespoke conversion code.
 
-_ME_ADAPTER = TypeAdapter(MeResponse)
+_USER_PRINCIPAL_ADAPTER = TypeAdapter(UserPrincipal)
+_TEMPLATE_LIST_ADAPTER = TypeAdapter(list[Template])
+_TEMPLATE_DETAIL_ADAPTER = TypeAdapter(TemplateDetail)
+_AGENT_LIST_ADAPTER = TypeAdapter(list[AgentSummary])
+_AGENT_CREATE_ADAPTER = TypeAdapter(AgentCreateResult)
+_ROTATE_KEY_ADAPTER = TypeAdapter(RotateKeyResult)
 _CREATE_ADAPTER = TypeAdapter(CreateTaskResult)
 _APPEND_ADAPTER = TypeAdapter(AppendResult)
 _TASK_INFO_ADAPTER = TypeAdapter(TaskInfo)
 _STEP_LIST_ADAPTER = TypeAdapter(list[Step])
 
 
-def _parse_me(data: dict[str, Any]) -> MeResponse:
-    return _ME_ADAPTER.validate_python(data)
+def _parse_user_principal(data: dict[str, Any]) -> UserPrincipal:
+    return _USER_PRINCIPAL_ADAPTER.validate_python(data)
+
+
+def _parse_template_list(data: Any) -> list[Template]:
+    """Extract and parse the ``templates`` array from a list response.
+
+    Mirrors ``_parse_steps`` defense-in-depth: non-dict body or missing
+    ``templates`` key returns an empty list rather than raising
+    ``AttributeError``.
+    """
+    if not isinstance(data, dict):
+        return []
+    return _TEMPLATE_LIST_ADAPTER.validate_python(data.get("templates", []))
+
+
+def _parse_template_detail(data: dict[str, Any]) -> TemplateDetail:
+    return _TEMPLATE_DETAIL_ADAPTER.validate_python(data)
+
+
+def _parse_agent_list(data: Any) -> list[AgentSummary]:
+    """Extract and parse the ``agents`` array from a list response.
+
+    Same defensive shape as ``_parse_template_list`` / ``_parse_steps``.
+    """
+    if not isinstance(data, dict):
+        return []
+    return _AGENT_LIST_ADAPTER.validate_python(data.get("agents", []))
+
+
+def _parse_agent_create(data: dict[str, Any]) -> AgentCreateResult:
+    return _AGENT_CREATE_ADAPTER.validate_python(data)
+
+
+def _parse_rotate_key(data: dict[str, Any]) -> RotateKeyResult:
+    return _ROTATE_KEY_ADAPTER.validate_python(data)
 
 
 def _parse_create_task(data: dict[str, Any]) -> CreateTaskResult:

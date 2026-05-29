@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from xagent_sdk import (
     AppendResult,
     CreateTaskResult,
-    MeResponse,
     RunResult,
     Step,
     StepType,
@@ -19,16 +18,9 @@ from xagent_sdk import (
 from xagent_sdk.types import (
     _parse_append,
     _parse_create_task,
-    _parse_me,
     _parse_steps,
     _parse_task_info,
 )
-
-
-class TestParseMe:
-    def test_happy(self) -> None:
-        me = _parse_me({"agent_id": 7, "agent_name": "Sales", "key_prefix": "a1B2c3"})
-        assert me == MeResponse(agent_id=7, agent_name="Sales", key_prefix="a1B2c3")
 
 
 class TestParseCreateTask:
@@ -192,10 +184,17 @@ class TestParseSteps:
 
 
 class TestFrozenDataclasses:
-    def test_me_frozen(self) -> None:
-        me = MeResponse(agent_id=1, agent_name="x", key_prefix="y")
+    def test_step_frozen(self) -> None:
+        step = Step(
+            id="message:1",
+            type=StepType.MESSAGE,
+            status="completed",
+            started_at=datetime(2026, 5, 10, tzinfo=UTC),
+            completed_at=datetime(2026, 5, 10, tzinfo=UTC),
+            data={"role": "user", "content": "hi"},
+        )
         with pytest.raises(FrozenInstanceError):
-            me.agent_name = "hacked"  # type: ignore[misc]
+            step.id = "hacked"  # type: ignore[misc]
 
 
 class TestRunResult:

@@ -15,7 +15,6 @@ from xagent_sdk.errors import (
 from xagent_sdk.types import (
     AppendResult,
     CreateTaskResult,
-    MeResponse,
     RunResult,
     Step,
     StepType,
@@ -31,7 +30,6 @@ __all__ = [
     "InternalError",
     "InvalidAPIKey",
     "InvalidInput",
-    "MeResponse",
     "RateLimited",
     "RunResult",
     "Step",
