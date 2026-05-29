@@ -16,7 +16,12 @@ implicit and documented below.
 
 | File | Endpoint | Notes |
 |---|---|---|
-| `me.json` | `GET /v1/me` | Identity probe success body |
+| `me_user.json` | `GET /v1/me` | 0.2.0+ user principal: `principal_type / user_id / email / name / key_prefix` (replaces the 0.1.0 `me.json` agent shape) |
+| `templates_list.json` | `GET /v1/templates` | Wrapper `{templates: [Template]}`; slim list entries with `template_id`, `name`, optional `description` |
+| `templates_detail.json` | `GET /v1/templates/{id}` | Single template with the merge-target `agent_config` dict |
+| `agents_list.json` | `GET /v1/agents` | Wrapper `{agents: [AgentSummary]}`; covers `active`, `draft`, `paused` status values |
+| `agents_create.json` | `POST /v1/agents` or `POST /v1/agents/from-template` | Default response with `generate_runtime_key=True`; carries the one-time `runtime_full_key` |
+| `rotate_key.json` | `POST /v1/agents/{id}/api-key` | Rotation result with one-time `full_key` and public-safe `key_prefix` |
 | `create_task.json` | `POST /v1/chat/tasks` (202) | Initial `status=pending` |
 | `append_task.json` | `POST /v1/chat/tasks/{id}/messages` (202) | `status=running`, carries `accepted_at` (not `created_at`) |
 | `task_info_completed.json` | `GET /v1/chat/tasks/{id}` (200) | Terminal state, `output` populated |
@@ -33,6 +38,7 @@ Seven stable backend codes using the V1 envelope shape:
 | `agent_not_found.json` | 404 | V1 envelope |
 | `task_not_found.json` | 404 | V1 envelope |
 | `task_busy.json` | 409 | V1 envelope |
+| `template_not_found.json` | 404 | V1 envelope (0.2.0+; raised by `UserClient.templates.get()` and `UserClient.agents.create_from_template()` on unknown `template_id`) |
 | `validation_422.json` | 422 | V1 envelope (`invalid_input`) |
 | `rate_limited.json` | 429 | V1 envelope (reserved; backend does not currently emit it) |
 | `internal_error.json` | 500 | V1 envelope |

@@ -1,0 +1,6 @@
+{
+  "agent_id": 42,
+  "name": "HR Leave Assistant",
+  "runtime_full_key": "xag_abc123_secretsecretsecretsecretsecret",
+  "runtime_key_prefix": "abc123"
+}

@@ -1,0 +1,24 @@
+{
+  "templates": [
+    {
+      "template_id": "content_generator",
+      "name": "Content Generator",
+      "description": "Generate text, documents, contracts, and policies from a brief."
+    },
+    {
+      "template_id": "analyzer",
+      "name": "Analyzer",
+      "description": "Accepts uploaded files and returns structured insights, scores, or summaries."
+    },
+    {
+      "template_id": "q_and_a",
+      "name": "Q&A",
+      "description": "Conversational chat agent grounded in a knowledge base."
+    },
+    {
+      "template_id": "assistant",
+      "name": "Assistant",
+      "description": "Persistent assistant that can take actions based on rules."
+    }
+  ]
+}

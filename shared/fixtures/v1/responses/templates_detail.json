@@ -1,0 +1,10 @@
+{
+  "template_id": "q_and_a",
+  "name": "Q&A",
+  "description": "Conversational chat agent grounded in a knowledge base.",
+  "agent_config": {
+    "instructions": "You are a helpful Q&A assistant. Answer concisely and cite sources when possible.",
+    "mode": "balanced",
+    "tools_default": []
+  }
+}

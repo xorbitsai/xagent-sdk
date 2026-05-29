@@ -18,6 +18,7 @@ from xagent_sdk import (
     RateLimited,
     TaskBusy,
     TaskNotFound,
+    TemplateNotFound,
     XAgentError,
 )
 from xagent_sdk.errors import from_response
@@ -50,6 +51,7 @@ class TestFromResponseStableCodes:
             (401, "invalid_api_key", InvalidAPIKey),
             (404, "agent_not_found", AgentNotFound),
             (404, "task_not_found", TaskNotFound),
+            (404, "template_not_found", TemplateNotFound),
             (409, "task_busy", TaskBusy),
             (422, "validation_422", InvalidInput),
             (429, "rate_limited", RateLimited),

@@ -1,0 +1,7 @@
+{
+  "agents": [
+    {"agent_id": 42, "name": "HR Leave Assistant", "status": "active"},
+    {"agent_id": 43, "name": "Policy Bot", "status": "draft"},
+    {"agent_id": 44, "name": "CV Screener", "status": "paused"}
+  ]
+}
