@@ -44,7 +44,7 @@ class TaskBusy(XAgentError):
 
 
 class RateLimited(XAgentError):
-    """HTTP 429, code ``rate_limited``. Reserved; backend does not yet emit."""
+    """HTTP 429, code ``rate_limited``."""
 
 
 class InternalError(XAgentError):

@@ -1,10 +1,9 @@
 """Tests for AgentClient construction and context-manager lifecycle.
 
-The ``me()`` method used to live here in 0.1.0 (it returned the
-agent identity bound to the runtime key). 0.2.0 moved identity to
-``UserClient.me()`` and ``AgentClient`` no longer has a probe method,
-so this module focuses on the construction contract and resource
-cleanup. Auth-mapping coverage for the agent runtime key (401 ->
+``AgentClient`` exposes ``.tasks`` only; identity probing belongs to
+``UserClient.me()`` because the runtime key has no user-shaped identity
+to return. This module pins the construction contract and resource
+cleanup; auth-mapping coverage for the runtime key (401 ->
 ``InvalidAPIKey``) lives in ``test_tasks.py`` and ``test_errors.py``.
 """
 

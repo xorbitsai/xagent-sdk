@@ -17,8 +17,6 @@ class AgentClient(_BaseClient):
     Constructor argument resolution order for ``api_key`` and ``base_url``:
       1. Explicit keyword argument
       2. Environment variable (``XAGENT_API_KEY`` / ``XAGENT_BASE_URL``)
-      3. (v0.3.0+) Hardcoded production default URL -- not yet baked in
-         while the xAgent team finalizes the prod endpoint.
 
     Missing values at construction time raise ``ValueError`` instead of
     deferring failure to the first request.

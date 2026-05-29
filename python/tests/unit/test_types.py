@@ -15,11 +15,15 @@ from xagent_sdk import (
     TaskInfo,
     TaskStatus,
 )
+from xagent_sdk.errors import XAgentTransportError
 from xagent_sdk.types import (
+    _agent_summary_dict,
+    _parse_agent_create,
     _parse_append,
     _parse_create_task,
     _parse_steps,
     _parse_task_info,
+    _template_dict,
 )
 
 
@@ -195,6 +199,76 @@ class TestFrozenDataclasses:
         )
         with pytest.raises(FrozenInstanceError):
             step.id = "hacked"  # type: ignore[misc]
+
+
+class TestParseAgentCreateMalformed:
+    """Guard the explicit ``XAgentTransportError("malformed_response", ...)``
+    raised when the backend body lacks the required ``agent`` block.
+    """
+
+    def _good_api_key(self) -> dict[str, object]:
+        return {
+            "full_key": "xag_abc123_secret",
+            "key_prefix": "abc123",
+            "created_at": "2026-05-29T00:00:00Z",
+        }
+
+    def test_missing_agent_block_raises(self) -> None:
+        with pytest.raises(XAgentTransportError) as excinfo:
+            _parse_agent_create({"api_key": self._good_api_key()})
+        assert excinfo.value.code == "malformed_response"
+        assert "'agent'" in str(excinfo.value)
+
+    def test_agent_block_is_not_dict_raises(self) -> None:
+        with pytest.raises(XAgentTransportError) as excinfo:
+            _parse_agent_create({"agent": None, "api_key": self._good_api_key()})
+        assert excinfo.value.code == "malformed_response"
+
+    def test_agent_block_missing_id_raises(self) -> None:
+        with pytest.raises(XAgentTransportError) as excinfo:
+            _parse_agent_create(
+                {"agent": {"name": "x"}, "api_key": self._good_api_key()}
+            )
+        assert excinfo.value.code == "malformed_response"
+
+    def test_agent_block_missing_name_raises(self) -> None:
+        with pytest.raises(XAgentTransportError) as excinfo:
+            _parse_agent_create({"agent": {"id": 42}, "api_key": self._good_api_key()})
+        assert excinfo.value.code == "malformed_response"
+
+
+class TestNormalizeHelpers:
+    """Pin ``_template_dict`` / ``_agent_summary_dict`` shape contracts."""
+
+    def test_template_dict_id_to_template_id(self) -> None:
+        out = _template_dict({"id": "tpl-1", "name": "T"})
+        assert out["template_id"] == "tpl-1"
+        assert out["name"] == "T"
+
+    def test_template_dict_falls_back_to_existing_template_id(self) -> None:
+        # If a future backend drops "id" and sends "template_id" directly,
+        # the helper must surface the existing value instead of None.
+        out = _template_dict({"template_id": "tpl-2", "name": "T"})
+        assert out["template_id"] == "tpl-2"
+
+    def test_template_dict_id_wins_when_both_present(self) -> None:
+        # Current backend contract: "id" is the source of truth.
+        out = _template_dict({"id": "from_id", "template_id": "from_legacy"})
+        assert out["template_id"] == "from_id"
+
+    def test_template_dict_missing_id_yields_none(self) -> None:
+        # Caller (pydantic TypeAdapter) is responsible for failing on
+        # None; helper should not silently fabricate a value.
+        out = _template_dict({"name": "T"})
+        assert out["template_id"] is None
+
+    def test_agent_summary_dict_id_to_agent_id(self) -> None:
+        out = _agent_summary_dict({"id": 42, "name": "A"})
+        assert out["agent_id"] == 42
+
+    def test_agent_summary_dict_falls_back_to_existing_agent_id(self) -> None:
+        out = _agent_summary_dict({"agent_id": 43, "name": "A"})
+        assert out["agent_id"] == 43
 
 
 class TestRunResult:

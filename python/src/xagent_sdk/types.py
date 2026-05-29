@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
+from xagent_sdk.errors import XAgentTransportError
+
 
 class TaskStatus(StrEnum):
     """Lifecycle states a task can hold.
@@ -42,20 +44,13 @@ class StepType(StrEnum):
 
 @dataclass(frozen=True)
 class UserPrincipal:
-    """``GET /v1/me`` payload (0.2.0+) -- user identity bound to the
-    presented personal key.
+    """``GET /v1/me`` payload -- the user identity the personal key
+    is bound to.
 
-    Replaces the 0.1.0 agent-identity shape (``agent_id`` / ``agent_name`` /
-    ``key_prefix``) since ``/v1/me`` is now a personal-key endpoint that
-    returns the **user** the key belongs to. To look up which agent a
-    runtime key corresponds to in 0.2.0, list agents via
-    ``UserClient.agents.list()`` and match against ``AgentSummary.name``
-    or ``agent_id``.
-
-    ``principal_type`` is a stable enum string today (``"user"``); future
-    backends may add new principal kinds (e.g., service accounts) which
-    would land as new ``UserClient`` subclasses, not as silent additions
-    here.
+    ``principal_type`` is the stable enum string ``"user"`` for the
+    surface ``UserClient`` covers. ``key_prefix`` is the public-safe
+    6-char handle (``xag_personal_<prefix>_...``) and is safe to log;
+    the secret half of the key is never returned by this endpoint.
     """
 
     principal_type: str
@@ -106,8 +101,8 @@ class AgentSummary:
 
     Slim shape for listing agents owned by the personal key's user.
     The optional ``status`` reflects the agent's published-state
-    (e.g. ``"active"`` / ``"draft"`` / ``"paused"``); backend may omit it
-    in early Phase 2 wire shapes.
+    (e.g. ``"active"`` / ``"draft"`` / ``"paused"``); ``None`` means the
+    backend omitted the field on this entry.
     """
 
     agent_id: int
@@ -311,8 +306,25 @@ def _parse_agent_create(data: dict[str, Any]) -> AgentCreateResult:
     record. When ``generate_runtime_key=False`` the ``api_key`` block is
     absent and the runtime fields stay ``None`` -- caller is expected to
     materialize a key via ``rotate_key()`` later.
+
+    Raises ``XAgentTransportError("malformed_response", ...)`` if the
+    ``agent`` block is missing or lacks ``id``/``name`` -- pydantic's
+    raw ``ValidationError`` on ``agent_id`` would say "Input should be a
+    valid integer, input_value=None" which does not point at the real
+    cause (backend response shape violation).
     """
-    agent = data.get("agent") or {}
+    agent = data.get("agent")
+    if (
+        not isinstance(agent, dict)
+        or agent.get("id") is None
+        or agent.get("name") is None
+    ):
+        raise XAgentTransportError(
+            "malformed_response",
+            "agent-create response missing required 'agent' block "
+            "(expected {'agent': {'id': int, 'name': str, ...}, 'api_key'?: {...}})",
+            http_status=None,
+        )
     api_key = data.get("api_key") or {}
     flat = {
         "agent_id": agent.get("id"),
@@ -324,15 +336,20 @@ def _parse_agent_create(data: dict[str, Any]) -> AgentCreateResult:
 
 
 def _template_dict(item: dict[str, Any]) -> dict[str, Any]:
-    """Rename backend ``id`` -> ``template_id`` while passing every other
-    key through; pydantic drops fields the dataclass does not declare.
+    """Surface backend ``id`` as ``template_id`` while passing other keys
+    through. Falls back to a pre-existing ``template_id`` so a future
+    backend that renames the field at source does not silently degrade
+    to ``None``; pydantic drops fields the dataclass does not declare.
     """
-    return {**item, "template_id": item.get("id")}
+    return {**item, "template_id": item.get("id") or item.get("template_id")}
 
 
 def _agent_summary_dict(item: dict[str, Any]) -> dict[str, Any]:
-    """Rename backend ``id`` -> ``agent_id`` for the agent list entry."""
-    return {**item, "agent_id": item.get("id")}
+    """Surface backend ``id`` as ``agent_id`` for the agent list entry,
+    with the same ``id``-or-existing-``agent_id`` fallback as
+    ``_template_dict``.
+    """
+    return {**item, "agent_id": item.get("id") or item.get("agent_id")}
 
 
 def _parse_rotate_key(data: dict[str, Any]) -> RotateKeyResult:
