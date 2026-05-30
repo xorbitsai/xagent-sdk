@@ -16,11 +16,11 @@ implicit and documented below.
 
 | File | Endpoint | Notes |
 |---|---|---|
-| `me_user.json` | `GET /v1/me` | 0.2.0+ user principal: `principal_type / user_id / email / name / key_prefix` (replaces the 0.1.0 `me.json` agent shape) |
-| `templates_list.json` | `GET /v1/templates` | Wrapper `{templates: [Template]}`; slim list entries with `template_id`, `name`, optional `description` |
-| `templates_detail.json` | `GET /v1/templates/{id}` | Single template with the merge-target `agent_config` dict |
-| `agents_list.json` | `GET /v1/agents` | Wrapper `{agents: [AgentSummary]}`; covers `active`, `draft`, `paused` status values |
-| `agents_create.json` | `POST /v1/agents` or `POST /v1/agents/from-template` | Default response with `generate_runtime_key=True`; carries the one-time `runtime_full_key` |
+| `me_user.json` | `GET /v1/me` | User principal: `principal_type / user_id / email / name / key_prefix` |
+| `templates_list.json` | `GET /v1/templates` | Bare JSON array; each entry keys its id under `id` (SDKs surface it as `template_id`) plus `name`, optional `description` |
+| `templates_detail.json` | `GET /v1/templates/{id}` | Single object keyed by `id`; carries the merge-target `agent_config` dict |
+| `agents_list.json` | `GET /v1/agents` | Bare JSON array; each entry keys its id under `id` (SDKs surface it as `agent_id`); covers `active`, `draft`, `paused` status values |
+| `agents_create.json` | `POST /v1/agents` or `POST /v1/agents/from-template` | Nested `{agent: {id, name, ...}, api_key: {full_key, key_prefix, created_at}}`; the `api_key` block is present only when `generate_runtime_key=True` |
 | `rotate_key.json` | `POST /v1/agents/{id}/api-key` | Rotation result with one-time `full_key` and public-safe `key_prefix` |
 | `create_task.json` | `POST /v1/chat/tasks` (202) | Initial `status=pending` |
 | `append_task.json` | `POST /v1/chat/tasks/{id}/messages` (202) | `status=running`, carries `accepted_at` (not `created_at`) |
@@ -29,7 +29,7 @@ implicit and documented below.
 
 ### `fixtures/v1/errors/`
 
-Seven stable backend codes using the V1 envelope shape:
+Stable backend codes using the V1 envelope shape:
 `{"error": {"code": "...", "message": "..."}}`.
 
 | File | HTTP status | Wire shape |
@@ -38,9 +38,9 @@ Seven stable backend codes using the V1 envelope shape:
 | `agent_not_found.json` | 404 | V1 envelope |
 | `task_not_found.json` | 404 | V1 envelope |
 | `task_busy.json` | 409 | V1 envelope |
-| `template_not_found.json` | 404 | V1 envelope (0.2.0+; raised by `UserClient.templates.get()` and `UserClient.agents.create_from_template()` on unknown `template_id`) |
+| `template_not_found.json` | 404 | V1 envelope (raised by `UserClient.templates.get()` and `UserClient.agents.create_from_template()` on unknown `template_id`) |
 | `validation_422.json` | 422 | V1 envelope (`invalid_input`) |
-| `rate_limited.json` | 429 | V1 envelope (reserved; backend does not currently emit it) |
+| `rate_limited.json` | 429 | V1 envelope |
 | `internal_error.json` | 500 | V1 envelope |
 
 ## Usage from a language client

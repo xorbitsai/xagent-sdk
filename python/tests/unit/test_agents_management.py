@@ -10,6 +10,7 @@ from xagent_sdk import (
     AgentNotFound,
     AgentSummary,
     InvalidInput,
+    MalformedResponse,
     RotateKeyResult,
     TemplateNotFound,
     UserClient,
@@ -122,6 +123,21 @@ class TestCreate:
         assert result.runtime_full_key is None
         assert result.runtime_key_prefix is None
 
+    def test_generate_runtime_key_true_but_no_key_fails_closed(self) -> None:
+        # Backend violated the contract: generate_runtime_key=True was
+        # requested but the response carried no api_key block. The SDK
+        # must refuse rather than return runtime_full_key=None, which
+        # would let AgentClient(api_key=None) silently fall back to
+        # XAGENT_API_KEY.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                201, json={"agent": {"id": 42, "name": "HR Leave Assistant"}}
+            )
+
+        with _make_user(handler) as c, pytest.raises(MalformedResponse) as excinfo:
+            c.agents.create(name="HR Leave Assistant", instructions="...")
+        assert excinfo.value.code == "malformed_response"
+
     def test_metadata_included_when_given(self) -> None:
         captured: list[httpx.Request] = []
 
@@ -226,6 +242,16 @@ class TestCreateFromTemplate:
 
         with _make_user(h) as c, pytest.raises(TemplateNotFound):
             c.agents.create_from_template("nope")
+
+    def test_generate_runtime_key_true_but_no_key_fails_closed(self) -> None:
+        # Same fail-closed contract as create(): default
+        # generate_runtime_key=True with a keyless response must raise.
+        def h(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(201, json={"agent": {"id": 42, "name": "X"}})
+
+        with _make_user(h) as c, pytest.raises(MalformedResponse) as excinfo:
+            c.agents.create_from_template("q_and_a")
+        assert excinfo.value.code == "malformed_response"
 
 
 class TestRotateKey:

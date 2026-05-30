@@ -15,6 +15,7 @@ caller plans to rotate later via ``rotate_key()``.
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from xagent_sdk.errors import MalformedResponse
 from xagent_sdk.types import (
     AgentCreateResult,
     AgentSummary,
@@ -26,6 +27,30 @@ from xagent_sdk.types import (
 
 if TYPE_CHECKING:
     from xagent_sdk.user_client import UserClient
+
+
+def _require_runtime_key(
+    result: AgentCreateResult, generate_runtime_key: bool
+) -> AgentCreateResult:
+    """Fail closed when a key was requested but the response carried none.
+
+    ``generate_runtime_key=True`` is a promise that the response includes
+    a one-time runtime key. If the backend omits it, returning a result
+    with ``runtime_full_key=None`` is dangerous: the caller is expected to
+    do ``AgentClient(api_key=result.runtime_full_key)``, and ``None`` there
+    falls back to ``XAGENT_API_KEY`` in the environment -- silently using
+    a *different* agent's credential. Raise instead of handing back a
+    keyless result that invites that fallback.
+    """
+    if generate_runtime_key and result.runtime_full_key is None:
+        raise MalformedResponse(
+            "malformed_response",
+            "create requested generate_runtime_key=True but the response "
+            "carried no runtime key; refusing to return a keyless result "
+            "that would let AgentClient fall back to XAGENT_API_KEY",
+            http_status=None,
+        )
+    return result
 
 
 class AgentsAPI:
@@ -77,6 +102,9 @@ class AgentsAPI:
             InvalidInput: 422 -- backend rejected the body (e.g. empty
                 ``name`` or ``instructions``).
             InvalidAPIKey: 401 -- personal key invalid / revoked.
+            MalformedResponse: ``generate_runtime_key=True`` but the
+                response carried no runtime key (fail closed rather than
+                return a keyless result).
         """
         body: dict[str, Any] = {
             "name": name,
@@ -86,7 +114,9 @@ class AgentsAPI:
         if metadata is not None:
             body["metadata"] = metadata
         resp = self._client._request("POST", "/v1/agents", json=body)
-        return _parse_agent_create(resp.json())
+        return _require_runtime_key(
+            _parse_agent_create(resp.json()), generate_runtime_key
+        )
 
     def create_from_template(
         self,
@@ -122,6 +152,9 @@ class AgentsAPI:
                 ``template_id``.
             InvalidInput: 422 -- overrides contain malformed values.
             InvalidAPIKey: 401 -- personal key invalid / revoked.
+            MalformedResponse: ``generate_runtime_key=True`` but the
+                response carried no runtime key (fail closed rather than
+                return a keyless result).
         """
         body: dict[str, Any] = {
             **(dict(overrides) if overrides else {}),
@@ -129,7 +162,9 @@ class AgentsAPI:
             "generate_runtime_key": generate_runtime_key,
         }
         resp = self._client._request("POST", "/v1/agents/from-template", json=body)
-        return _parse_agent_create(resp.json())
+        return _require_runtime_key(
+            _parse_agent_create(resp.json()), generate_runtime_key
+        )
 
     def rotate_key(self, agent_id: int) -> RotateKeyResult:
         """``POST /v1/agents/{agent_id}/api-key`` -- rotate runtime key.
