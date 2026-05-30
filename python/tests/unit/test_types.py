@@ -15,7 +15,7 @@ from xagent_sdk import (
     TaskInfo,
     TaskStatus,
 )
-from xagent_sdk.errors import XAgentTransportError
+from xagent_sdk.errors import MalformedResponse
 from xagent_sdk.types import (
     _agent_summary_dict,
     _parse_agent_create,
@@ -202,8 +202,8 @@ class TestFrozenDataclasses:
 
 
 class TestParseAgentCreateMalformed:
-    """Guard the explicit ``XAgentTransportError("malformed_response", ...)``
-    raised when the backend body lacks the required ``agent`` block.
+    """Guard the explicit ``MalformedResponse`` raised when the backend
+    body lacks the required ``agent`` block.
     """
 
     def _good_api_key(self) -> dict[str, object]:
@@ -214,25 +214,25 @@ class TestParseAgentCreateMalformed:
         }
 
     def test_missing_agent_block_raises(self) -> None:
-        with pytest.raises(XAgentTransportError) as excinfo:
+        with pytest.raises(MalformedResponse) as excinfo:
             _parse_agent_create({"api_key": self._good_api_key()})
         assert excinfo.value.code == "malformed_response"
         assert "'agent'" in str(excinfo.value)
 
     def test_agent_block_is_not_dict_raises(self) -> None:
-        with pytest.raises(XAgentTransportError) as excinfo:
+        with pytest.raises(MalformedResponse) as excinfo:
             _parse_agent_create({"agent": None, "api_key": self._good_api_key()})
         assert excinfo.value.code == "malformed_response"
 
     def test_agent_block_missing_id_raises(self) -> None:
-        with pytest.raises(XAgentTransportError) as excinfo:
+        with pytest.raises(MalformedResponse) as excinfo:
             _parse_agent_create(
                 {"agent": {"name": "x"}, "api_key": self._good_api_key()}
             )
         assert excinfo.value.code == "malformed_response"
 
     def test_agent_block_missing_name_raises(self) -> None:
-        with pytest.raises(XAgentTransportError) as excinfo:
+        with pytest.raises(MalformedResponse) as excinfo:
             _parse_agent_create({"agent": {"id": 42}, "api_key": self._good_api_key()})
         assert excinfo.value.code == "malformed_response"
 

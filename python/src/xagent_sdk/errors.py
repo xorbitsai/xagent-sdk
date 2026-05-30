@@ -83,6 +83,20 @@ class XAgentTransportError(XAgentError):
     """
 
 
+class MalformedResponse(XAgentError):
+    """The HTTP exchange succeeded but the body did not match the shape the
+    SDK requires to build a result.
+
+    Raised by the response parsers (e.g. an agent-create body missing its
+    ``agent`` block) so the failure points at the response contract rather
+    than surfacing as a raw pydantic ``ValidationError`` on a derived
+    field. ``http_status`` is ``None`` because the status line itself was
+    not the problem -- the decoded payload was. The ``code`` is the
+    SDK-coined string ``malformed_response``; the server never emits it,
+    so it is absent from ``_CODE_MAP``.
+    """
+
+
 class TaskTimeout(XAgentError):
     """``wait()`` / ``run()`` exceeded its local deadline waiting for a task
     to reach a terminal state.

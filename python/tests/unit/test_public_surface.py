@@ -41,6 +41,7 @@ EXPECTED_SURFACE: set[str] = {
     "InternalError",
     "InvalidInput",
     "TemplateNotFound",
+    "MalformedResponse",
     "XAgentTransportError",
     "TaskTimeout",
     # Version

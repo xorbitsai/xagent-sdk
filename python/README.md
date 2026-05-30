@@ -247,6 +247,7 @@ SDK-coined codes:
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs |
 | `TaskTimeout` | `wait()` / `run()` deadline elapsed |
 
 The SDK does **not** retry automatically. Wrap calls with your own

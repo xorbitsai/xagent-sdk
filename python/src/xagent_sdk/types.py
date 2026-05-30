@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from xagent_sdk.errors import XAgentTransportError
+from xagent_sdk.errors import MalformedResponse
 
 
 class TaskStatus(StrEnum):
@@ -307,11 +307,11 @@ def _parse_agent_create(data: dict[str, Any]) -> AgentCreateResult:
     absent and the runtime fields stay ``None`` -- caller is expected to
     materialize a key via ``rotate_key()`` later.
 
-    Raises ``XAgentTransportError("malformed_response", ...)`` if the
-    ``agent`` block is missing or lacks ``id``/``name`` -- pydantic's
-    raw ``ValidationError`` on ``agent_id`` would say "Input should be a
-    valid integer, input_value=None" which does not point at the real
-    cause (backend response shape violation).
+    Raises ``MalformedResponse`` if the ``agent`` block is missing or
+    lacks ``id``/``name`` -- pydantic's raw ``ValidationError`` on
+    ``agent_id`` would say "Input should be a valid integer,
+    input_value=None" which does not point at the real cause (backend
+    response shape violation).
     """
     agent = data.get("agent")
     if (
@@ -319,7 +319,7 @@ def _parse_agent_create(data: dict[str, Any]) -> AgentCreateResult:
         or agent.get("id") is None
         or agent.get("name") is None
     ):
-        raise XAgentTransportError(
+        raise MalformedResponse(
             "malformed_response",
             "agent-create response missing required 'agent' block "
             "(expected {'agent': {'id': int, 'name': str, ...}, 'api_key'?: {...}})",
