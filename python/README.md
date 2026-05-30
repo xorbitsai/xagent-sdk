@@ -73,7 +73,7 @@ callsites are surfaced at startup.
 
 ## Quick start
 
-The Phase 2 happy path is two steps: use a personal key to mint or
+The happy path is two steps: use a personal key to mint or
 look up an agent, then use that agent's runtime key to run tasks
 against it.
 
@@ -84,7 +84,7 @@ from xagent_sdk import AgentClient, UserClient
 # response carries a one-time runtime key.
 with UserClient() as user:                                    # reads env vars
     new_agent = user.agents.create_from_template(
-        "q_and_a",
+        "support-ai-chatbot-agent",
         overrides={"name": "HR Leave Assistant"},
     )
 
@@ -153,13 +153,14 @@ from xagent_sdk import AgentClient, UserClient
 with UserClient() as user:
     templates = user.templates.list()
     print([t.template_id for t in templates])
-    # ['content_generator', 'analyzer', 'q_and_a', 'assistant']
+    # template ids are backend-defined, e.g.
+    # ['support-ai-chatbot-agent', 'sales-inbound-agent', ...]
 
-    detail = user.templates.get("q_and_a")
+    detail = user.templates.get("support-ai-chatbot-agent")
     # detail.agent_config is the merge target the backend uses below
 
     created = user.agents.create_from_template(
-        "q_and_a",
+        "support-ai-chatbot-agent",
         overrides={"name": "Policy Bot"},
     )
     print(created.agent_id, created.runtime_key_prefix)
@@ -239,7 +240,7 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `TemplateNotFound` | 404 | `template_not_found` |
 | `TaskBusy` | 409 | `task_busy` |
 | `InvalidInput` | 422 | `invalid_input` |
-| `RateLimited` | 429 | `rate_limited` (reserved; backend does not yet emit) |
+| `RateLimited` | 429 | `rate_limited` |
 | `InternalError` | 500 | `internal_error` |
 
 SDK-coined codes:
@@ -256,7 +257,7 @@ want retry on transport errors or `TaskBusy`.
 
 ## API reference
 
-All methods are sync. An async client is on the Phase 3 roadmap.
+All methods are synchronous.
 
 ### `UserClient` — management surface
 
@@ -381,11 +382,11 @@ uv run pytest -m e2e
 ```
 
 Set `E2E_AGENT_ID` to point the runtime-only tests at a specific
-agent (0.2.0 ``AgentClient`` no longer has an identity probe, so the
-runtime tests skip when this is unset). Set `E2E_TEMPLATE_ID`
-(default ``q_and_a``) to pick which template the full-flow test
-instantiates from, and `E2E_AGENT_NAME` to override the new agent's
-display name.
+agent (``AgentClient`` has no identity probe, so the runtime tests
+skip when this is unset). Set `E2E_TEMPLATE_ID` to pick which template
+the full-flow test instantiates from (defaults to the first listed
+template), and `E2E_AGENT_NAME` to override the new agent's display
+name.
 
 ## License
 

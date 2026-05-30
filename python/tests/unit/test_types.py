@@ -290,7 +290,7 @@ class TestNormalizeHelpers:
 
     def test_template_dict_id_wins_when_both_present(self) -> None:
         # Current backend contract: "id" is the source of truth.
-        out = _template_dict({"id": "from_id", "template_id": "from_legacy"})
+        out = _template_dict({"id": "from_id", "template_id": "from_fallback"})
         assert out["template_id"] == "from_id"
 
     def test_template_dict_missing_id_yields_none(self) -> None:

@@ -1,6 +1,6 @@
 """Fixtures for end-to-end tests against a real xAgent backend.
 
-Two pairs of fixtures cover the 0.2.0 surface:
+Two pairs of fixtures cover the two-client surface:
 
 - ``user_client`` / ``patient_user_client`` -- ``UserClient``
   authenticated with ``XAGENT_PERSONAL_KEY``. Use for management

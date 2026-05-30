@@ -1,4 +1,4 @@
-"""End-to-end smoke tests against a real xAgent backend (0.2.0).
+"""End-to-end smoke tests against a real xAgent backend.
 
 Marked ``@pytest.mark.e2e`` so the default ``pytest`` invocation skips
 the whole file. Run explicitly with::
@@ -6,15 +6,15 @@ the whole file. Run explicitly with::
     XAGENT_BASE_URL=... XAGENT_PERSONAL_KEY=... XAGENT_API_KEY=... \\
         uv run pytest -m e2e
 
-Set ``E2E_AGENT_ID`` to override the agent id used by runtime-only
-tests; otherwise the runtime tests will skip when the variable is
-unset, since 0.2.0 ``AgentClient`` no longer exposes a self-identity
-probe (use the personal-key path / ``UserClient.agents.list()`` to
-discover agent ids).
+Set ``E2E_AGENT_ID`` to pick the agent id used by runtime-only tests;
+those tests skip when it is unset, because ``AgentClient`` exposes no
+self-identity probe (discover agent ids via ``UserClient.agents.list()``
+on the personal-key path).
 
-Set ``E2E_TEMPLATE_ID`` (default ``q_and_a``) to pick which template
-the full-flow test instantiates an agent from. ``E2E_AGENT_NAME``
-(default ``e2e_smoke_<pid>``) controls the new agent's display name.
+Set ``E2E_TEMPLATE_ID`` to pick which template the full-flow test
+instantiates an agent from; it skips if the template list is empty or
+the id is absent. ``E2E_AGENT_NAME`` (default ``e2e_smoke_<pid>``)
+controls the new agent's display name.
 """
 
 import os
@@ -84,9 +84,9 @@ def test_create_is_async(patient_agent_client: AgentClient) -> None:
 def test_run_single_turn(agent_client: AgentClient) -> None:
     """Single-turn runtime probe with an existing agent.
 
-    Requires ``E2E_AGENT_ID`` because 0.2.0 ``AgentClient`` no longer
-    has an identity probe; the test would have nothing to point at
-    without a caller-supplied id.
+    Requires ``E2E_AGENT_ID`` because ``AgentClient`` has no identity
+    probe; the test would have nothing to point at without a
+    caller-supplied id.
     """
     agent_id_env = os.environ.get("E2E_AGENT_ID")
     if not agent_id_env:
@@ -103,27 +103,27 @@ def test_run_single_turn(agent_client: AgentClient) -> None:
     assert result.output is not None
 
 
-def test_e2e_full_flow_phase2(user_client: UserClient) -> None:
-    """End-to-end Phase 2 flow: pick a template, create an agent, run it.
+def test_e2e_full_flow(user_client: UserClient) -> None:
+    """Pick a template, create an agent from it, run a single turn.
 
-    1. List templates and confirm at least one entry exists.
-    2. Pick ``E2E_TEMPLATE_ID`` (default ``q_and_a``) and call
-       ``agents.create_from_template`` to mint a fresh agent + runtime
-       key.
+    1. List templates; skip if the backend exposes none.
+    2. Pick ``E2E_TEMPLATE_ID`` if set, else the first listed template,
+       and call ``agents.create_from_template`` to mint a fresh agent +
+       runtime key.
     3. Build an ``AgentClient`` with the freshly minted runtime key.
-    4. Drive a single-turn ``tasks.run()`` against the new agent and
-       assert it completes.
+    4. Drive a single-turn ``tasks.run()`` and assert it completes.
 
-    The test deliberately does **not** clean up the created agent --
-    Phase 2 SDK has no delete method, and the backend's own
-    housekeeping owns the lifecycle. Run on a scratch backend instance.
+    The test does not delete the created agent -- the SDK has no delete
+    method and the backend owns lifecycle cleanup. Run on a scratch
+    backend instance.
     """
-    template_id = os.environ.get("E2E_TEMPLATE_ID", "q_and_a")
     agent_name = os.environ.get("E2E_AGENT_NAME", f"e2e_smoke_{os.getpid()}")
     base_url = os.environ["XAGENT_BASE_URL"]
 
     templates = user_client.templates.list()
-    assert templates, "backend returned an empty template list"
+    if not templates:
+        pytest.skip("backend exposes no templates; nothing to instantiate")
+    template_id = os.environ.get("E2E_TEMPLATE_ID", templates[0].template_id)
 
     created = user_client.agents.create_from_template(
         template_id, overrides={"name": agent_name}

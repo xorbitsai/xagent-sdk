@@ -19,7 +19,7 @@ from pathlib import Path
 
 
 def _repo_root() -> Path:
-    # tests/unit/test_check_no_legacy_callsites.py -> parents[3] == repo root
+    # tests/unit/test_forbidden_symbols.py -> parents[3] == repo root
     return Path(__file__).resolve().parents[3]
 
 
@@ -30,7 +30,7 @@ def _grep(pattern: str) -> subprocess.CompletedProcess[str]:
             "grep",
             "-rn",
             "--include=*.py",
-            "--exclude=test_check_no_legacy_callsites.py",
+            "--exclude=test_forbidden_symbols.py",
             "--exclude=test_public_surface.py",
             pattern,
             str(repo / "python" / "src"),
