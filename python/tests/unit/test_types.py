@@ -21,8 +21,11 @@ from xagent_sdk.types import (
     _parse_agent_create,
     _parse_append,
     _parse_create_task,
+    _parse_rotate_key,
     _parse_steps,
     _parse_task_info,
+    _parse_template_detail,
+    _parse_user_principal,
     _template_dict,
 )
 
@@ -235,6 +238,40 @@ class TestParseAgentCreateMalformed:
         with pytest.raises(MalformedResponse) as excinfo:
             _parse_agent_create({"agent": {"id": 42}, "api_key": self._good_api_key()})
         assert excinfo.value.code == "malformed_response"
+
+
+class TestSingleObjectParsersRejectNonDict:
+    """Every single-object parser must surface MalformedResponse (not a
+    raw ValidationError / AttributeError) when the body is not a JSON
+    object. Mirrors the list parsers' isinstance guard.
+    """
+
+    @pytest.mark.parametrize(
+        "parser",
+        [
+            _parse_user_principal,
+            _parse_template_detail,
+            _parse_agent_create,
+            _parse_rotate_key,
+            _parse_create_task,
+            _parse_append,
+            _parse_task_info,
+        ],
+    )
+    @pytest.mark.parametrize("body", [None, [1, 2], "oops", 42, True])
+    def test_non_dict_body_raises_malformed(self, parser: object, body: object) -> None:
+        with pytest.raises(MalformedResponse) as excinfo:
+            parser(body)  # type: ignore[operator]
+        assert excinfo.value.code == "malformed_response"
+
+    def test_agent_create_non_dict_api_key_coerced(self) -> None:
+        # A non-dict api_key block must not crash; runtime fields stay None.
+        result = _parse_agent_create(
+            {"agent": {"id": 7, "name": "A"}, "api_key": "not-a-dict"}
+        )
+        assert result.agent_id == 7
+        assert result.runtime_full_key is None
+        assert result.runtime_key_prefix is None
 
 
 class TestNormalizeHelpers:

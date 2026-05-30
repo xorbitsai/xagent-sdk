@@ -262,8 +262,28 @@ _TASK_INFO_ADAPTER = TypeAdapter(TaskInfo)
 _STEP_LIST_ADAPTER = TypeAdapter(list[Step])
 
 
-def _parse_user_principal(data: dict[str, Any]) -> UserPrincipal:
-    return _USER_PRINCIPAL_ADAPTER.validate_python(data)
+def _require_mapping(data: Any, what: str) -> dict[str, Any]:
+    """Return ``data`` if it is a dict, else raise ``MalformedResponse``.
+
+    The single-object parsers below trust ``data`` to be a JSON object;
+    a backend (or proxy) returning a non-object body would otherwise
+    surface as a raw pydantic ``ValidationError`` / ``AttributeError``
+    that does not name the real cause. Mirrors the ``isinstance(data,
+    list)`` guard the list parsers already apply.
+    """
+    if not isinstance(data, dict):
+        raise MalformedResponse(
+            "malformed_response",
+            f"expected a JSON object for {what}, got {type(data).__name__}",
+            http_status=None,
+        )
+    return data
+
+
+def _parse_user_principal(data: Any) -> UserPrincipal:
+    return _USER_PRINCIPAL_ADAPTER.validate_python(
+        _require_mapping(data, "user principal")
+    )
 
 
 def _parse_template_list(data: Any) -> list[Template]:
@@ -281,8 +301,10 @@ def _parse_template_list(data: Any) -> list[Template]:
     return _TEMPLATE_LIST_ADAPTER.validate_python(normalized)
 
 
-def _parse_template_detail(data: dict[str, Any]) -> TemplateDetail:
-    return _TEMPLATE_DETAIL_ADAPTER.validate_python(_template_dict(data))
+def _parse_template_detail(data: Any) -> TemplateDetail:
+    return _TEMPLATE_DETAIL_ADAPTER.validate_python(
+        _template_dict(_require_mapping(data, "template detail"))
+    )
 
 
 def _parse_agent_list(data: Any) -> list[AgentSummary]:
@@ -297,7 +319,7 @@ def _parse_agent_list(data: Any) -> list[AgentSummary]:
     return _AGENT_LIST_ADAPTER.validate_python(normalized)
 
 
-def _parse_agent_create(data: dict[str, Any]) -> AgentCreateResult:
+def _parse_agent_create(data: Any) -> AgentCreateResult:
     """Parse the nested ``{"agent": {...}, "api_key": {...}}`` payload.
 
     Backend returns the new agent row and (when ``generate_runtime_key``
@@ -313,6 +335,7 @@ def _parse_agent_create(data: dict[str, Any]) -> AgentCreateResult:
     input_value=None" which does not point at the real cause (backend
     response shape violation).
     """
+    data = _require_mapping(data, "agent-create")
     agent = data.get("agent")
     if (
         not isinstance(agent, dict)
@@ -325,7 +348,9 @@ def _parse_agent_create(data: dict[str, Any]) -> AgentCreateResult:
             "(expected {'agent': {'id': int, 'name': str, ...}, 'api_key'?: {...}})",
             http_status=None,
         )
-    api_key = data.get("api_key") or {}
+    api_key = data.get("api_key")
+    if not isinstance(api_key, dict):
+        api_key = {}
     flat = {
         "agent_id": agent.get("id"),
         "name": agent.get("name"),
@@ -352,20 +377,20 @@ def _agent_summary_dict(item: dict[str, Any]) -> dict[str, Any]:
     return {**item, "agent_id": item.get("id") or item.get("agent_id")}
 
 
-def _parse_rotate_key(data: dict[str, Any]) -> RotateKeyResult:
-    return _ROTATE_KEY_ADAPTER.validate_python(data)
+def _parse_rotate_key(data: Any) -> RotateKeyResult:
+    return _ROTATE_KEY_ADAPTER.validate_python(_require_mapping(data, "key rotation"))
 
 
-def _parse_create_task(data: dict[str, Any]) -> CreateTaskResult:
-    return _CREATE_ADAPTER.validate_python(data)
+def _parse_create_task(data: Any) -> CreateTaskResult:
+    return _CREATE_ADAPTER.validate_python(_require_mapping(data, "task creation"))
 
 
-def _parse_append(data: dict[str, Any]) -> AppendResult:
-    return _APPEND_ADAPTER.validate_python(data)
+def _parse_append(data: Any) -> AppendResult:
+    return _APPEND_ADAPTER.validate_python(_require_mapping(data, "task append"))
 
 
-def _parse_task_info(data: dict[str, Any]) -> TaskInfo:
-    return _TASK_INFO_ADAPTER.validate_python(data)
+def _parse_task_info(data: Any) -> TaskInfo:
+    return _TASK_INFO_ADAPTER.validate_python(_require_mapping(data, "task info"))
 
 
 def _parse_steps(data: Any) -> list[Step]:
