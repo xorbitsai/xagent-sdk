@@ -138,6 +138,22 @@ class TestCreate:
             c.agents.create(name="HR Leave Assistant", instructions="...")
         assert excinfo.value.code == "malformed_response"
 
+    def test_generate_runtime_key_true_but_empty_key_fails_closed(self) -> None:
+        # Empty string is also not a usable runtime credential; create()
+        # should surface the malformed backend response immediately.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                201,
+                json={
+                    "agent": {"id": 42, "name": "HR Leave Assistant"},
+                    "api_key": {"full_key": "", "key_prefix": "abc123"},
+                },
+            )
+
+        with _make_user(handler) as c, pytest.raises(MalformedResponse) as excinfo:
+            c.agents.create(name="HR Leave Assistant", instructions="...")
+        assert excinfo.value.code == "malformed_response"
+
     def test_metadata_included_when_given(self) -> None:
         captured: list[httpx.Request] = []
 
@@ -248,6 +264,22 @@ class TestCreateFromTemplate:
         # generate_runtime_key=True with a keyless response must raise.
         def h(req: httpx.Request) -> httpx.Response:
             return httpx.Response(201, json={"agent": {"id": 42, "name": "X"}})
+
+        with _make_user(h) as c, pytest.raises(MalformedResponse) as excinfo:
+            c.agents.create_from_template("q_and_a")
+        assert excinfo.value.code == "malformed_response"
+
+    def test_generate_runtime_key_true_but_empty_key_fails_closed(self) -> None:
+        # Same fail-closed contract as create(): empty full_key is not a
+        # usable one-time runtime key.
+        def h(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                201,
+                json={
+                    "agent": {"id": 42, "name": "X"},
+                    "api_key": {"full_key": "", "key_prefix": "abc123"},
+                },
+            )
 
         with _make_user(h) as c, pytest.raises(MalformedResponse) as excinfo:
             c.agents.create_from_template("q_and_a")

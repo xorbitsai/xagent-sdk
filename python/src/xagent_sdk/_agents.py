@@ -32,22 +32,16 @@ if TYPE_CHECKING:
 def _require_runtime_key(
     result: AgentCreateResult, generate_runtime_key: bool
 ) -> AgentCreateResult:
-    """Fail closed when a key was requested but the response omitted it.
+    """Fail closed when a key was requested but the response lacks one.
 
     ``generate_runtime_key=True`` is a promise that the response carries a
-    one-time runtime key. When the backend omits it, ``runtime_full_key``
-    is ``None`` -- and ``None`` is exactly the value ``_BaseClient`` treats
-    as "argument not supplied", so ``AgentClient(api_key=None)`` would fall
-    back to ``XAGENT_API_KEY`` and silently authenticate as a *different*
-    agent. This guard catches that at ``create`` time with a message that
-    names the backend contract, rather than letting it surface later as a
-    generic construction error.
-
-    The empty-string case (``runtime_full_key == ""``) is handled one layer
-    down: ``_BaseClient`` only env-falls-back on ``None``, so an explicit
-    empty key reaches its ``not api_key`` guard and raises there.
+    usable one-time runtime key. ``None`` means the backend omitted the
+    key block, and ``""`` is still not a usable credential. Catch both at
+    ``create`` time with an error that names the backend contract, rather
+    than returning an apparently successful result that only fails when
+    the caller later constructs an ``AgentClient``.
     """
-    if generate_runtime_key and result.runtime_full_key is None:
+    if generate_runtime_key and not result.runtime_full_key:
         raise MalformedResponse(
             "malformed_response",
             "create requested generate_runtime_key=True but the response "
