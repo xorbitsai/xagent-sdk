@@ -35,19 +35,21 @@ def _require_runtime_key(
     """Fail closed when a key was requested but the response carried none.
 
     ``generate_runtime_key=True`` is a promise that the response includes
-    a one-time runtime key. If the backend omits it, returning a result
-    with ``runtime_full_key=None`` is dangerous: the caller is expected to
-    do ``AgentClient(api_key=result.runtime_full_key)``, and ``None`` there
-    falls back to ``XAGENT_API_KEY`` in the environment -- silently using
-    a *different* agent's credential. Raise instead of handing back a
-    keyless result that invites that fallback.
+    a one-time runtime key. A missing **or empty** ``runtime_full_key`` is
+    dangerous: the caller is expected to do
+    ``AgentClient(api_key=result.runtime_full_key)``, and ``_BaseClient``
+    resolves the key with ``api_key or os.environ.get(...)`` -- so any
+    falsy value (``None`` or ``""``) falls back to ``XAGENT_API_KEY`` and
+    silently authenticates as a *different* agent. The check mirrors that
+    falsiness rather than testing ``is None`` so the empty-string case is
+    rejected too.
     """
-    if generate_runtime_key and result.runtime_full_key is None:
+    if generate_runtime_key and not result.runtime_full_key:
         raise MalformedResponse(
             "malformed_response",
             "create requested generate_runtime_key=True but the response "
-            "carried no runtime key; refusing to return a keyless result "
-            "that would let AgentClient fall back to XAGENT_API_KEY",
+            "carried no usable runtime key; refusing to return a keyless "
+            "result that would let AgentClient fall back to XAGENT_API_KEY",
             http_status=None,
         )
     return result
