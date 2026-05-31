@@ -16,7 +16,7 @@ from xagent_sdk.types import (
 )
 
 if TYPE_CHECKING:
-    from xagent_sdk.client import XAgentClient
+    from xagent_sdk.agent_client import AgentClient
 
 
 # Mirrors backend ``v1/tasks.py:170``: ``_TERMINAL_STATUSES = (COMPLETED,
@@ -32,7 +32,7 @@ class TasksAPI:
     """The ``client.tasks`` namespace.
 
     All four endpoint methods are thin wrappers over the v1 endpoints:
-    build a request body, hand it to ``XAgentClient._request`` for
+    build a request body, hand it to ``AgentClient._request`` for
     transport + error mapping, then parse the success body into a frozen
     dataclass.
 
@@ -49,7 +49,7 @@ class TasksAPI:
     other error from the underlying calls.
     """
 
-    def __init__(self, client: "XAgentClient") -> None:
+    def __init__(self, client: "AgentClient") -> None:
         self._client = client
 
     def create(

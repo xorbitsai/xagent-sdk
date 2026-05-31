@@ -1,0 +1,27 @@
+{
+  "agent": {
+    "id": 42,
+    "user_id": 8,
+    "name": "HR Leave Assistant",
+    "description": null,
+    "instructions": "Answer leave-policy questions for employees.",
+    "execution_mode": "balanced",
+    "models": null,
+    "knowledge_bases": [],
+    "skills": [],
+    "tool_categories": [],
+    "suggested_prompts": [],
+    "logo_url": null,
+    "status": "draft",
+    "published_at": null,
+    "created_at": "2026-05-29T13:57:39.000000+00:00",
+    "updated_at": "2026-05-29T13:57:39.000000+00:00",
+    "widget_enabled": true,
+    "allowed_domains": []
+  },
+  "api_key": {
+    "full_key": "xag_abc123_secretsecretsecretsecretsecret",
+    "key_prefix": "abc123",
+    "created_at": "2026-05-29T13:57:39.780154Z"
+  }
+}

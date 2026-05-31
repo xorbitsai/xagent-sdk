@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from xagent_sdk import (
+    AgentClient,
     AgentNotFound,
     AppendResult,
     CreateTaskResult,
@@ -19,12 +20,11 @@ from xagent_sdk import (
     TaskNotFound,
     TaskStatus,
     TaskTimeout,
-    XAgentClient,
 )
 
 
 class TestCreate:
-    def test_body_shape(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_body_shape(self, make_client: Callable[..., AgentClient]) -> None:
         captured: list[httpx.Request] = []
 
         def handler(req: httpx.Request) -> httpx.Response:
@@ -52,7 +52,7 @@ class TestCreate:
         assert isinstance(result, CreateTaskResult)
         assert result.status is TaskStatus.PENDING
 
-    def test_metadata_included(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_metadata_included(self, make_client: Callable[..., AgentClient]) -> None:
         captured: list[httpx.Request] = []
 
         def handler(req: httpx.Request) -> httpx.Response:
@@ -74,7 +74,7 @@ class TestCreate:
         assert body["metadata"] == {"trace_id": "abc"}
 
     def test_no_metadata_field_when_none(
-        self, make_client: Callable[..., XAgentClient]
+        self, make_client: Callable[..., AgentClient]
     ) -> None:
         captured: list[httpx.Request] = []
 
@@ -98,7 +98,7 @@ class TestCreate:
 
 
 class TestAppend:
-    def test_url_and_body(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_url_and_body(self, make_client: Callable[..., AgentClient]) -> None:
         captured: list[httpx.Request] = []
 
         def handler(req: httpx.Request) -> httpx.Response:
@@ -128,7 +128,7 @@ class TestAppend:
 
 
 class TestGet:
-    def test_url_and_parse(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_url_and_parse(self, make_client: Callable[..., AgentClient]) -> None:
         captured: list[httpx.Request] = []
 
         def handler(req: httpx.Request) -> httpx.Response:
@@ -158,7 +158,7 @@ class TestGet:
 
 class TestSteps:
     def test_url_and_outer_wrapper_dropped(
-        self, make_client: Callable[..., XAgentClient]
+        self, make_client: Callable[..., AgentClient]
     ) -> None:
         captured: list[httpx.Request] = []
 
@@ -220,11 +220,11 @@ class TestErrorMappingPerEndpoint:
     )
     def test_envelope_codes(
         self,
-        make_client: Callable[..., XAgentClient],
+        make_client: Callable[..., AgentClient],
         status: int,
         code: str,
         exc_cls: type[Exception],
-        call: Callable[[XAgentClient], object],
+        call: Callable[[AgentClient], object],
     ) -> None:
         def h(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -237,7 +237,7 @@ class TestErrorMappingPerEndpoint:
         # know exc_cls is a subclass here, so cast via attribute access.
         assert excinfo.value.code == code  # type: ignore[attr-defined]
 
-    def test_steps_422(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_steps_422(self, make_client: Callable[..., AgentClient]) -> None:
         def h(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 422,
@@ -249,9 +249,7 @@ class TestErrorMappingPerEndpoint:
 
 
 class TestWait:
-    def test_multi_poll_terminal(
-        self, make_client: Callable[..., XAgentClient]
-    ) -> None:
+    def test_multi_poll_terminal(self, make_client: Callable[..., AgentClient]) -> None:
         calls = {"n": 0}
 
         def h(req: httpx.Request) -> httpx.Response:
@@ -279,7 +277,7 @@ class TestWait:
         assert info.status is TaskStatus.COMPLETED
         assert calls["n"] == 3
 
-    def test_immediate_terminal(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_immediate_terminal(self, make_client: Callable[..., AgentClient]) -> None:
         def h(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 200,
@@ -301,7 +299,7 @@ class TestWait:
 
         assert info.status is TaskStatus.COMPLETED
 
-    def test_timeout(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_timeout(self, make_client: Callable[..., AgentClient]) -> None:
         def h(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 200,
@@ -323,7 +321,7 @@ class TestWait:
         assert "running" in excinfo.value.message
 
     def test_paused_keeps_polling(
-        self, make_client: Callable[..., XAgentClient]
+        self, make_client: Callable[..., AgentClient]
     ) -> None:
         # PAUSED is NOT terminal (mirrors backend `v1/tasks.py:170`);
         # wait() should poll until the deadline elapses.
@@ -346,7 +344,7 @@ class TestWait:
             c.tasks.wait(10, timeout=0.1, poll_interval=0.02)
         assert "paused" in excinfo.value.message
 
-    def test_propagates_404(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_propagates_404(self, make_client: Callable[..., AgentClient]) -> None:
         def h(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 404,
@@ -356,7 +354,7 @@ class TestWait:
         with make_client(h) as c, pytest.raises(TaskNotFound):
             c.tasks.wait(999, timeout=1.0, poll_interval=0.05)
 
-    def test_wall_clock_cap(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_wall_clock_cap(self, make_client: Callable[..., AgentClient]) -> None:
         # poll_interval >> remaining timeout. wait() must cap sleep so the
         # wall-clock does not overshoot. Bug version would take ~5s; we
         # assert <0.5s (~5x the configured timeout, well below the 5s
@@ -385,7 +383,7 @@ class TestWait:
         assert elapsed < 0.5
 
     def test_negative_timeout_rejected(
-        self, make_client: Callable[..., XAgentClient]
+        self, make_client: Callable[..., AgentClient]
     ) -> None:
         # The handler is never invoked; validation rejects before any HTTP.
         with (
@@ -395,7 +393,7 @@ class TestWait:
             c.tasks.wait(10, timeout=-1.0, poll_interval=0.05)
 
     def test_negative_poll_interval_rejected(
-        self, make_client: Callable[..., XAgentClient]
+        self, make_client: Callable[..., AgentClient]
     ) -> None:
         with (
             make_client(lambda req: httpx.Response(200)) as c,  # noqa: ARG005
@@ -405,7 +403,7 @@ class TestWait:
 
 
 class TestRun:
-    def test_full_flow(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_full_flow(self, make_client: Callable[..., AgentClient]) -> None:
         state = {"polls": 0}
 
         def h(req: httpx.Request) -> httpx.Response:
@@ -475,7 +473,7 @@ class TestRun:
         assert len(result.steps) == 1
         assert result.steps[0].type is StepType.MESSAGE
 
-    def test_timeout_propagates(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_timeout_propagates(self, make_client: Callable[..., AgentClient]) -> None:
         def h(req: httpx.Request) -> httpx.Response:
             method, path = req.method, req.url.path
             if method == "POST" and path == "/v1/chat/tasks":
@@ -511,7 +509,7 @@ class TestRun:
             )
 
     def test_negative_timeout_rejected_before_create(
-        self, make_client: Callable[..., XAgentClient]
+        self, make_client: Callable[..., AgentClient]
     ) -> None:
         calls = {"n": 0}
 
@@ -525,7 +523,7 @@ class TestRun:
         assert calls["n"] == 0
 
     def test_negative_poll_interval_rejected_before_create(
-        self, make_client: Callable[..., XAgentClient]
+        self, make_client: Callable[..., AgentClient]
     ) -> None:
         calls = {"n": 0}
 
@@ -538,7 +536,7 @@ class TestRun:
 
         assert calls["n"] == 0
 
-    def test_shared_deadline(self, make_client: Callable[..., XAgentClient]) -> None:
+    def test_shared_deadline(self, make_client: Callable[..., AgentClient]) -> None:
         # Inject latency into create() so that the time it consumes is
         # observable. Old behavior passed the full timeout to wait(),
         # producing total elapsed of (create_delay + timeout). New

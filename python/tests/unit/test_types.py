@@ -9,26 +9,25 @@ from pydantic import ValidationError
 from xagent_sdk import (
     AppendResult,
     CreateTaskResult,
-    MeResponse,
     RunResult,
     Step,
     StepType,
     TaskInfo,
     TaskStatus,
 )
+from xagent_sdk.errors import MalformedResponse
 from xagent_sdk.types import (
+    _agent_summary_dict,
+    _parse_agent_create,
     _parse_append,
     _parse_create_task,
-    _parse_me,
+    _parse_rotate_key,
     _parse_steps,
     _parse_task_info,
+    _parse_template_detail,
+    _parse_user_principal,
+    _template_dict,
 )
-
-
-class TestParseMe:
-    def test_happy(self) -> None:
-        me = _parse_me({"agent_id": 7, "agent_name": "Sales", "key_prefix": "a1B2c3"})
-        assert me == MeResponse(agent_id=7, agent_name="Sales", key_prefix="a1B2c3")
 
 
 class TestParseCreateTask:
@@ -192,10 +191,121 @@ class TestParseSteps:
 
 
 class TestFrozenDataclasses:
-    def test_me_frozen(self) -> None:
-        me = MeResponse(agent_id=1, agent_name="x", key_prefix="y")
+    def test_step_frozen(self) -> None:
+        step = Step(
+            id="message:1",
+            type=StepType.MESSAGE,
+            status="completed",
+            started_at=datetime(2026, 5, 10, tzinfo=UTC),
+            completed_at=datetime(2026, 5, 10, tzinfo=UTC),
+            data={"role": "user", "content": "hi"},
+        )
         with pytest.raises(FrozenInstanceError):
-            me.agent_name = "hacked"  # type: ignore[misc]
+            step.id = "hacked"  # type: ignore[misc]
+
+
+class TestParseAgentCreateMalformed:
+    """Guard the explicit ``MalformedResponse`` raised when the backend
+    body lacks the required ``agent`` block.
+    """
+
+    def _good_api_key(self) -> dict[str, object]:
+        return {
+            "full_key": "xag_abc123_secret",
+            "key_prefix": "abc123",
+            "created_at": "2026-05-29T00:00:00Z",
+        }
+
+    def test_missing_agent_block_raises(self) -> None:
+        with pytest.raises(MalformedResponse) as excinfo:
+            _parse_agent_create({"api_key": self._good_api_key()})
+        assert excinfo.value.code == "malformed_response"
+        assert "'agent'" in str(excinfo.value)
+
+    def test_agent_block_is_not_dict_raises(self) -> None:
+        with pytest.raises(MalformedResponse) as excinfo:
+            _parse_agent_create({"agent": None, "api_key": self._good_api_key()})
+        assert excinfo.value.code == "malformed_response"
+
+    def test_agent_block_missing_id_raises(self) -> None:
+        with pytest.raises(MalformedResponse) as excinfo:
+            _parse_agent_create(
+                {"agent": {"name": "x"}, "api_key": self._good_api_key()}
+            )
+        assert excinfo.value.code == "malformed_response"
+
+    def test_agent_block_missing_name_raises(self) -> None:
+        with pytest.raises(MalformedResponse) as excinfo:
+            _parse_agent_create({"agent": {"id": 42}, "api_key": self._good_api_key()})
+        assert excinfo.value.code == "malformed_response"
+
+
+class TestSingleObjectParsersRejectNonDict:
+    """Every single-object parser must surface MalformedResponse (not a
+    raw ValidationError / AttributeError) when the body is not a JSON
+    object. Mirrors the list parsers' isinstance guard.
+    """
+
+    @pytest.mark.parametrize(
+        "parser",
+        [
+            _parse_user_principal,
+            _parse_template_detail,
+            _parse_agent_create,
+            _parse_rotate_key,
+            _parse_create_task,
+            _parse_append,
+            _parse_task_info,
+        ],
+    )
+    @pytest.mark.parametrize("body", [None, [1, 2], "oops", 42, True])
+    def test_non_dict_body_raises_malformed(self, parser: object, body: object) -> None:
+        with pytest.raises(MalformedResponse) as excinfo:
+            parser(body)  # type: ignore[operator]
+        assert excinfo.value.code == "malformed_response"
+
+    def test_agent_create_non_dict_api_key_coerced(self) -> None:
+        # A non-dict api_key block must not crash; runtime fields stay None.
+        result = _parse_agent_create(
+            {"agent": {"id": 7, "name": "A"}, "api_key": "not-a-dict"}
+        )
+        assert result.agent_id == 7
+        assert result.runtime_full_key is None
+        assert result.runtime_key_prefix is None
+
+
+class TestNormalizeHelpers:
+    """Pin ``_template_dict`` / ``_agent_summary_dict`` shape contracts."""
+
+    def test_template_dict_id_to_template_id(self) -> None:
+        out = _template_dict({"id": "tpl-1", "name": "T"})
+        assert out["template_id"] == "tpl-1"
+        assert out["name"] == "T"
+
+    def test_template_dict_falls_back_to_existing_template_id(self) -> None:
+        # If a future backend drops "id" and sends "template_id" directly,
+        # the helper must surface the existing value instead of None.
+        out = _template_dict({"template_id": "tpl-2", "name": "T"})
+        assert out["template_id"] == "tpl-2"
+
+    def test_template_dict_id_wins_when_both_present(self) -> None:
+        # Current backend contract: "id" is the source of truth.
+        out = _template_dict({"id": "from_id", "template_id": "from_fallback"})
+        assert out["template_id"] == "from_id"
+
+    def test_template_dict_missing_id_yields_none(self) -> None:
+        # Caller (pydantic TypeAdapter) is responsible for failing on
+        # None; helper should not silently fabricate a value.
+        out = _template_dict({"name": "T"})
+        assert out["template_id"] is None
+
+    def test_agent_summary_dict_id_to_agent_id(self) -> None:
+        out = _agent_summary_dict({"id": 42, "name": "A"})
+        assert out["agent_id"] == 42
+
+    def test_agent_summary_dict_falls_back_to_existing_agent_id(self) -> None:
+        out = _agent_summary_dict({"agent_id": 43, "name": "A"})
+        assert out["agent_id"] == 43
 
 
 class TestRunResult:

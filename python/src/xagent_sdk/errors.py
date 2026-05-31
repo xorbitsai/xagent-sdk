@@ -44,7 +44,7 @@ class TaskBusy(XAgentError):
 
 
 class RateLimited(XAgentError):
-    """HTTP 429, code ``rate_limited``. Reserved; backend does not yet emit."""
+    """HTTP 429, code ``rate_limited``."""
 
 
 class InternalError(XAgentError):
@@ -63,12 +63,37 @@ class InvalidInput(XAgentError):
     """
 
 
+class TemplateNotFound(XAgentError):
+    """HTTP 404, code ``template_not_found``.
+
+    Raised when ``UserClient.templates.get(template_id)`` or
+    ``UserClient.agents.create_from_template(template_id, ...)`` is
+    given an unknown ``template_id``. Distinct from ``AgentNotFound``
+    because the SaaS UI path treats template-picker mismatch differently
+    from agent-lookup mismatch.
+    """
+
+
 # SDK-coined errors (server has no equivalent code).
 class XAgentTransportError(XAgentError):
     """Network, DNS, TLS, or local timeout below the HTTP layer.
 
     Wraps any ``httpx.HTTPError``. ``http_status`` is None because no HTTP
     response was received.
+    """
+
+
+class MalformedResponse(XAgentError):
+    """The HTTP exchange succeeded but the body did not match the shape the
+    SDK requires to build a result.
+
+    Raised by the response parsers (e.g. an agent-create body missing its
+    ``agent`` block) so the failure points at the response contract rather
+    than surfacing as a raw pydantic ``ValidationError`` on a derived
+    field. ``http_status`` is ``None`` because the status line itself was
+    not the problem -- the decoded payload was. The ``code`` is the
+    SDK-coined string ``malformed_response``; the server never emits it,
+    so it is absent from ``_CODE_MAP``.
     """
 
 
@@ -89,6 +114,7 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "task_not_found": TaskNotFound,
     "task_busy": TaskBusy,
     "invalid_input": InvalidInput,
+    "template_not_found": TemplateNotFound,
     "rate_limited": RateLimited,
     "internal_error": InternalError,
 }

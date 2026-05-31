@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "template_not_found",
+    "message": "Template not found or revoked."
+  }
+}

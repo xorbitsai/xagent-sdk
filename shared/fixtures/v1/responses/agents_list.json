@@ -1,0 +1,35 @@
+[
+  {
+    "id": 42,
+    "name": "HR Leave Assistant",
+    "description": "Answers leave-policy questions for employees.",
+    "logo_url": null,
+    "status": "active",
+    "created_at": "2026-05-20T10:00:00+00:00",
+    "updated_at": "2026-05-29T10:00:00+00:00",
+    "widget_enabled": true,
+    "allowed_domains": []
+  },
+  {
+    "id": 43,
+    "name": "Policy Bot",
+    "description": null,
+    "logo_url": null,
+    "status": "draft",
+    "created_at": "2026-05-25T10:00:00+00:00",
+    "updated_at": "2026-05-25T10:00:00+00:00",
+    "widget_enabled": true,
+    "allowed_domains": []
+  },
+  {
+    "id": 44,
+    "name": "CV Screener",
+    "description": "Filters incoming CVs against the role spec.",
+    "logo_url": null,
+    "status": "paused",
+    "created_at": "2026-04-01T10:00:00+00:00",
+    "updated_at": "2026-05-10T10:00:00+00:00",
+    "widget_enabled": false,
+    "allowed_domains": []
+  }
+]
