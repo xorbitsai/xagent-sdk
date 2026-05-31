@@ -66,6 +66,15 @@ class TestConstruction:
         with pytest.raises(ValueError, match="personal_key"):
             UserClient()
 
+    def test_empty_personal_key_does_not_fall_back_to_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An explicit empty key must raise, never resolve to the env value.
+        monkeypatch.setenv("XAGENT_PERSONAL_KEY", "xag_personal_envkey_envsec")
+        monkeypatch.setenv("XAGENT_BASE_URL", "https://envhost")
+        with pytest.raises(ValueError, match="personal_key"):
+            UserClient(personal_key="")
+
 
 class TestMe:
     def test_returns_user_principal(self) -> None:

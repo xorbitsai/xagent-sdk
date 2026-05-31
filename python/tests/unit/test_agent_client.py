@@ -55,6 +55,26 @@ class TestConstruction:
         with pytest.raises(ValueError, match="base_url"):
             AgentClient(api_key="x")
 
+    def test_empty_api_key_does_not_fall_back_to_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An explicit empty key must raise, never silently resolve to the
+        # environment value -- that would authenticate as whatever agent
+        # XAGENT_API_KEY happens to hold. Only an omitted (None) key may
+        # fall back to env.
+        monkeypatch.setenv("XAGENT_API_KEY", "envkey")
+        monkeypatch.setenv("XAGENT_BASE_URL", "https://envhost")
+        with pytest.raises(ValueError, match="api_key"):
+            AgentClient(api_key="")
+
+    def test_empty_base_url_does_not_fall_back_to_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("XAGENT_API_KEY", "envkey")
+        monkeypatch.setenv("XAGENT_BASE_URL", "https://envhost")
+        with pytest.raises(ValueError, match="base_url"):
+            AgentClient(api_key="k", base_url="")
+
 
 class TestLifecycle:
     def test_context_manager_closes(

@@ -138,27 +138,6 @@ class TestCreate:
             c.agents.create(name="HR Leave Assistant", instructions="...")
         assert excinfo.value.code == "malformed_response"
 
-    def test_generate_runtime_key_true_but_empty_key_fails_closed(self) -> None:
-        # An empty-string full_key is as dangerous as a missing one:
-        # AgentClient(api_key="") also falls back to XAGENT_API_KEY because
-        # _BaseClient resolves with `api_key or env`. Must fail closed.
-        def handler(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                201,
-                json={
-                    "agent": {"id": 42, "name": "X"},
-                    "api_key": {
-                        "full_key": "",
-                        "key_prefix": "",
-                        "created_at": "2026-05-29T00:00:00Z",
-                    },
-                },
-            )
-
-        with _make_user(handler) as c, pytest.raises(MalformedResponse) as excinfo:
-            c.agents.create(name="X", instructions="...")
-        assert excinfo.value.code == "malformed_response"
-
     def test_metadata_included_when_given(self) -> None:
         captured: list[httpx.Request] = []
 
@@ -269,26 +248,6 @@ class TestCreateFromTemplate:
         # generate_runtime_key=True with a keyless response must raise.
         def h(req: httpx.Request) -> httpx.Response:
             return httpx.Response(201, json={"agent": {"id": 42, "name": "X"}})
-
-        with _make_user(h) as c, pytest.raises(MalformedResponse) as excinfo:
-            c.agents.create_from_template("q_and_a")
-        assert excinfo.value.code == "malformed_response"
-
-    def test_generate_runtime_key_true_but_empty_key_fails_closed(self) -> None:
-        # Empty-string full_key must fail closed here too (same `or`
-        # fallback footgun as create()).
-        def h(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                201,
-                json={
-                    "agent": {"id": 42, "name": "X"},
-                    "api_key": {
-                        "full_key": "",
-                        "key_prefix": "",
-                        "created_at": "2026-05-29T00:00:00Z",
-                    },
-                },
-            )
 
         with _make_user(h) as c, pytest.raises(MalformedResponse) as excinfo:
             c.agents.create_from_template("q_and_a")

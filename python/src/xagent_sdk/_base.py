@@ -47,8 +47,16 @@ class _BaseClient:
         user_agent: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        api_key = api_key or os.environ.get(self._ENV_API_KEY)
-        base_url = base_url or os.environ.get("XAGENT_BASE_URL")
+        # Fall back to the environment only when the argument was *omitted*
+        # (left as None), never when it was passed but empty. An explicit
+        # empty string is a caller/upstream bug, and resolving it via
+        # ``arg or os.environ[...]`` would silently authenticate with a
+        # *different* credential -- so an empty explicit value must reach
+        # the ``not ...`` guard below and raise, not get swapped for env.
+        if api_key is None:
+            api_key = os.environ.get(self._ENV_API_KEY)
+        if base_url is None:
+            base_url = os.environ.get("XAGENT_BASE_URL")
         if not api_key:
             raise ValueError(
                 f"{self._API_KEY_FIELD} required: "
