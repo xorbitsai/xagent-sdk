@@ -16,6 +16,11 @@ attributes:
 - ``_API_KEY_FIELD``: the parameter name to use in the ``ValueError``
   message when the key is missing. Showing the right name keeps the
   error actionable for whichever public surface raised it.
+- ``_DEFAULT_BASE_URL``: a hosted endpoint to fall back to when neither
+  an explicit ``base_url`` nor ``XAGENT_BASE_URL`` is supplied. ``None``
+  means there is no default and a base URL must be provided (the
+  self-hosted clients); a subclass talking to a fixed hosted service
+  sets it to that URL.
 """
 
 import os
@@ -36,6 +41,7 @@ class _BaseClient:
 
     _ENV_API_KEY: ClassVar[str] = "XAGENT_API_KEY"
     _API_KEY_FIELD: ClassVar[str] = "api_key"
+    _DEFAULT_BASE_URL: ClassVar[str | None] = None
 
     def __init__(
         self,
@@ -55,8 +61,10 @@ class _BaseClient:
         # the ``not ...`` guard below and raise, not get swapped for env.
         if api_key is None:
             api_key = os.environ.get(self._ENV_API_KEY)
+        # base_url resolution: explicit arg, then env, then the class-level
+        # default (None for self-hosted clients, a fixed URL for hosted ones).
         if base_url is None:
-            base_url = os.environ.get("XAGENT_BASE_URL")
+            base_url = os.environ.get("XAGENT_BASE_URL") or self._DEFAULT_BASE_URL
         if not api_key:
             raise ValueError(
                 f"{self._API_KEY_FIELD} required: "
