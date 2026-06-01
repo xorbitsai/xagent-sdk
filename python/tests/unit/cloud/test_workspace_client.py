@@ -60,3 +60,12 @@ class TestConstruction:
     def test_missing_key(self) -> None:
         with pytest.raises(ValueError, match="workspace_key"):
             WorkspaceClient(base_url="https://x")
+
+    def test_empty_env_base_url_does_not_use_hosted_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A broken XAGENT_BASE_URL="" must fail fast, not silently route to
+        # the hosted default https://cloud.xagent.run.
+        monkeypatch.setenv("XAGENT_BASE_URL", "")
+        with pytest.raises(ValueError, match="base_url"):
+            WorkspaceClient(workspace_key="xag_workspace_p_s")

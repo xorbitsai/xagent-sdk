@@ -33,6 +33,27 @@ from xagent_sdk._http import HTTPClient
 from xagent_sdk.errors import from_response
 
 
+def _resolve(
+    explicit: str | None, env_name: str, default: str | None = None
+) -> str | None:
+    """Resolve a config value: explicit argument, then env var, then default.
+
+    Only a *genuinely absent* value (``None``) falls through to the next
+    source. A value that was provided but empty -- an explicit ``""`` or an
+    env var set to ``""`` -- is returned as-is so the caller's
+    ``if not value`` guard fails fast, rather than being swallowed (as a
+    falsy ``or`` would) and silently replaced by the env var or the hosted
+    default. This is the single resolution path for every credential/URL so
+    the empty-vs-absent distinction cannot be re-derived inconsistently.
+    """
+    if explicit is not None:
+        return explicit
+    env = os.environ.get(env_name)
+    if env is not None:
+        return env
+    return default
+
+
 class _BaseClient:
     """Shared transport plumbing for SDK clients.
 
@@ -53,18 +74,11 @@ class _BaseClient:
         user_agent: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        # Fall back to the environment only when the argument was *omitted*
-        # (left as None), never when it was passed but empty. An explicit
-        # empty string is a caller/upstream bug, and resolving it via
-        # ``arg or os.environ[...]`` would silently authenticate with a
-        # *different* credential -- so an empty explicit value must reach
-        # the ``not ...`` guard below and raise, not get swapped for env.
-        if api_key is None:
-            api_key = os.environ.get(self._ENV_API_KEY)
-        # base_url resolution: explicit arg, then env, then the class-level
-        # default (None for self-hosted clients, a fixed URL for hosted ones).
-        if base_url is None:
-            base_url = os.environ.get("XAGENT_BASE_URL") or self._DEFAULT_BASE_URL
+        # Resolve through the shared helper so an explicitly empty key/URL
+        # (or an env var set to "") fails fast instead of being swapped for
+        # the env value or the hosted default.
+        api_key = _resolve(api_key, self._ENV_API_KEY)
+        base_url = _resolve(base_url, "XAGENT_BASE_URL", self._DEFAULT_BASE_URL)
         if not api_key:
             raise ValueError(
                 f"{self._API_KEY_FIELD} required: "

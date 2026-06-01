@@ -69,3 +69,21 @@ class TestWithDefault:
         # the class default.
         with pytest.raises(ValueError, match="base_url"):
             _WithDefault(api_key="k", base_url="")
+
+    def test_empty_env_base_url_does_not_resolve_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A broken XAGENT_BASE_URL="" must fail fast, not silently fall
+        # back to the hosted default (which could send staging traffic to
+        # production).
+        monkeypatch.setenv("XAGENT_BASE_URL", "")
+        with pytest.raises(ValueError, match="base_url"):
+            _WithDefault(api_key="k")
+
+    def test_empty_env_api_key_does_not_resolve_to_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A present-but-empty key env var is a broken config -> fail fast.
+        monkeypatch.setenv("XAGENT_API_KEY", "")
+        with pytest.raises(ValueError, match="api_key"):
+            _NoDefault(base_url="https://x")
