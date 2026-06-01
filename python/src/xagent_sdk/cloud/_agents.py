@@ -15,7 +15,6 @@ carried none, via the shared ``_require_runtime_key`` guard.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from xagent_sdk._agents import _require_runtime_key
@@ -30,6 +29,13 @@ from xagent_sdk.types import (
 
 if TYPE_CHECKING:
     from xagent_sdk.cloud.workspace_client import WorkspaceClient
+
+# The ``list()`` method below shadows the ``list`` builtin inside this
+# class, so ``list[str]`` annotations on the create methods cannot resolve
+# to the builtin type. Reference it through a module-scope alias instead.
+# (Do not switch these to ``Sequence[str]``: a bare ``str`` satisfies
+# ``Sequence[str]`` and would slip through type checking onto the wire.)
+_StrList = list[str]
 
 
 def _drop_none(values: dict[str, Any]) -> dict[str, Any]:
@@ -60,10 +66,10 @@ class WorkspaceAgentsAPI:
         description: str | None = None,
         execution_mode: str | None = None,
         models: dict[str, Any] | None = None,
-        knowledge_bases: Sequence[str] | None = None,
-        skills: Sequence[str] | None = None,
-        tool_categories: Sequence[str] | None = None,
-        suggested_prompts: Sequence[str] | None = None,
+        knowledge_bases: _StrList | None = None,
+        skills: _StrList | None = None,
+        tool_categories: _StrList | None = None,
+        suggested_prompts: _StrList | None = None,
         generate_runtime_key: bool = True,
     ) -> AgentCreateResult:
         """``POST /v1/workspace/agents`` -- create an agent in the workspace.
@@ -113,10 +119,10 @@ class WorkspaceAgentsAPI:
         instructions: str | None = None,
         execution_mode: str | None = None,
         models: dict[str, Any] | None = None,
-        knowledge_bases: Sequence[str] | None = None,
-        skills: Sequence[str] | None = None,
-        tool_categories: Sequence[str] | None = None,
-        suggested_prompts: Sequence[str] | None = None,
+        knowledge_bases: _StrList | None = None,
+        skills: _StrList | None = None,
+        tool_categories: _StrList | None = None,
+        suggested_prompts: _StrList | None = None,
         generate_runtime_key: bool = True,
     ) -> AgentCreateResult:
         """``POST /v1/workspace/agents/from-template`` -- create from a template.

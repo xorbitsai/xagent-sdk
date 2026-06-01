@@ -102,6 +102,21 @@ class TestCreate:
         params = inspect.signature(WorkspaceAgentsAPI.create).parameters
         assert "metadata" not in params
 
+    def test_list_fields_are_lists_not_sequences(self) -> None:
+        # A bare str satisfies Sequence[str] and would reach the wire as a
+        # scalar; the list-valued params must be typed as concrete lists so
+        # type checking rejects a stray string. (Annotations are strings
+        # here because the module uses ``from __future__ import annotations``.)
+        params = inspect.signature(WorkspaceAgentsAPI.create).parameters
+        for field in (
+            "knowledge_bases",
+            "skills",
+            "tool_categories",
+            "suggested_prompts",
+        ):
+            ann = params[field].annotation
+            assert "Sequence" not in ann, f"{field} must not admit a bare str: {ann}"
+
     def test_fails_closed_without_key(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(201, json={"agent": {"id": 1, "name": "X"}})
