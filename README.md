@@ -8,7 +8,7 @@ package, version, and tooling.
 
 | Language | Path | Status |
 |---|---|---|
-| Python | [`python/`](./python/) | 0.1.0 — early access |
+| Python | [`python/`](./python/) | 0.3.0 — early access |
 | TypeScript | (planned) | — |
 | JavaScript | (planned) | — |
 
