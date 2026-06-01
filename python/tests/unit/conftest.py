@@ -18,6 +18,7 @@ def clean_xagent_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strip XAGENT_* env vars so tests do not inherit ambient config."""
     monkeypatch.delenv("XAGENT_API_KEY", raising=False)
     monkeypatch.delenv("XAGENT_PERSONAL_KEY", raising=False)
+    monkeypatch.delenv("XAGENT_WORKSPACE_KEY", raising=False)
     monkeypatch.delenv("XAGENT_BASE_URL", raising=False)
 
 
