@@ -30,6 +30,7 @@ from collections.abc import Iterator
 import pytest
 
 from xagent_sdk import AgentClient, UserClient
+from xagent_sdk.cloud import WorkspaceClient
 
 
 def _need_personal() -> tuple[str, str]:
@@ -87,4 +88,24 @@ def patient_agent_client() -> Iterator[AgentClient]:
     """
     api_key, base_url = _need_runtime()
     with AgentClient(api_key=api_key, base_url=base_url, timeout=60.0) as c:
+        yield c
+
+
+@pytest.fixture
+def workspace_client() -> Iterator[WorkspaceClient]:
+    """WorkspaceClient authenticated with a workspace key.
+
+    Requires ``XAGENT_WORKSPACE_KEY``; ``base_url`` falls back to
+    ``XAGENT_BASE_URL`` and then the hosted default, so a developer
+    pointing at a staging deploy sets ``XAGENT_BASE_URL`` while one
+    hitting the hosted service sets only the key. 60s per-request timeout
+    so agent runs created here have room to complete.
+    """
+    workspace_key = os.environ.get("XAGENT_WORKSPACE_KEY")
+    if not workspace_key:
+        pytest.skip("e2e workspace surface requires XAGENT_WORKSPACE_KEY")
+    base_url = os.environ.get("XAGENT_BASE_URL")
+    with WorkspaceClient(
+        workspace_key=workspace_key, base_url=base_url, timeout=60.0
+    ) as c:
         yield c

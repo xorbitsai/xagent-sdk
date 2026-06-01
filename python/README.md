@@ -292,6 +292,39 @@ only.
 | `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None)` | `RunResult` | `create` + `wait` + `steps` |
 | `agent.close()` / `with ... as agent` | — | release the connection pool |
 
+### `WorkspaceClient` — hosted workspace surface (`xagent_sdk.cloud`)
+
+For SaaS apps on the hosted service. Constructed with a **workspace key**
+and manages agents/templates scoped to a workspace. Lives under
+`xagent_sdk.cloud` so the self-hosted package is unaffected — import it
+explicitly:
+
+```python
+from xagent_sdk.cloud import WorkspaceClient
+from xagent_sdk import AgentClient
+
+with WorkspaceClient(workspace_key="xag_workspace_...") as ws:
+    created = ws.agents.create_from_template(
+        "support-ai-chatbot-agent", name="HR Leave Assistant"
+    )
+    runtime_key = created.runtime_full_key          # one-time secret
+
+with AgentClient(api_key=runtime_key) as agent:     # run on the same surface
+    print(agent.tasks.run(agent_id=created.agent_id, message="Hi").output)
+```
+
+| Method | Returns | Notes |
+|---|---|---|
+| `WorkspaceClient(workspace_key, base_url, ...)` | `WorkspaceClient` | env fallback `XAGENT_WORKSPACE_KEY`; `base_url` defaults to `https://cloud.xagent.run` (override via arg / `XAGENT_BASE_URL`) |
+| `ws.templates.list()` / `ws.templates.get(id)` | `list[Template]` / `TemplateDetail` | GET `/v1/workspace/templates*` |
+| `ws.agents.list()` | `list[AgentSummary]` | GET `/v1/workspace/agents` |
+| `ws.agents.create(*, name, instructions, description=None, execution_mode=None, models=None, knowledge_bases=None, skills=None, tool_categories=None, suggested_prompts=None, generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/workspace/agents` |
+| `ws.agents.create_from_template(template_id, *, name=None, ..., generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/workspace/agents/from-template`; override fields spread flat |
+| `ws.agents.rotate_key(agent_id)` | `RotateKeyResult` | POST `/v1/workspace/agents/{id}/api-key`; mints the agent's runtime key |
+
+The minted runtime key is an ordinary agent key — drive it with
+`AgentClient` against `/v1/chat/tasks*`, exactly as above.
+
 ### Status semantics
 
 `TaskStatus` enum:
