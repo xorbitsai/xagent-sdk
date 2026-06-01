@@ -88,3 +88,19 @@ class TestGet:
     def test_404_template_not_found(self) -> None:
         with _make_user(_404_handler) as c, pytest.raises(TemplateNotFound):
             c.templates.get("not_a_real_template")
+
+    def test_template_id_is_path_encoded(self) -> None:
+        # A slash / query char in the id must stay inside one path segment,
+        # not split the route or leak into the query string.
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(200, json=response("templates_detail"))
+
+        with _make_user(handler) as c:
+            c.templates.get("a/b?x=1")
+
+        url = captured[0].url
+        assert url.query == b""
+        assert str(url).endswith("/v1/templates/a%2Fb%3Fx%3D1")

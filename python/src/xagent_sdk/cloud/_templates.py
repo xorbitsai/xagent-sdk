@@ -8,6 +8,7 @@ personal-key template surface, so the shared parsers are reused.
 """
 
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 from xagent_sdk.types import (
     Template,
@@ -45,5 +46,8 @@ class WorkspaceTemplatesAPI:
         Raises ``TemplateNotFound`` (404 ``template_not_found``) when the
         template does not exist.
         """
-        resp = self._client._request("GET", f"/v1/workspace/templates/{template_id}")
+        # Encode the id as a single path segment so a value with "/", "?",
+        # "#" or "%" cannot alter the route or leak into the query string.
+        safe_id = quote(template_id, safe="")
+        resp = self._client._request("GET", f"/v1/workspace/templates/{safe_id}")
         return _parse_template_detail(resp.json())

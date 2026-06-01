@@ -61,3 +61,19 @@ class TestGet:
 
         with _make_ws(handler) as c, pytest.raises(TemplateNotFound):
             c.templates.get("nope")
+
+    def test_template_id_is_path_encoded(self) -> None:
+        # A slash / query char in the id must stay inside one path segment,
+        # not split the route or leak into the query string.
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(200, json=response("templates_detail"))
+
+        with _make_ws(handler) as c:
+            c.templates.get("a/b?x=1")
+
+        url = captured[0].url
+        assert url.query == b""
+        assert str(url).endswith("/v1/workspace/templates/a%2Fb%3Fx%3D1")
