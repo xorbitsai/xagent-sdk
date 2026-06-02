@@ -4,10 +4,12 @@ Python client SDK for the [xAgent](https://github.com/xorbitsai/xagent)
 HTTP v1 API. Lets a SaaS app authenticate as a user, mint AI agents
 from templates, and trigger them — all in a handful of lines.
 
-> **Status**: 0.2.0 — early access. **Breaking change vs 0.1.0**: the
-> SDK now exposes two clients (``UserClient`` for management,
-> ``AgentClient`` for runtime) instead of a single class, and `/v1/me`
-> now returns a user principal instead of an agent identity. See
+> **Status**: 0.3.0 — early access. Adds the optional
+> `xagent_sdk.cloud.WorkspaceClient` (hosted workspace surface);
+> additive, nothing else changes. **Breaking change vs 0.1.0**: the SDK
+> exposes two clients (``UserClient`` for management, ``AgentClient`` for
+> runtime) instead of a single class, and `/v1/me` returns a user
+> principal instead of an agent identity. See
 > [Migration from 0.1.0](#migration-from-010) below.
 
 ## Install
@@ -15,7 +17,7 @@ from templates, and trigger them — all in a handful of lines.
 Pin to a release tag — do **not** install from `main`:
 
 ```bash
-pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.2.0#subdirectory=python"
+pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.3.0#subdirectory=python"
 ```
 
 The Python client lives under [`python/`](.) in the
@@ -292,6 +294,43 @@ only.
 | `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None)` | `RunResult` | `create` + `wait` + `steps` |
 | `agent.close()` / `with ... as agent` | — | release the connection pool |
 
+### `WorkspaceClient` — hosted workspace surface (`xagent_sdk.cloud`)
+
+For SaaS apps on the hosted service. Constructed with a **workspace key**
+and manages agents/templates scoped to a workspace. Lives under
+`xagent_sdk.cloud` so the self-hosted package is unaffected — import it
+explicitly:
+
+```python
+from xagent_sdk.cloud import WorkspaceClient
+from xagent_sdk import AgentClient
+
+# WorkspaceClient defaults base_url to the hosted endpoint; AgentClient
+# does not, so give both the same base_url to run on one surface.
+base_url = "https://cloud.xagent.run"
+
+with WorkspaceClient(workspace_key="xag_workspace_...", base_url=base_url) as ws:
+    created = ws.agents.create_from_template(
+        "support-ai-chatbot-agent", name="HR Leave Assistant"
+    )
+    runtime_key = created.runtime_full_key          # one-time secret
+
+with AgentClient(api_key=runtime_key, base_url=base_url) as agent:
+    print(agent.tasks.run(agent_id=created.agent_id, message="Hi").output)
+```
+
+| Method | Returns | Notes |
+|---|---|---|
+| `WorkspaceClient(workspace_key, base_url, ...)` | `WorkspaceClient` | env fallback `XAGENT_WORKSPACE_KEY`; `base_url` defaults to `https://cloud.xagent.run` (override via arg / `XAGENT_BASE_URL`) |
+| `ws.templates.list()` / `ws.templates.get(id)` | `list[Template]` / `TemplateDetail` | GET `/v1/workspace/templates*` |
+| `ws.agents.list()` | `list[AgentSummary]` | GET `/v1/workspace/agents` |
+| `ws.agents.create(*, name, instructions, description=None, execution_mode=None, models=None, knowledge_bases=None, skills=None, tool_categories=None, suggested_prompts=None, generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/workspace/agents` |
+| `ws.agents.create_from_template(template_id, *, name=None, ..., generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/workspace/agents/from-template`; override fields spread flat |
+| `ws.agents.rotate_key(agent_id)` | `RotateKeyResult` | POST `/v1/workspace/agents/{id}/api-key`; mints the agent's runtime key |
+
+The minted runtime key is an ordinary agent key — drive it with
+`AgentClient` against `/v1/chat/tasks*`, exactly as above.
+
 ### Status semantics
 
 `TaskStatus` enum:
@@ -341,12 +380,12 @@ connection pool).
 ## Version policy
 
 - 0.x = alpha. Any minor bump (0.1 → 0.2 → 0.3) may break the
-  surface. Patch bumps (0.2.0 → 0.2.1) are bugfix-only.
+  surface. Patch bumps (0.3.0 → 0.3.1) are bugfix-only.
 - A future 1.0 will lock the public API per SemVer.
 - **Always pin to a git tag** in production:
 
   ```bash
-  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.2.0#subdirectory=python"
+  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.3.0#subdirectory=python"
   ```
 
   Installing from `@main` will eventually break you when the surface
@@ -354,7 +393,7 @@ connection pool).
   required because the SDK lives in a subdirectory of the
   multi-language monorepo.
 - The User-Agent header carries the SDK version
-  (`xagent-sdk-python/0.2.0`) so the backend can correlate issues.
+  (`xagent-sdk-python/0.3.0`) so the backend can correlate issues.
 
 ## Development
 
