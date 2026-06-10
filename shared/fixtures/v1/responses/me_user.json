@@ -1,7 +1,7 @@
 {
   "principal_type": "user",
   "user_id": 123,
+  "username": "alex",
   "email": "user@example.com",
-  "name": "Alex",
   "key_prefix": "abc123"
 }

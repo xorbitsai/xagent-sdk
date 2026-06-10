@@ -38,8 +38,9 @@ def test_user_me(user_client: UserClient) -> None:
     assert isinstance(me, UserPrincipal)
     assert me.principal_type == "user"
     assert me.user_id > 0
-    assert me.email
-    assert me.name
+    assert me.username
+    # email is optional (null for accounts with none set)
+    assert me.email is None or isinstance(me.email, str)
     assert me.key_prefix
 
 

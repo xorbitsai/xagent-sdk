@@ -48,15 +48,17 @@ class UserPrincipal:
     is bound to.
 
     ``principal_type`` is the stable enum string ``"user"`` for the
-    surface ``UserClient`` covers. ``key_prefix`` is the public-safe
-    6-char handle (``xag_personal_<prefix>_...``) and is safe to log;
-    the secret half of the key is never returned by this endpoint.
+    surface ``UserClient`` covers. ``username`` is the user's login name.
+    ``email`` is optional and ``None`` when the account has no email set.
+    ``key_prefix`` is the public-safe 6-char handle
+    (``xag_personal_<prefix>_...``) and is safe to log; the secret half of
+    the key is never returned by this endpoint.
     """
 
     principal_type: str
     user_id: int
-    email: str
-    name: str
+    username: str
+    email: str | None
     key_prefix: str
 
 

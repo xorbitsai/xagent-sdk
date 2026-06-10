@@ -16,7 +16,7 @@ implicit and documented below.
 
 | File | Endpoint | Notes |
 |---|---|---|
-| `me_user.json` | `GET /v1/me` | User principal: `principal_type / user_id / email / name / key_prefix` |
+| `me_user.json` | `GET /v1/me` | User principal: `principal_type / user_id / username / email (nullable) / key_prefix` |
 | `templates_list.json` | `GET /v1/templates` | Bare JSON array; each entry keys its id under `id` (SDKs surface it as `template_id`) plus `name`, optional `description` |
 | `templates_detail.json` | `GET /v1/templates/{id}` | Single object keyed by `id`; carries the merge-target `agent_config` dict |
 | `agents_list.json` | `GET /v1/agents` | Bare JSON array; each entry keys its id under `id` (SDKs surface it as `agent_id`); covers `active`, `draft`, `paused` status values |
