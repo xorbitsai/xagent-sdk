@@ -87,9 +87,33 @@ class TestMe:
         assert isinstance(me, UserPrincipal)
         assert me.principal_type == "user"
         assert me.user_id == 123
+        assert me.username == "alex"
         assert me.email == "user@example.com"
-        assert me.name == "Alex"
         assert me.key_prefix == "abc123"
+
+    def test_me_email_may_be_null(self) -> None:
+        # The backend returns email=null for accounts with no email set;
+        # UserPrincipal.email is optional, so this must parse cleanly.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "principal_type": "user",
+                    "user_id": 1,
+                    "username": "administrator",
+                    "email": None,
+                    "key_prefix": "abc123",
+                },
+            )
+
+        with UserClient(
+            personal_key="xag_personal_p_s",
+            base_url="https://test.example",
+            transport=httpx.MockTransport(handler),
+        ) as c:
+            me = c.me()
+        assert me.username == "administrator"
+        assert me.email is None
 
     def test_401_raises_invalid_api_key(self) -> None:
         with (

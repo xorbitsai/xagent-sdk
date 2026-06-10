@@ -51,7 +51,7 @@ in the same process without one overriding the other.
    identical otherwise — only the name and import path changed.
 2. **`client.me()` no longer exists on `AgentClient`.** Identity moved
    to `UserClient.me()` and the response shape changed too
-   (`UserPrincipal` with `user_id` / `email` / `name` /
+   (`UserPrincipal` with `user_id` / `username` / `email` /
    `principal_type` / `key_prefix`, replacing `MeResponse` with
    `agent_id` / `agent_name`). Listing your agents now goes through
    `UserClient.agents.list()` instead.
@@ -141,7 +141,7 @@ from xagent_sdk import UserClient
 
 with UserClient() as user:
     me = user.me()
-    print(f"user_id={me.user_id} email={me.email} name={me.name}")
+    print(f"user_id={me.user_id} username={me.username} email={me.email}")
 ```
 
 Each call hits the backend; cache the value locally if you need it

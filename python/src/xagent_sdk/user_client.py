@@ -64,10 +64,10 @@ class UserClient(_BaseClient):
         """``GET /v1/me`` -- identity probe for the personal key.
 
         Zero side-effect. Returns the user principal the personal key
-        belongs to (``principal_type`` / ``user_id`` / ``email`` /
-        ``name`` / ``key_prefix``). Use once at startup to log which
-        user is connected; cache the result locally if you only need it
-        once -- the SDK does not cache so a revoked key surfaces as
+        belongs to (``principal_type`` / ``user_id`` / ``username`` /
+        ``email`` (nullable) / ``key_prefix``). Use once at startup to log
+        which user is connected; cache the result locally if you only need
+        it once -- the SDK does not cache so a revoked key surfaces as
         ``InvalidAPIKey`` immediately rather than silently using a
         stale principal.
         """
