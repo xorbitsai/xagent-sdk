@@ -3,8 +3,9 @@
 Marked ``@pytest.mark.e2e`` so the default ``pytest`` run skips them.
 Run against a SaaS deploy with a workspace key::
 
-    XAGENT_WORKSPACE_KEY=xag_workspace_... uv run pytest -m e2e
-    # XAGENT_BASE_URL optional; defaults to the hosted endpoint
+    XAGENT_WORKSPACE_KEY=xag_workspace_... XAGENT_REGION=sg uv run pytest -m e2e
+    # Set XAGENT_REGION (au/sg) or XAGENT_BASE_URL (staging/self-host);
+    # the service is per-region and has no default host.
 
 ``E2E_TEMPLATE_ID`` picks the template to instantiate (defaults to the
 first listed). The created agent is not deleted -- run on a scratch
@@ -27,13 +28,9 @@ from xagent_sdk.cloud import WorkspaceClient
 pytestmark = pytest.mark.e2e
 
 
-def _runtime_base_url() -> str:
-    # The minted runtime key drives the existing /v1/chat/tasks* surface
-    # on the same host the workspace client targets.
-    return os.environ.get("XAGENT_BASE_URL") or "https://cloud.xagent.run"
-
-
-def test_workspace_full_flow(workspace_client: WorkspaceClient) -> None:
+def test_workspace_full_flow(
+    workspace_client: WorkspaceClient, cloud_base_url: str
+) -> None:
     templates = workspace_client.templates.list()
     if not templates:
         pytest.skip("workspace exposes no templates; nothing to instantiate")
@@ -46,8 +43,10 @@ def test_workspace_full_flow(workspace_client: WorkspaceClient) -> None:
     assert created.runtime_full_key is not None
     assert created.runtime_full_key.startswith("xag_")
 
+    # The minted runtime key drives the /v1/chat/tasks* surface on the
+    # same host the workspace client targets.
     with AgentClient(
-        api_key=created.runtime_full_key, base_url=_runtime_base_url(), timeout=120.0
+        api_key=created.runtime_full_key, base_url=cloud_base_url, timeout=120.0
     ) as runtime:
         result = runtime.tasks.run(
             agent_id=created.agent_id,
@@ -65,12 +64,11 @@ def test_unknown_template_raises(workspace_client: WorkspaceClient) -> None:
         workspace_client.agents.create_from_template("does-not-exist-12345")
 
 
-def test_bad_workspace_key_unauthorized() -> None:
-    base_url = os.environ.get("XAGENT_BASE_URL")
-    if not os.environ.get("XAGENT_WORKSPACE_KEY"):
-        pytest.skip("e2e workspace surface requires XAGENT_WORKSPACE_KEY")
+def test_bad_workspace_key_unauthorized(cloud_base_url: str) -> None:
     with (
-        WorkspaceClient(workspace_key="xag_workspace_bad_key", base_url=base_url) as c,
+        WorkspaceClient(
+            workspace_key="xag_workspace_bad_key", base_url=cloud_base_url
+        ) as c,
         pytest.raises(InvalidAPIKey),
     ):
         c.agents.list()

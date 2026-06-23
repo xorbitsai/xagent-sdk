@@ -30,7 +30,33 @@ from collections.abc import Iterator
 import pytest
 
 from xagent_sdk import AgentClient, UserClient
-from xagent_sdk.cloud import WorkspaceClient
+from xagent_sdk.cloud import Region, WorkspaceClient
+
+
+def _cloud_base_url() -> str | None:
+    """Resolve the cloud host for e2e: explicit ``XAGENT_BASE_URL`` wins,
+    else the host for ``XAGENT_REGION`` (``au``/``sg``). Returns ``None``
+    when neither is set -- there is no hosted default to guess, since the
+    service is per-region.
+    """
+    explicit = os.environ.get("XAGENT_BASE_URL")
+    if explicit:
+        return explicit
+    region = os.environ.get("XAGENT_REGION")
+    if region:
+        return Region(region.strip().lower()).base_url
+    return None
+
+
+def _need_workspace() -> tuple[str, str]:
+    workspace_key = os.environ.get("XAGENT_WORKSPACE_KEY")
+    base_url = _cloud_base_url()
+    if not (workspace_key and base_url):
+        pytest.skip(
+            "e2e cloud surface requires XAGENT_WORKSPACE_KEY and "
+            "XAGENT_BASE_URL or XAGENT_REGION"
+        )
+    return workspace_key, base_url
 
 
 def _need_personal() -> tuple[str, str]:
@@ -92,19 +118,29 @@ def patient_agent_client() -> Iterator[AgentClient]:
 
 
 @pytest.fixture
+def cloud_base_url() -> str:
+    """Resolved cloud host for tests that build their own client (e.g. a
+    bad-key probe). Skips when no ``XAGENT_BASE_URL`` / ``XAGENT_REGION``
+    is set, since the service is per-region and has no default host.
+    """
+    base_url = _cloud_base_url()
+    if base_url is None:
+        pytest.skip("e2e cloud surface requires XAGENT_BASE_URL or XAGENT_REGION")
+    return base_url
+
+
+@pytest.fixture
 def workspace_client() -> Iterator[WorkspaceClient]:
     """WorkspaceClient authenticated with a workspace key.
 
-    Requires ``XAGENT_WORKSPACE_KEY``; ``base_url`` falls back to
-    ``XAGENT_BASE_URL`` and then the hosted default, so a developer
-    pointing at a staging deploy sets ``XAGENT_BASE_URL`` while one
-    hitting the hosted service sets only the key. 60s per-request timeout
-    so agent runs created here have room to complete.
+    Requires ``XAGENT_WORKSPACE_KEY`` plus an explicit host -- either
+    ``XAGENT_BASE_URL`` (staging / self-host) or ``XAGENT_REGION``
+    (``au``/``sg``). The service is per-region, so a key only authenticates
+    against the region that minted it; there is no default host to fall
+    back to. 60s per-request timeout so agent runs created here have room
+    to complete.
     """
-    workspace_key = os.environ.get("XAGENT_WORKSPACE_KEY")
-    if not workspace_key:
-        pytest.skip("e2e workspace surface requires XAGENT_WORKSPACE_KEY")
-    base_url = os.environ.get("XAGENT_BASE_URL")
+    workspace_key, base_url = _need_workspace()
     with WorkspaceClient(
         workspace_key=workspace_key, base_url=base_url, timeout=60.0
     ) as c:
