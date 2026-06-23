@@ -3,6 +3,7 @@ import httpx
 from xagent_sdk._base import _BaseClient
 from xagent_sdk.cloud._agents import WorkspaceAgentsAPI
 from xagent_sdk.cloud._templates import WorkspaceTemplatesAPI
+from xagent_sdk.cloud.region import _REGION_BASE_URL, Region
 
 
 class WorkspaceClient(_BaseClient):
@@ -21,8 +22,12 @@ class WorkspaceClient(_BaseClient):
       A separate variable from ``XAGENT_API_KEY`` / ``XAGENT_PERSONAL_KEY``
       so the clients can coexist in one process. An explicitly empty key
       raises rather than falling back to the environment.
-    - ``base_url``: explicit keyword, else ``XAGENT_BASE_URL``, else the
-      hosted default ``https://cloud.xagent.run``.
+    - Target host: pass **either** ``region`` (the ``Region`` shown in the
+      deploy snippet -- the hosted service is per-region and a workspace
+      key only works against the region that issued it) **or** an explicit
+      ``base_url`` (for a self-hosted or not-yet-listed region), but not
+      both. With neither, ``XAGENT_BASE_URL`` is used; if that is unset the
+      constructor raises rather than guessing a host.
 
     Missing values at construction raise ``ValueError`` instead of
     deferring failure to the first request. ``transport`` accepts any
@@ -31,18 +36,23 @@ class WorkspaceClient(_BaseClient):
 
     _ENV_API_KEY = "XAGENT_WORKSPACE_KEY"
     _API_KEY_FIELD = "workspace_key"
-    _DEFAULT_BASE_URL = "https://cloud.xagent.run"
+    _BASE_URL_HINT = "pass region=... (or base_url=...) or set XAGENT_BASE_URL"
 
     def __init__(
         self,
         workspace_key: str | None = None,
-        base_url: str | None = None,
         *,
+        region: Region | None = None,
+        base_url: str | None = None,
         timeout: float = 30.0,
         max_connections: int = 10,
         user_agent: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        if region is not None:
+            if base_url is not None:
+                raise ValueError("pass region or base_url, not both")
+            base_url = _REGION_BASE_URL[region]
         super().__init__(
             api_key=workspace_key,
             base_url=base_url,
