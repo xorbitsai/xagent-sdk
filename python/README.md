@@ -4,9 +4,9 @@ Python client SDK for the [xAgent](https://github.com/xorbitsai/xagent)
 HTTP v1 API. Lets a SaaS app authenticate as a user, mint AI agents
 from templates, and trigger them — all in a handful of lines.
 
-> **Status**: 0.3.0 — early access. Adds the optional
-> `xagent_sdk.cloud.WorkspaceClient` (hosted workspace surface);
-> additive, nothing else changes. **Breaking change vs 0.1.0**: the SDK
+> **Status**: 0.3.1 — early access. Optional
+> `xagent_sdk.cloud.WorkspaceClient` (hosted workspace surface) selects a
+> hosted region. **Breaking change vs 0.1.0**: the SDK
 > exposes two clients (``UserClient`` for management, ``AgentClient`` for
 > runtime) instead of a single class, and `/v1/me` returns a user
 > principal instead of an agent identity. See
@@ -17,7 +17,7 @@ from templates, and trigger them — all in a handful of lines.
 Pin to a release tag — do **not** install from `main`:
 
 ```bash
-pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.3.0#subdirectory=python"
+pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.3.1#subdirectory=python"
 ```
 
 The Python client lives under [`python/`](.) in the
@@ -299,29 +299,33 @@ only.
 For SaaS apps on the hosted service. Constructed with a **workspace key**
 and manages agents/templates scoped to a workspace. Lives under
 `xagent_sdk.cloud` so the self-hosted package is unaffected — import it
-explicitly:
+explicitly.
+
+The hosted service is per-region; a workspace key only works against the
+region that issued it. Pass the `Region` shown in your deploy snippet (or
+an explicit `base_url` for a self-hosted / not-yet-listed region). The
+minted runtime key runs on the same host, so reuse that `base_url` for
+`AgentClient`:
 
 ```python
-from xagent_sdk.cloud import WorkspaceClient
+from xagent_sdk.cloud import Region, WorkspaceClient
 from xagent_sdk import AgentClient
 
-# WorkspaceClient defaults base_url to the hosted endpoint; AgentClient
-# does not, so give both the same base_url to run on one surface.
-base_url = "https://cloud.xagent.run"
+region = Region.SG                       # from the deploy snippet
 
-with WorkspaceClient(workspace_key="xag_workspace_...", base_url=base_url) as ws:
+with WorkspaceClient(workspace_key="xag_workspace_...", region=region) as ws:
     created = ws.agents.create_from_template(
         "support-ai-chatbot-agent", name="HR Leave Assistant"
     )
     runtime_key = created.runtime_full_key          # one-time secret
 
-with AgentClient(api_key=runtime_key, base_url=base_url) as agent:
+with AgentClient(api_key=runtime_key, base_url=region.base_url) as agent:
     print(agent.tasks.run(agent_id=created.agent_id, message="Hi").output)
 ```
 
 | Method | Returns | Notes |
 |---|---|---|
-| `WorkspaceClient(workspace_key, base_url, ...)` | `WorkspaceClient` | env fallback `XAGENT_WORKSPACE_KEY`; `base_url` defaults to `https://cloud.xagent.run` (override via arg / `XAGENT_BASE_URL`) |
+| `WorkspaceClient(workspace_key, *, region=None, base_url=None, ...)` | `WorkspaceClient` | env fallback `XAGENT_WORKSPACE_KEY`; pass `region=Region.AU/SG` **or** `base_url=...` (not both); neither + no `XAGENT_BASE_URL` raises — no hosted default |
 | `ws.templates.list()` / `ws.templates.get(id)` | `list[Template]` / `TemplateDetail` | GET `/v1/workspace/templates*` |
 | `ws.agents.list()` | `list[AgentSummary]` | GET `/v1/workspace/agents` |
 | `ws.agents.create(*, name, instructions, description=None, execution_mode=None, models=None, knowledge_bases=None, skills=None, tool_categories=None, suggested_prompts=None, generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/workspace/agents` |
@@ -385,7 +389,7 @@ connection pool).
 - **Always pin to a git tag** in production:
 
   ```bash
-  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.3.0#subdirectory=python"
+  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.3.1#subdirectory=python"
   ```
 
   Installing from `@main` will eventually break you when the surface
@@ -393,7 +397,7 @@ connection pool).
   required because the SDK lives in a subdirectory of the
   multi-language monorepo.
 - The User-Agent header carries the SDK version
-  (`xagent-sdk-python/0.3.0`) so the backend can correlate issues.
+  (`xagent-sdk-python/0.3.1`) so the backend can correlate issues.
 
 ## Development
 

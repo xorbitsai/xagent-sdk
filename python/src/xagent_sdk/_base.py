@@ -63,6 +63,10 @@ class _BaseClient:
     _ENV_API_KEY: ClassVar[str] = "XAGENT_API_KEY"
     _API_KEY_FIELD: ClassVar[str] = "api_key"
     _DEFAULT_BASE_URL: ClassVar[str | None] = None
+    # How a subclass tells the caller to supply a base URL when none could
+    # be resolved. Overridden where the public way to set it differs (e.g.
+    # the workspace client's ``region=``).
+    _BASE_URL_HINT: ClassVar[str] = "pass base_url=... or set XAGENT_BASE_URL"
 
     def __init__(
         self,
@@ -85,9 +89,7 @@ class _BaseClient:
                 f"pass {self._API_KEY_FIELD}=... or set {self._ENV_API_KEY}"
             )
         if not base_url:
-            raise ValueError(
-                "base_url required: pass base_url=... or set XAGENT_BASE_URL"
-            )
+            raise ValueError(f"base_url required: {self._BASE_URL_HINT}")
 
         self._http = HTTPClient(
             base_url=base_url,
