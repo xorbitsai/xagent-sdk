@@ -13,11 +13,16 @@ from enum import StrEnum
 
 class Region(StrEnum):
     """A hosted region. Its value is the short region code (``"au"`` /
-    ``"sg"``); the matching base URL lives in ``_REGION_BASE_URL``.
+    ``"sg"``); ``base_url`` gives the region's API host -- reuse it for the
+    ``AgentClient`` that runs an agent minted in this region.
     """
 
     AU = "au"
     SG = "sg"
+
+    @property
+    def base_url(self) -> str:
+        return _REGION_BASE_URL[self]
 
 
 _REGION_BASE_URL = {

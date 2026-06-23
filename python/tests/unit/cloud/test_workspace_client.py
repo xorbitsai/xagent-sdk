@@ -42,6 +42,10 @@ class TestConstruction:
         with pytest.raises(ValueError, match="workspace_key"):
             WorkspaceClient()
 
+    def test_region_base_url_property(self) -> None:
+        assert Region.SG.base_url == "https://sg.cloud.xagent.co"
+        assert Region.AU.base_url == "https://au.cloud.xagent.co"
+
     def test_region_resolves_to_url(self) -> None:
         c = WorkspaceClient(
             workspace_key="xag_workspace_p_s",

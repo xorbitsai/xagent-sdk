@@ -3,7 +3,7 @@ import httpx
 from xagent_sdk._base import _BaseClient
 from xagent_sdk.cloud._agents import WorkspaceAgentsAPI
 from xagent_sdk.cloud._templates import WorkspaceTemplatesAPI
-from xagent_sdk.cloud.region import _REGION_BASE_URL, Region
+from xagent_sdk.cloud.region import Region
 
 
 class WorkspaceClient(_BaseClient):
@@ -52,7 +52,7 @@ class WorkspaceClient(_BaseClient):
         if region is not None:
             if base_url is not None:
                 raise ValueError("pass region or base_url, not both")
-            base_url = _REGION_BASE_URL[region]
+            base_url = region.base_url
         super().__init__(
             api_key=workspace_key,
             base_url=base_url,
