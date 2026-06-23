@@ -44,7 +44,7 @@ def _cloud_base_url() -> str | None:
         return explicit
     region = os.environ.get("XAGENT_REGION")
     if region:
-        return Region(region).base_url
+        return Region(region.strip().lower()).base_url
     return None
 
 
