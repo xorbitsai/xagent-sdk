@@ -94,6 +94,24 @@ class TestParseTaskInfo:
         assert t.output == "hello"
         assert isinstance(t, TaskInfo)
 
+    def test_waiting_for_user_accepted(self) -> None:
+        # waiting_for_user is a valid backend task status; the SDK must
+        # parse it rather than raising in the validation layer.
+        t = _parse_task_info(
+            {
+                "task_id": 10,
+                "agent_id": 7,
+                "status": "waiting_for_user",
+                "input": "hi",
+                "output": None,
+                "error": None,
+                "created_at": "2026-05-10T03:00:00Z",
+                "completed_at": None,
+            }
+        )
+        assert t.status is TaskStatus.WAITING_FOR_USER
+        assert t.completed_at is None
+
     def test_unknown_status_rejected(self) -> None:
         with pytest.raises(ValidationError):
             _parse_task_info(

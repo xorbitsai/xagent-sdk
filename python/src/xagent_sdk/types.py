@@ -11,12 +11,14 @@ from xagent_sdk.errors import MalformedResponse
 class TaskStatus(StrEnum):
     """Lifecycle states a task can hold.
 
-    The full set the SDK may observe is fixed at 5 values. ``run()`` and
-    ``wait()`` treat only ``COMPLETED`` and ``FAILED`` as terminal,
-    mirroring the backend's own definition. ``PAUSED`` is non-terminal
-    because the backend allows ``append()`` onto a paused task, which
-    transitions it back to ``RUNNING``; a polling caller should observe
-    that transition rather than return early.
+    ``run()``/``wait()`` stop polling and return on a terminal state
+    (``COMPLETED``/``FAILED``) or on ``WAITING_FOR_USER`` -- the latter
+    blocks on this caller sending the next turn via ``append()``, so a
+    passive poller would never see it advance. ``PAUSED`` is non-terminal
+    and keeps the loop going: the backend allows ``append()`` onto a
+    paused task, transitioning it back to ``RUNNING``, and another caller
+    may drive that, so waiting through it lets an observer see the
+    transition.
     """
 
     PENDING = "pending"
@@ -24,6 +26,7 @@ class TaskStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     PAUSED = "paused"
+    WAITING_FOR_USER = "waiting_for_user"
 
 
 class StepType(StrEnum):

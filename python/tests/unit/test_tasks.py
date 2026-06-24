@@ -323,7 +323,7 @@ class TestWait:
     def test_paused_keeps_polling(
         self, make_client: Callable[..., AgentClient]
     ) -> None:
-        # PAUSED is NOT terminal (mirrors backend `v1/tasks.py:170`);
+        # PAUSED is NOT terminal (mirrors the backend's terminal set);
         # wait() should poll until the deadline elapses.
         def h(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -343,6 +343,37 @@ class TestWait:
         with make_client(h) as c, pytest.raises(TaskTimeout) as excinfo:
             c.tasks.wait(10, timeout=0.1, poll_interval=0.02)
         assert "paused" in excinfo.value.message
+
+    def test_waiting_for_user_returns_to_caller(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # WAITING_FOR_USER is non-terminal but blocks on this caller's
+        # next turn, so wait() stops polling and hands it back rather than
+        # spinning to timeout (unlike PAUSED above).
+        calls = {"n": 0}
+
+        def h(req: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            status = "running" if calls["n"] < 2 else "waiting_for_user"
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": 10,
+                    "agent_id": 7,
+                    "status": status,
+                    "input": "hi",
+                    "output": None,
+                    "error": None,
+                    "created_at": "2026-05-10T03:00:00Z",
+                    "completed_at": None,
+                },
+            )
+
+        with make_client(h) as c:
+            info = c.tasks.wait(10, timeout=2.0, poll_interval=0.01)
+
+        assert info.status is TaskStatus.WAITING_FOR_USER
+        assert calls["n"] == 2
 
     def test_propagates_404(self, make_client: Callable[..., AgentClient]) -> None:
         def h(req: httpx.Request) -> httpx.Response:
