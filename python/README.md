@@ -290,7 +290,7 @@ only.
 | `agent.tasks.append(task_id, *, agent_id, message, metadata=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='running'`; raises `TaskBusy` if prior turn is still running |
 | `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output` |
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
-| `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0)` | `TaskInfo` | poll `get()` until terminal (`COMPLETED` or `FAILED`); raises `TaskTimeout` on deadline |
+| `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline |
 | `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None)` | `RunResult` | `create` + `wait` + `steps` |
 | `agent.close()` / `with ... as agent` | — | release the connection pool |
 
@@ -343,6 +343,17 @@ The minted runtime key is an ordinary agent key — drive it with
 - `PAUSED` — agent paused waiting for external action (e.g. another
   caller appending); **not** terminal — `wait()` keeps polling until
   the deadline so you observe the resume transition
+- `WAITING_FOR_USER` — the agent asked for input and is blocked on **your**
+  next turn; **not** terminal, but `wait()`/`run()` return here (a passive
+  poller would never advance it). Send the reply with `append()`, then
+  `wait()` again:
+  ```python
+  result = agent.tasks.run(agent_id=agent_id, message="Book me a flight")
+  if result.status is TaskStatus.WAITING_FOR_USER:
+      task_id = result.info.task_id
+      agent.tasks.append(task_id, agent_id=agent_id, message="To Tokyo, next Friday")
+      info = agent.tasks.wait(task_id)
+  ```
 - `COMPLETED`, `FAILED` — terminal; `wait()` returns
 
 ## Configuration

@@ -19,13 +19,19 @@ if TYPE_CHECKING:
     from xagent_sdk.agent_client import AgentClient
 
 
-# Mirrors backend ``v1/tasks.py:170``: ``_TERMINAL_STATUSES = (COMPLETED,
-# FAILED)``. PAUSED is *not* terminal -- backend allows append() onto a
+# Mirrors the backend's terminal set (``v1/tasks.py``): only COMPLETED and
+# FAILED. PAUSED is *not* terminal -- the backend allows append() onto a
 # PAUSED task (the atomic claim is ``WHERE status != RUNNING``), and
 # ``completed_at`` is only populated in COMPLETED/FAILED. SDK stays
 # consistent so multi-process workflows (A wait()s while B append()s a
 # resume) observe the RUNNING transition rather than return early.
 _TERMINAL_STATUSES = frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED})
+
+# States where wait() stops polling and hands the task back to the caller:
+# a terminal state, or WAITING_FOR_USER. The task cannot advance out of
+# WAITING_FOR_USER on its own -- it blocks on *this* caller sending the next
+# turn via append() -- so a passive poller would otherwise spin to timeout.
+_WAIT_RETURN_STATUSES = _TERMINAL_STATUSES | frozenset({TaskStatus.WAITING_FOR_USER})
 
 
 class TasksAPI:
@@ -118,15 +124,18 @@ class TasksAPI:
         timeout: float = 120.0,
         poll_interval: float = 1.0,
     ) -> TaskInfo:
-        """Poll ``get()`` until the task reaches a terminal state.
+        """Poll ``get()`` until the task stops needing the SDK to wait.
 
-        Terminal states are ``COMPLETED`` and ``FAILED`` -- mirroring the
-        backend's own definition. ``PENDING``, ``RUNNING``, and ``PAUSED``
-        keep the loop going; a PAUSED task can be resumed by an
+        Returns as soon as the task reaches a terminal state
+        (``COMPLETED``/``FAILED``) or ``WAITING_FOR_USER``. The latter is
+        not terminal but blocks on this caller sending the next turn, so
+        ``wait()`` hands it back: inspect ``status`` and ``append()`` the
+        user's reply, then ``wait()`` again. ``PENDING``, ``RUNNING``, and
+        ``PAUSED`` keep the loop going; a PAUSED task can be resumed by an
         ``append()`` from another caller, and waiting through it lets one
         observer see the resulting RUNNING transition.
 
-        Returns the final ``TaskInfo`` once a terminal state is observed.
+        Returns the ``TaskInfo`` once one of those states is observed.
         Raises ``TaskTimeout`` if the wall-clock deadline elapses first.
         Any other exception raised by ``get()`` (``XAgentTransportError``,
         ``TaskNotFound``, ``InvalidAPIKey``, ...) propagates immediately
@@ -137,18 +146,18 @@ class TasksAPI:
             task_id: The task to poll.
             timeout: Maximum wall-clock seconds to wait. Must be
                 non-negative; ``0`` polls exactly once and raises
-                ``TaskTimeout`` immediately if the task is still
-                non-terminal. Default 120.
+                ``TaskTimeout`` immediately if the task has not reached a
+                returnable state. Default 120.
             poll_interval: Seconds to sleep between polls. Must be
                 non-negative; ``0`` tight-loops (yields the GIL each
                 iteration via ``time.sleep(0)``). Default 1.0.
 
         Returns:
-            The final ``TaskInfo`` snapshot.
+            The ``TaskInfo`` snapshot at the returnable state.
 
         Raises:
             ValueError: ``timeout`` or ``poll_interval`` is negative.
-            TaskTimeout: ``timeout`` elapsed without a terminal state.
+            TaskTimeout: ``timeout`` elapsed without a returnable state.
         """
         if timeout < 0:
             raise ValueError("timeout must be non-negative")
@@ -157,14 +166,14 @@ class TasksAPI:
         deadline = time.monotonic() + timeout
         while True:
             info = self.get(task_id)
-            if info.status in _TERMINAL_STATUSES:
+            if info.status in _WAIT_RETURN_STATUSES:
                 return info
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TaskTimeout(
                     "task_timeout",
                     (
-                        f"Task {task_id} did not reach a terminal state "
+                        f"Task {task_id} did not reach a returnable state "
                         f"within {timeout}s "
                         f"(last observed status: {info.status.value})"
                     ),
@@ -194,16 +203,20 @@ class TasksAPI:
         ``timeout`` is the wall-clock budget for ``create`` + ``wait``
         combined: the time spent in ``create()`` is subtracted from the
         budget passed to ``wait()`` so the caller does not pay it twice.
-        ``steps()`` is invoked after a terminal state is observed and is
-        a single cheap GET; its latency is additional but expected to be
-        a small constant.
+        ``steps()`` is invoked once ``wait()`` returns and is a single
+        cheap GET; its latency is additional but expected to be a small
+        constant.
 
-        Use the lower-level trio when you need to send multiple turns or
-        interleave other work.
+        The returned ``RunResult`` is terminal (``COMPLETED``/``FAILED``)
+        unless the agent asked for input: a ``WAITING_FOR_USER`` status
+        means the task is paused on the next turn. Send it with
+        ``append()`` and ``wait()`` again -- or use the lower-level trio
+        directly when you need multiple turns or to interleave other work.
 
-        Raises ``TaskTimeout`` if the task does not terminate within the
-        combined ``create`` + ``wait`` budget. Other errors propagate
-        from the underlying ``create`` / ``get`` / ``steps`` calls.
+        Raises ``TaskTimeout`` if the task does not reach a returnable
+        state within the combined ``create`` + ``wait`` budget. Other
+        errors propagate from the underlying ``create`` / ``get`` /
+        ``steps`` calls.
         """
         if timeout < 0:
             raise ValueError("timeout must be non-negative")
