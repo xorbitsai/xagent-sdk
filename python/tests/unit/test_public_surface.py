@@ -26,6 +26,7 @@ EXPECTED_SURFACE: set[str] = {
     "CreateTaskResult",
     "AppendResult",
     "TaskInfo",
+    "PendingInteraction",
     "Step",
     "RunResult",
     # Enums

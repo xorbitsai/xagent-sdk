@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from xagent_sdk import (
     AppendResult,
     CreateTaskResult,
+    PendingInteraction,
     RunResult,
     Step,
     StepType,
@@ -28,6 +29,8 @@ from xagent_sdk.types import (
     _parse_user_principal,
     _template_dict,
 )
+
+from ._fixtures import response
 
 
 class TestParseCreateTask:
@@ -126,6 +129,100 @@ class TestParseTaskInfo:
                     "completed_at": None,
                 }
             )
+
+
+class TestParsePendingInteraction:
+    """Pin the ``pending_interaction`` projection: present with a
+    structured control list, present with ``interactions=null``, and
+    absent entirely on responses from a backend predating this field.
+    """
+
+    def test_waiting_with_structured_interactions(self) -> None:
+        t = _parse_task_info(response("task_info_waiting"))
+        assert t.status is TaskStatus.WAITING_FOR_USER
+        assert t.pending_interaction is not None
+        assert isinstance(t.pending_interaction, PendingInteraction)
+        assert t.pending_interaction.question == "Where are you flying to?"
+        assert t.pending_interaction.interactions == [
+            {"type": "text_input", "field": "destination", "label": "Destination"}
+        ]
+
+    def test_waiting_with_interactions_null(self) -> None:
+        t = _parse_task_info(response("task_info_waiting_plain"))
+        assert t.pending_interaction is not None
+        assert t.pending_interaction.question == "Should I continue?"
+        assert t.pending_interaction.interactions is None
+
+    def test_waiting_with_interactions_empty_list(self) -> None:
+        # [] and None are deliberately not normalized to each other (the
+        # server sends whatever ask_user_question's caller passed, and
+        # the SDK passes it through unchanged) -- pin that [] parses as
+        # [] rather than collapsing to None.
+        t = _parse_task_info(
+            {
+                "task_id": 10,
+                "agent_id": 7,
+                "status": "waiting_for_user",
+                "input": "hi",
+                "output": None,
+                "error": None,
+                "created_at": "2026-05-10T03:00:00Z",
+                "completed_at": None,
+                "pending_interaction": {
+                    "question": "Should I continue?",
+                    "interactions": [],
+                },
+            }
+        )
+        assert t.pending_interaction is not None
+        assert t.pending_interaction.interactions == []
+        assert t.pending_interaction.interactions is not None
+
+    def test_old_backend_response_has_no_pending_interaction_key(self) -> None:
+        # task_info_completed.json predates this field entirely (no key
+        # in the body at all, not even null) -- the dataclass default
+        # must absorb that rather than raising a validation error.
+        body = response("task_info_completed")
+        assert "pending_interaction" not in body
+        t = _parse_task_info(body)
+        assert t.pending_interaction is None
+
+    def test_unknown_interaction_descriptor_type_preserved(self) -> None:
+        # interactions elements are an intentionally opaque
+        # dict[str, Any]; a descriptor "type" the SDK has never seen
+        # must pass through unchanged rather than being rejected.
+        t = _parse_task_info(
+            {
+                "task_id": 10,
+                "agent_id": 7,
+                "status": "waiting_for_user",
+                "input": "hi",
+                "output": None,
+                "error": None,
+                "created_at": "2026-05-10T03:00:00Z",
+                "completed_at": None,
+                "pending_interaction": {
+                    "question": "Pick one",
+                    "interactions": [
+                        {
+                            "type": "holographic_dial",
+                            "field": "mood",
+                            "label": "Mood",
+                            "extra_future_key": {"nested": True},
+                        }
+                    ],
+                },
+            }
+        )
+        assert t.pending_interaction is not None
+        assert t.pending_interaction.interactions == [
+            {
+                "type": "holographic_dial",
+                "field": "mood",
+                "label": "Mood",
+                "extra_future_key": {"nested": True},
+            }
+        ]
 
 
 class TestParseSteps:

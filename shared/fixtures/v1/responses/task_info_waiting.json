@@ -1,0 +1,16 @@
+{
+  "task_id": 10,
+  "agent_id": 7,
+  "status": "waiting_for_user",
+  "input": "Book me a flight",
+  "output": null,
+  "error": null,
+  "created_at": "2026-05-10T03:00:00Z",
+  "completed_at": null,
+  "pending_interaction": {
+    "question": "Where are you flying to?",
+    "interactions": [
+      {"type": "text_input", "field": "destination", "label": "Destination"}
+    ]
+  }
+}

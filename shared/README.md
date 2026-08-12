@@ -25,6 +25,8 @@ implicit and documented below.
 | `create_task.json` | `POST /v1/chat/tasks` (202) | Initial `status=pending` |
 | `append_task.json` | `POST /v1/chat/tasks/{id}/messages` (202) | `status=running`, carries `accepted_at` (not `created_at`) |
 | `task_info_completed.json` | `GET /v1/chat/tasks/{id}` (200) | Terminal state, `output` populated |
+| `task_info_waiting.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with a structured `pending_interaction.interactions` list |
+| `task_info_waiting_plain.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with `pending_interaction.interactions=null` (question asked with no structured controls) |
 | `steps_full.json` | `GET /v1/chat/tasks/{id}/steps` (200) | Wrapper with all four `Step` types present (`message`, `thinking`, `tool_call`, `agent_delegation`) |
 
 ### `fixtures/v1/errors/`

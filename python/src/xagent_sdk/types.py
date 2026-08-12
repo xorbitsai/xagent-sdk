@@ -13,12 +13,13 @@ class TaskStatus(StrEnum):
 
     ``run()``/``wait()`` stop polling and return on a terminal state
     (``COMPLETED``/``FAILED``) or on ``WAITING_FOR_USER`` -- the latter
-    blocks on this caller sending the next turn via ``append()``, so a
-    passive poller would never see it advance. ``PAUSED`` is non-terminal
-    and keeps the loop going: the backend allows ``append()`` onto a
-    paused task, transitioning it back to ``RUNNING``, and another caller
-    may drive that, so waiting through it lets an observer see the
-    transition.
+    blocks on this caller answering the task's pending question via
+    ``reply()``, so a passive poller would never see it advance. Inspect
+    ``TaskInfo.pending_interaction`` for the question text before
+    answering. ``PAUSED`` is non-terminal and keeps the loop going: the
+    backend allows ``append()`` onto a paused task, transitioning it back
+    to ``RUNNING``, and another caller may drive that, so waiting through
+    it lets an observer see the transition.
     """
 
     PENDING = "pending"
@@ -170,10 +171,13 @@ class CreateTaskResult:
 class AppendResult:
     """``POST /v1/chat/tasks/{id}/messages`` 202 payload.
 
-    ``status`` is ``TaskStatus.RUNNING`` -- the backend's atomic claim has
-    already flipped the task row by the time the response is built. The
-    timestamp field is ``accepted_at`` (when the server scheduled
-    execution), not ``created_at``.
+    Also the return type of ``client.tasks.reply()``
+    (``POST /v1/chat/tasks/{id}/reply``): the two endpoints return the
+    same shape with the same field semantics, so the SDK does not carry
+    a separate ``ReplyResult`` for it. ``status`` is ``TaskStatus.RUNNING``
+    -- the backend's atomic claim has already flipped the task row by the
+    time the response is built. The timestamp field is ``accepted_at``
+    (when the server scheduled execution), not ``created_at``.
     """
 
     task_id: int
@@ -183,12 +187,49 @@ class AppendResult:
 
 
 @dataclass(frozen=True)
+class PendingInteraction:
+    """The task's current unanswered question.
+
+    Present on ``TaskInfo.pending_interaction`` only while ``status`` is
+    ``WAITING_FOR_USER`` and the task has at least one persisted question
+    turn; ``None`` otherwise, including on a ``WAITING_FOR_USER`` task
+    that has not (yet, or ever) recorded a question -- reply to such a
+    task with ``reply()`` is still valid even though there is nothing to
+    show here.
+
+    ``question`` is the assistant's prompt text and is always a non-empty
+    string when this object exists. ``interactions`` is an opaque list of
+    structured-input descriptors (e.g. a select box or file upload) that
+    the agent tool which raised the question attached to it, or ``None``
+    when the question came with no such descriptors. ``[]`` and ``None``
+    carry the same meaning -- "no structured control, answer in plain
+    text" -- the server does not normalize between them and neither does
+    the SDK; treat both the same way. Each descriptor's shape is defined
+    by the agent tool that raised the question, not by this SDK, so it
+    stays untyped (``dict[str, Any]``) rather than a closed schema that
+    would force an SDK release for every new descriptor field.
+
+    Answer with ``client.tasks.reply()``, not ``append()`` -- ``append()``
+    raises ``InteractionResponseRequired`` on a ``WAITING_FOR_USER`` task.
+    """
+
+    question: str
+    interactions: list[dict[str, Any]] | None
+
+
+@dataclass(frozen=True)
 class TaskInfo:
     """``GET /v1/chat/tasks/{id}`` payload -- snapshot of one task row.
 
     ``input`` / ``output`` reflect the latest turn only; full transcript
     history is reconstructed from ``client.tasks.steps()`` by filtering
     ``step.type == StepType.MESSAGE``.
+
+    ``pending_interaction`` carries the task's unanswered question while
+    ``status`` is ``WAITING_FOR_USER``; ``None`` for every other status,
+    and also ``None`` when talking to a backend that predates this field
+    -- the default value means an old server's response (which omits the
+    key entirely) parses the same as a new server's ``null``.
     """
 
     task_id: int
@@ -199,6 +240,7 @@ class TaskInfo:
     error: str | None
     created_at: datetime
     completed_at: datetime | None
+    pending_interaction: PendingInteraction | None = None
 
 
 @dataclass(frozen=True)

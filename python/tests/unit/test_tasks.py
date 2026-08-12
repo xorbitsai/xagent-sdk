@@ -155,6 +155,44 @@ class TestGet:
         assert isinstance(info, TaskInfo)
         assert info.output == "hello"
 
+    def test_waiting_task_carries_pending_interaction(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": 10,
+                    "agent_id": 7,
+                    "status": "waiting_for_user",
+                    "input": "Book me a flight",
+                    "output": None,
+                    "error": None,
+                    "created_at": "2026-05-10T03:00:00Z",
+                    "completed_at": None,
+                    "pending_interaction": {
+                        "question": "Where are you flying to?",
+                        "interactions": [
+                            {
+                                "type": "text_input",
+                                "field": "destination",
+                                "label": "Destination",
+                            }
+                        ],
+                    },
+                },
+            )
+
+        with make_client(handler) as c:
+            info = c.tasks.get(10)
+
+        assert info.status is TaskStatus.WAITING_FOR_USER
+        assert info.pending_interaction is not None
+        assert info.pending_interaction.question == "Where are you flying to?"
+        assert info.pending_interaction.interactions == [
+            {"type": "text_input", "field": "destination", "label": "Destination"}
+        ]
+
 
 class TestSteps:
     def test_url_and_outer_wrapper_dropped(
