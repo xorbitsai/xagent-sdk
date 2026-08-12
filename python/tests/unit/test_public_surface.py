@@ -90,4 +90,4 @@ def test_meresponse_name_not_exposed() -> None:
 def test_version_matches_pyproject() -> None:
     # The version string the SDK announces (also in the User-Agent
     # header) must match the packaged release.
-    assert xagent_sdk.__version__ == "0.3.1"
+    assert xagent_sdk.__version__ == "0.4.0"

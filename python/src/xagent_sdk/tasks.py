@@ -29,8 +29,9 @@ _TERMINAL_STATUSES = frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED})
 
 # States where wait() stops polling and hands the task back to the caller:
 # a terminal state, or WAITING_FOR_USER. The task cannot advance out of
-# WAITING_FOR_USER on its own -- it blocks on *this* caller sending the next
-# turn via append() -- so a passive poller would otherwise spin to timeout.
+# WAITING_FOR_USER on its own -- it blocks on *this* caller answering its
+# pending question via reply() -- so a passive poller would otherwise spin
+# to timeout.
 _WAIT_RETURN_STATUSES = _TERMINAL_STATUSES | frozenset({TaskStatus.WAITING_FOR_USER})
 
 
@@ -187,12 +188,14 @@ class TasksAPI:
 
         Returns as soon as the task reaches a terminal state
         (``COMPLETED``/``FAILED``) or ``WAITING_FOR_USER``. The latter is
-        not terminal but blocks on this caller sending the next turn, so
-        ``wait()`` hands it back: inspect ``status`` and ``append()`` the
-        user's reply, then ``wait()`` again. ``PENDING``, ``RUNNING``, and
-        ``PAUSED`` keep the loop going; a PAUSED task can be resumed by an
-        ``append()`` from another caller, and waiting through it lets one
-        observer see the resulting RUNNING transition.
+        not terminal but blocks on this caller answering the task's
+        pending question, so ``wait()`` hands it back: inspect
+        ``TaskInfo.pending_interaction`` for the question, then
+        ``reply()`` the user's answer and ``wait()`` again. ``PENDING``,
+        ``RUNNING``, and ``PAUSED`` keep the loop going; a PAUSED task can
+        be resumed by an ``append()`` from another caller, and waiting
+        through it lets one observer see the resulting RUNNING
+        transition.
 
         Returns the ``TaskInfo`` once one of those states is observed.
         Raises ``TaskTimeout`` if the wall-clock deadline elapses first.
@@ -267,10 +270,12 @@ class TasksAPI:
         constant.
 
         The returned ``RunResult`` is terminal (``COMPLETED``/``FAILED``)
-        unless the agent asked for input: a ``WAITING_FOR_USER`` status
-        means the task is paused on the next turn. Send it with
-        ``append()`` and ``wait()`` again -- or use the lower-level trio
-        directly when you need multiple turns or to interleave other work.
+        unless the agent asked a question: a ``WAITING_FOR_USER`` status
+        means the task is blocked on an answer -- inspect
+        ``result.info.pending_interaction`` for the question, answer it
+        with ``reply()``, and ``wait()`` again -- or use the lower-level
+        trio directly when you need multiple turns or to interleave other
+        work.
 
         Raises ``TaskTimeout`` if the task does not reach a returnable
         state within the combined ``create`` + ``wait`` budget. Other
