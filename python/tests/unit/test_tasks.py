@@ -12,7 +12,10 @@ from xagent_sdk import (
     AgentNotFound,
     AppendResult,
     CreateTaskResult,
+    InteractionNotResumable,
+    InteractionResponseRequired,
     InvalidInput,
+    NoPendingInteraction,
     RunResult,
     StepType,
     TaskBusy,
@@ -20,6 +23,7 @@ from xagent_sdk import (
     TaskNotFound,
     TaskStatus,
     TaskTimeout,
+    TemporarilyUnavailable,
 )
 
 
@@ -125,6 +129,63 @@ class TestAppend:
         }
         assert isinstance(result, AppendResult)
         assert result.status is TaskStatus.RUNNING
+
+
+class TestReply:
+    def test_url_and_body(self, make_client: Callable[..., AgentClient]) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(
+                202,
+                json={
+                    "task_id": 10,
+                    "agent_id": 7,
+                    "status": "running",
+                    "accepted_at": "2026-05-10T03:05:00Z",
+                },
+            )
+
+        with make_client(handler) as c:
+            result = c.tasks.reply(10, agent_id=7, message="To Tokyo, next Friday")
+
+        assert captured[0].method == "POST"
+        assert captured[0].url.path == "/v1/chat/tasks/10/reply"
+        body = json.loads(captured[0].content)
+        assert body == {
+            "agent_id": 7,
+            "message": {"role": "user", "content": "To Tokyo, next Friday"},
+        }
+        # reply() reuses AppendResult -- no separate ReplyResult type.
+        assert isinstance(result, AppendResult)
+        assert result.status is TaskStatus.RUNNING
+
+    def test_no_metadata_or_files_field_sent(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # reply() has no metadata/files parameters at all (the server
+        # contract does not accept them on this endpoint); confirm the
+        # body never grows one by accident.
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(
+                202,
+                json={
+                    "task_id": 10,
+                    "agent_id": 7,
+                    "status": "running",
+                    "accepted_at": "2026-05-10T03:05:00Z",
+                },
+            )
+
+        with make_client(handler) as c:
+            c.tasks.reply(10, agent_id=7, message="answer")
+
+        body = json.loads(captured[0].content)
+        assert set(body.keys()) == {"agent_id", "message"}
 
 
 class TestGet:
@@ -253,6 +314,36 @@ class TestErrorMappingPerEndpoint:
                 "task_not_found",
                 TaskNotFound,
                 lambda c: c.tasks.get(10),
+            ),
+            (
+                409,
+                "interaction_response_required",
+                InteractionResponseRequired,
+                lambda c: c.tasks.append(10, agent_id=1, message="x"),
+            ),
+            (
+                409,
+                "no_pending_interaction",
+                NoPendingInteraction,
+                lambda c: c.tasks.reply(10, agent_id=1, message="x"),
+            ),
+            (
+                409,
+                "interaction_not_resumable",
+                InteractionNotResumable,
+                lambda c: c.tasks.reply(10, agent_id=1, message="x"),
+            ),
+            (
+                503,
+                "temporarily_unavailable",
+                TemporarilyUnavailable,
+                lambda c: c.tasks.reply(10, agent_id=1, message="x"),
+            ),
+            (
+                409,
+                "task_busy",
+                TaskBusy,
+                lambda c: c.tasks.reply(10, agent_id=1, message="x"),
             ),
         ],
     )

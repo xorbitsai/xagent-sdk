@@ -74,6 +74,51 @@ class TemplateNotFound(XAgentError):
     """
 
 
+class InteractionResponseRequired(XAgentError):
+    """HTTP 409, code ``interaction_response_required``.
+
+    Raised by ``append()`` when the task is currently ``WAITING_FOR_USER``:
+    the task has a pending question and cannot accept a new turn through
+    the append channel. Call ``reply()`` instead -- inspect
+    ``TaskInfo.pending_interaction`` first to see the question.
+    """
+
+
+class NoPendingInteraction(XAgentError):
+    """HTTP 409, code ``no_pending_interaction``.
+
+    Raised by ``reply()`` when the task is not currently
+    ``WAITING_FOR_USER`` (it is still running, only paused, or already
+    terminal) so there is no pending question to answer. Do not retry
+    this call as-is; use ``append()`` instead to send the next turn
+    (starting the task's next round if it already finished).
+    """
+
+
+class InteractionNotResumable(XAgentError):
+    """HTTP 409, code ``interaction_not_resumable``.
+
+    Raised by ``reply()`` when the task is ``WAITING_FOR_USER`` but the
+    execution state behind it could not be restored well enough to
+    deliver the answer -- confirmed unusable, not a transient hiccup.
+    The task is left exactly as it was (still ``WAITING_FOR_USER``, same
+    ``run_id``, no partial write): do not retry, start a new task
+    instead.
+    """
+
+
+class TemporarilyUnavailable(XAgentError):
+    """HTTP 503, code ``temporarily_unavailable``.
+
+    Raised by ``reply()`` when the task's execution state could not be
+    read because of a transient failure -- unlike
+    ``InteractionNotResumable``, the server cannot yet tell whether the
+    state is usable. The task is left exactly as it was (still
+    ``WAITING_FOR_USER``, same ``run_id``, no partial write). Safe to
+    retry after a short backoff.
+    """
+
+
 # SDK-coined errors (server has no equivalent code).
 class XAgentTransportError(XAgentError):
     """Network, DNS, TLS, or local timeout below the HTTP layer.
@@ -117,6 +162,10 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "template_not_found": TemplateNotFound,
     "rate_limited": RateLimited,
     "internal_error": InternalError,
+    "interaction_response_required": InteractionResponseRequired,
+    "no_pending_interaction": NoPendingInteraction,
+    "interaction_not_resumable": InteractionNotResumable,
+    "temporarily_unavailable": TemporarilyUnavailable,
 }
 
 

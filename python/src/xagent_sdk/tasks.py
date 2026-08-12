@@ -37,7 +37,7 @@ _WAIT_RETURN_STATUSES = _TERMINAL_STATUSES | frozenset({TaskStatus.WAITING_FOR_U
 class TasksAPI:
     """The ``client.tasks`` namespace.
 
-    All four endpoint methods are thin wrappers over the v1 endpoints:
+    All five endpoint methods are thin wrappers over the v1 endpoints:
     build a request body, hand it to ``AgentClient._request`` for
     transport + error mapping, then parse the success body into a frozen
     dataclass.
@@ -89,7 +89,9 @@ class TasksAPI:
         user turn to an existing task. Server returns 202 with
         ``status='running'`` (the atomic claim has already flipped the
         task row). Raises ``TaskBusy`` if the task is still running an
-        earlier turn.
+        earlier turn, or ``InteractionResponseRequired`` if the task is
+        currently ``WAITING_FOR_USER`` -- answer its pending question
+        with ``reply()`` instead.
         """
         body: dict[str, Any] = {
             "agent_id": agent_id,
@@ -99,6 +101,63 @@ class TasksAPI:
             body["metadata"] = metadata
         resp = self._client._request(
             "POST", f"/v1/chat/tasks/{task_id}/messages", json=body
+        )
+        return _parse_append(resp.json())
+
+    def reply(
+        self,
+        task_id: int,
+        *,
+        agent_id: int,
+        message: str,
+    ) -> AppendResult:
+        """``POST /v1/chat/tasks/{task_id}/reply`` -- answer a task's
+        pending question and resume its execution.
+
+        Only valid while the task is ``WAITING_FOR_USER``. Inspect
+        ``TaskInfo.pending_interaction`` (from ``get()`` or ``wait()``)
+        for the question -- and any structured ``interactions`` -- before
+        answering. Server returns 202 with ``status='running'``. Under
+        the hood this resumes the same server-side run the task had
+        before the reply, rather than starting a new one -- unlike
+        ``append()`` -- but that continuity is server state, not
+        something this call's ``AppendResult`` return value exposes;
+        there is no ``run_id`` field on it to check.
+
+        Not idempotent: unlike ``create()``/``append()``, there is no
+        request-level idempotency key backing this call, so a
+        client-side timeout does not tell you whether the answer was
+        delivered -- retrying blindly can deliver it twice. If a call
+        times out or the connection drops, call ``get(task_id)`` first;
+        only retry ``reply()`` if ``status`` is still
+        ``WAITING_FOR_USER``.
+
+        Raises:
+            NoPendingInteraction: the task is not currently
+                ``WAITING_FOR_USER`` (still running, only paused, or
+                already terminal). Do not retry; use ``append()``
+                instead.
+            InteractionNotResumable: the task's in-progress execution
+                state could not be restored to accept the answer. The
+                task stays ``WAITING_FOR_USER`` with no partial write;
+                do not retry -- this specific pending question can no
+                longer be answered, so start a new task instead.
+            TemporarilyUnavailable: the execution state could not be
+                read due to a transient failure. The task stays
+                ``WAITING_FOR_USER``; safe to retry after a short
+                backoff.
+            TaskBusy: the task is currently ``RUNNING``, or another
+                caller's reply/turn is already claiming this task.
+                Retryable.
+            TaskNotFound: unknown ``task_id``, or this runtime key does
+                not own it.
+        """
+        body: dict[str, Any] = {
+            "agent_id": agent_id,
+            "message": {"role": "user", "content": message},
+        }
+        resp = self._client._request(
+            "POST", f"/v1/chat/tasks/{task_id}/reply", json=body
         )
         return _parse_append(resp.json())
 
