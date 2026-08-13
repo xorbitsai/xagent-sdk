@@ -26,6 +26,8 @@ from xagent_sdk import (
     TemporarilyUnavailable,
 )
 
+from ._fixtures import response
+
 
 class TestCreate:
     def test_body_shape(self, make_client: Callable[..., AgentClient]) -> None:
@@ -137,15 +139,7 @@ class TestReply:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(
-                202,
-                json={
-                    "task_id": 10,
-                    "agent_id": 7,
-                    "status": "running",
-                    "accepted_at": "2026-05-10T03:05:00Z",
-                },
-            )
+            return httpx.Response(202, json=response("reply_task"))
 
         with make_client(handler) as c:
             result = c.tasks.reply(10, agent_id=7, message="To Tokyo, next Friday")
@@ -171,15 +165,7 @@ class TestReply:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(
-                202,
-                json={
-                    "task_id": 10,
-                    "agent_id": 7,
-                    "status": "running",
-                    "accepted_at": "2026-05-10T03:05:00Z",
-                },
-            )
+            return httpx.Response(202, json=response("reply_task"))
 
         with make_client(handler) as c:
             c.tasks.reply(10, agent_id=7, message="answer")
@@ -476,14 +462,31 @@ class TestWait:
     def test_waiting_for_user_returns_to_caller(
         self, make_client: Callable[..., AgentClient]
     ) -> None:
-        # WAITING_FOR_USER is non-terminal but blocks on this caller's
-        # next turn, so wait() stops polling and hands it back rather than
-        # spinning to timeout (unlike PAUSED above).
+        # WAITING_FOR_USER is non-terminal but blocks on this caller
+        # answering the task's pending question, so wait() stops polling
+        # and hands it back rather than spinning to timeout (unlike
+        # PAUSED above). The pending_interaction payload must survive
+        # the parse -- a caller landing here needs the question text,
+        # not just the status.
         calls = {"n": 0}
 
         def h(req: httpx.Request) -> httpx.Response:
             calls["n"] += 1
             status = "running" if calls["n"] < 2 else "waiting_for_user"
+            pending_interaction = (
+                {
+                    "question": "Where are you flying to?",
+                    "interactions": [
+                        {
+                            "type": "text_input",
+                            "field": "destination",
+                            "label": "Destination",
+                        }
+                    ],
+                }
+                if status == "waiting_for_user"
+                else None
+            )
             return httpx.Response(
                 200,
                 json={
@@ -495,6 +498,7 @@ class TestWait:
                     "error": None,
                     "created_at": "2026-05-10T03:00:00Z",
                     "completed_at": None,
+                    "pending_interaction": pending_interaction,
                 },
             )
 
@@ -503,6 +507,11 @@ class TestWait:
 
         assert info.status is TaskStatus.WAITING_FOR_USER
         assert calls["n"] == 2
+        assert info.pending_interaction is not None
+        assert info.pending_interaction.question == "Where are you flying to?"
+        assert info.pending_interaction.interactions == [
+            {"type": "text_input", "field": "destination", "label": "Destination"}
+        ]
 
     def test_propagates_404(self, make_client: Callable[..., AgentClient]) -> None:
         def h(req: httpx.Request) -> httpx.Response:
