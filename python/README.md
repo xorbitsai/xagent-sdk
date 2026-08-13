@@ -272,6 +272,7 @@ you whether the answer was delivered. If a call raises
 ```python
 from xagent_sdk import XAgentTransportError
 
+task_id = result.info.task_id
 try:
     agent.tasks.reply(task_id, agent_id=42, message="To Tokyo, next Friday")
 except XAgentTransportError:
@@ -279,6 +280,15 @@ except XAgentTransportError:
     if info.status is TaskStatus.WAITING_FOR_USER:
         agent.tasks.reply(task_id, agent_id=42, message="To Tokyo, next Friday")
 ```
+
+Even that check is not a full guarantee: the first reply may have
+already gone through, and the agent may have immediately asked a *new*
+question -- which also shows up as `WAITING_FOR_USER`. If
+`pending_interaction` is not `None`, comparing its `question` against
+the one you just answered rules out most of these cases, but not a
+follow-up question that happens to repeat the same text, and
+`pending_interaction` can itself be `None` -- so "compare the question"
+is a partial mitigation, not a guarantee.
 
 ### 7. Error handling
 

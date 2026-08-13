@@ -115,6 +115,13 @@ class TasksAPI:
         """``POST /v1/chat/tasks/{task_id}/reply`` -- answer a task's
         pending question and resume its execution.
 
+        This is a transitional, plain-text-only answer channel: it
+        exists so a waiting task is unblockable at all. The typed
+        ``respond`` surface (structured values matched to
+        ``pending_interaction.interactions``, plus a real idempotency
+        key) is tracked separately and will eventually replace this for
+        callers that need it.
+
         Only valid while the task is ``WAITING_FOR_USER``. Inspect
         ``TaskInfo.pending_interaction`` (from ``get()`` or ``wait()``)
         for the question -- and any structured ``interactions`` -- before
@@ -131,13 +138,25 @@ class TasksAPI:
         delivered -- retrying blindly can deliver it twice. If a call
         times out or the connection drops, call ``get(task_id)`` first;
         only retry ``reply()`` if ``status`` is still
-        ``WAITING_FOR_USER``.
+        ``WAITING_FOR_USER``. Even that check is not a full guarantee:
+        the first reply may have already been delivered and the agent
+        may have immediately asked a *new* question, which also shows up
+        as ``WAITING_FOR_USER``. If ``pending_interaction`` is not
+        ``None``, comparing its ``question`` against the one you
+        answered rules out most of these cases -- but not a follow-up
+        question that happens to repeat the same text verbatim, and
+        ``pending_interaction`` can itself be ``None`` (see
+        ``PendingInteraction``), so "compare the question" is a partial
+        mitigation, not a guarantee.
 
         Raises:
             NoPendingInteraction: the task is not currently
-                ``WAITING_FOR_USER`` (still running, only paused, or
-                already terminal). Do not retry; use ``append()``
-                instead.
+                ``WAITING_FOR_USER``: it is ``PENDING`` (has not started
+                running yet), ``PAUSED``, or already terminal
+                (``COMPLETED``/``FAILED``). Do not retry as-is. A
+                ``PAUSED``, ``COMPLETED``, or ``FAILED`` task can take
+                its next turn via ``append()``; a ``PENDING`` task
+                cannot -- wait for it to start running first.
             InteractionNotResumable: the task's in-progress execution
                 state could not be restored to accept the answer. The
                 task stays ``WAITING_FOR_USER`` with no partial write;
@@ -152,6 +171,13 @@ class TasksAPI:
                 Retryable.
             TaskNotFound: unknown ``task_id``, or this runtime key does
                 not own it.
+            InternalError: falls back here for any response code the
+                SDK does not recognize -- notably, calling ``reply()``
+                against a server old enough to have no ``/reply`` route
+                surfaces as this (FastAPI's 404 carries no V1 error
+                envelope, so it cannot map to a more specific type).
+                This happens whenever the SDK is upgraded ahead of the
+                server it talks to.
         """
         body: dict[str, Any] = {
             "agent_id": agent_id,

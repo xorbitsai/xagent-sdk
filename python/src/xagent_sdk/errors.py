@@ -40,7 +40,13 @@ class TaskNotFound(XAgentError):
 
 
 class TaskBusy(XAgentError):
-    """HTTP 409, code ``task_busy``. Only retryable code (caller decides)."""
+    """HTTP 409, code ``task_busy``. Retryable (caller decides when).
+
+    Raised when the task is currently ``RUNNING`` and cannot accept a
+    new turn or a reply yet, or when a concurrent ``reply()`` already
+    claimed it. ``TemporarilyUnavailable`` is the other retryable code
+    in this hierarchy.
+    """
 
 
 class RateLimited(XAgentError):
@@ -88,10 +94,13 @@ class NoPendingInteraction(XAgentError):
     """HTTP 409, code ``no_pending_interaction``.
 
     Raised by ``reply()`` when the task is not currently
-    ``WAITING_FOR_USER`` (it is still running, only paused, or already
-    terminal) so there is no pending question to answer. Do not retry
-    this call as-is; use ``append()`` instead to send the next turn
-    (starting the task's next round if it already finished).
+    ``WAITING_FOR_USER``: it is ``PENDING`` (has not started running
+    yet), ``PAUSED``, or already terminal (``COMPLETED``/``FAILED``).
+    A ``RUNNING`` task raises ``TaskBusy`` instead -- being busy is a
+    different condition from having no pending question. Do not retry
+    this call as-is. A ``PAUSED``, ``COMPLETED``, or ``FAILED`` task can
+    take its next turn via ``append()``; a ``PENDING`` task cannot --
+    there is nothing to append to until it starts running.
     """
 
 

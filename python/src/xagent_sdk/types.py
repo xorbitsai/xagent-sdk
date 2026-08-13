@@ -197,8 +197,12 @@ class PendingInteraction:
     task with ``reply()`` is still valid even though there is nothing to
     show here.
 
-    ``question`` is the assistant's prompt text and is always a non-empty
-    string when this object exists. ``interactions`` is an opaque list of
+    ``question`` is the assistant's prompt text. The server strips it
+    before persisting and never records a question row that is empty
+    after stripping, so in the current backend this is always a
+    non-empty string when this object exists -- that is a server-side
+    behavior this class documents, not something the SDK itself
+    validates. ``interactions`` is an opaque list of
     structured-input descriptors (e.g. a select box or file upload) that
     the agent tool which raised the question attached to it, or ``None``
     when the question came with no such descriptors. ``[]`` and ``None``
