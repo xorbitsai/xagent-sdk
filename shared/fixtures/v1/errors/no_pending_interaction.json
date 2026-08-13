@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "no_pending_interaction",
+    "message": "Task has no pending question to answer."
+  }
+}

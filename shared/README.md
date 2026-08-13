@@ -25,6 +25,9 @@ implicit and documented below.
 | `create_task.json` | `POST /v1/chat/tasks` (202) | Initial `status=pending` |
 | `append_task.json` | `POST /v1/chat/tasks/{id}/messages` (202) | `status=running`, carries `accepted_at` (not `created_at`) |
 | `task_info_completed.json` | `GET /v1/chat/tasks/{id}` (200) | Terminal state, `output` populated |
+| `task_info_waiting.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with a structured `pending_interaction.interactions` list |
+| `task_info_waiting_plain.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with `pending_interaction.interactions=null` (question asked with no structured controls) |
+| `reply_task.json` | `POST /v1/chat/tasks/{id}/reply` (202) | Same shape as `append_task.json`: `status=running`, `accepted_at` |
 | `steps_full.json` | `GET /v1/chat/tasks/{id}/steps` (200) | Wrapper with all four `Step` types present (`message`, `thinking`, `tool_call`, `agent_delegation`) |
 
 ### `fixtures/v1/errors/`
@@ -42,6 +45,10 @@ Stable backend codes using the V1 envelope shape:
 | `validation_422.json` | 422 | V1 envelope (`invalid_input`) |
 | `rate_limited.json` | 429 | V1 envelope |
 | `internal_error.json` | 500 | V1 envelope |
+| `interaction_response_required.json` | 409 | V1 envelope (raised by `append()` on a `WAITING_FOR_USER` task; use `reply()` instead) |
+| `no_pending_interaction.json` | 409 | V1 envelope (raised by `reply()` when the task is not `WAITING_FOR_USER`) |
+| `interaction_not_resumable.json` | 409 | V1 envelope (raised by `reply()` when the task's execution state could not be restored; do not retry) |
+| `temporarily_unavailable.json` | 503 | V1 envelope (raised by `reply()` on a transient read failure; safe to retry) |
 
 ## Usage from a language client
 

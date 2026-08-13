@@ -1,0 +1,14 @@
+{
+  "task_id": 10,
+  "agent_id": 7,
+  "status": "waiting_for_user",
+  "input": "Continue with the deployment?",
+  "output": null,
+  "error": null,
+  "created_at": "2026-05-10T03:00:00Z",
+  "completed_at": null,
+  "pending_interaction": {
+    "question": "Should I continue?",
+    "interactions": null
+  }
+}

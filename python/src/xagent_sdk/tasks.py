@@ -29,15 +29,16 @@ _TERMINAL_STATUSES = frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED})
 
 # States where wait() stops polling and hands the task back to the caller:
 # a terminal state, or WAITING_FOR_USER. The task cannot advance out of
-# WAITING_FOR_USER on its own -- it blocks on *this* caller sending the next
-# turn via append() -- so a passive poller would otherwise spin to timeout.
+# WAITING_FOR_USER on its own -- it blocks on *this* caller answering its
+# pending question via reply() -- so a passive poller would otherwise spin
+# to timeout.
 _WAIT_RETURN_STATUSES = _TERMINAL_STATUSES | frozenset({TaskStatus.WAITING_FOR_USER})
 
 
 class TasksAPI:
     """The ``client.tasks`` namespace.
 
-    All four endpoint methods are thin wrappers over the v1 endpoints:
+    All five endpoint methods are thin wrappers over the v1 endpoints:
     build a request body, hand it to ``AgentClient._request`` for
     transport + error mapping, then parse the success body into a frozen
     dataclass.
@@ -89,7 +90,9 @@ class TasksAPI:
         user turn to an existing task. Server returns 202 with
         ``status='running'`` (the atomic claim has already flipped the
         task row). Raises ``TaskBusy`` if the task is still running an
-        earlier turn.
+        earlier turn, or ``InteractionResponseRequired`` if the task is
+        currently ``WAITING_FOR_USER`` -- answer its pending question
+        with ``reply()`` instead.
         """
         body: dict[str, Any] = {
             "agent_id": agent_id,
@@ -99,6 +102,89 @@ class TasksAPI:
             body["metadata"] = metadata
         resp = self._client._request(
             "POST", f"/v1/chat/tasks/{task_id}/messages", json=body
+        )
+        return _parse_append(resp.json())
+
+    def reply(
+        self,
+        task_id: int,
+        *,
+        agent_id: int,
+        message: str,
+    ) -> AppendResult:
+        """``POST /v1/chat/tasks/{task_id}/reply`` -- answer a task's
+        pending question and resume its execution.
+
+        This is a transitional, plain-text-only answer channel: it
+        exists so a waiting task is unblockable at all. The typed
+        ``respond`` surface (structured values matched to
+        ``pending_interaction.interactions``, plus a real idempotency
+        key) is tracked separately and will eventually replace this for
+        callers that need it.
+
+        Only valid while the task is ``WAITING_FOR_USER``. Inspect
+        ``TaskInfo.pending_interaction`` (from ``get()`` or ``wait()``)
+        for the question -- and any structured ``interactions`` -- before
+        answering. Server returns 202 with ``status='running'``. Under
+        the hood this resumes the same server-side run the task had
+        before the reply, rather than starting a new one -- unlike
+        ``append()`` -- but that continuity is server state, not
+        something this call's ``AppendResult`` return value exposes;
+        there is no ``run_id`` field on it to check.
+
+        Not idempotent: unlike ``create()``/``append()``, there is no
+        request-level idempotency key backing this call, so a
+        client-side timeout does not tell you whether the answer was
+        delivered -- retrying blindly can deliver it twice. If a call
+        times out or the connection drops, call ``get(task_id)`` first;
+        only retry ``reply()`` if ``status`` is still
+        ``WAITING_FOR_USER``. Even that check is not a full guarantee:
+        the first reply may have already been delivered and the agent
+        may have immediately asked a *new* question, which also shows up
+        as ``WAITING_FOR_USER``. If ``pending_interaction`` is not
+        ``None``, comparing its ``question`` against the one you
+        answered rules out most of these cases -- but not a follow-up
+        question that happens to repeat the same text verbatim, and
+        ``pending_interaction`` can itself be ``None`` (see
+        ``PendingInteraction``), so "compare the question" is a partial
+        mitigation, not a guarantee.
+
+        Raises:
+            NoPendingInteraction: the task is not currently
+                ``WAITING_FOR_USER``: it is ``PENDING`` (has not started
+                running yet), ``PAUSED``, or already terminal
+                (``COMPLETED``/``FAILED``). Do not retry as-is. A
+                ``PAUSED``, ``COMPLETED``, or ``FAILED`` task can take
+                its next turn via ``append()``; a ``PENDING`` task
+                cannot -- wait for it to start running first.
+            InteractionNotResumable: the task's in-progress execution
+                state could not be restored to accept the answer. The
+                task stays ``WAITING_FOR_USER`` with no partial write;
+                do not retry -- this specific pending question can no
+                longer be answered, so start a new task instead.
+            TemporarilyUnavailable: the execution state could not be
+                read due to a transient failure. The task stays
+                ``WAITING_FOR_USER``; safe to retry after a short
+                backoff.
+            TaskBusy: the task is currently ``RUNNING``, or another
+                caller's reply/turn is already claiming this task.
+                Retryable.
+            TaskNotFound: unknown ``task_id``, or this runtime key does
+                not own it.
+            InternalError: falls back here for any response code the
+                SDK does not recognize -- notably, calling ``reply()``
+                against a server old enough to have no ``/reply`` route
+                surfaces as this (FastAPI's 404 carries no V1 error
+                envelope, so it cannot map to a more specific type).
+                This happens whenever the SDK is upgraded ahead of the
+                server it talks to.
+        """
+        body: dict[str, Any] = {
+            "agent_id": agent_id,
+            "message": {"role": "user", "content": message},
+        }
+        resp = self._client._request(
+            "POST", f"/v1/chat/tasks/{task_id}/reply", json=body
         )
         return _parse_append(resp.json())
 
@@ -128,12 +214,14 @@ class TasksAPI:
 
         Returns as soon as the task reaches a terminal state
         (``COMPLETED``/``FAILED``) or ``WAITING_FOR_USER``. The latter is
-        not terminal but blocks on this caller sending the next turn, so
-        ``wait()`` hands it back: inspect ``status`` and ``append()`` the
-        user's reply, then ``wait()`` again. ``PENDING``, ``RUNNING``, and
-        ``PAUSED`` keep the loop going; a PAUSED task can be resumed by an
-        ``append()`` from another caller, and waiting through it lets one
-        observer see the resulting RUNNING transition.
+        not terminal but blocks on this caller answering the task's
+        pending question, so ``wait()`` hands it back: inspect
+        ``TaskInfo.pending_interaction`` for the question, then
+        ``reply()`` the user's answer and ``wait()`` again. ``PENDING``,
+        ``RUNNING``, and ``PAUSED`` keep the loop going; a PAUSED task can
+        be resumed by an ``append()`` from another caller, and waiting
+        through it lets one observer see the resulting RUNNING
+        transition.
 
         Returns the ``TaskInfo`` once one of those states is observed.
         Raises ``TaskTimeout`` if the wall-clock deadline elapses first.
@@ -208,10 +296,12 @@ class TasksAPI:
         constant.
 
         The returned ``RunResult`` is terminal (``COMPLETED``/``FAILED``)
-        unless the agent asked for input: a ``WAITING_FOR_USER`` status
-        means the task is paused on the next turn. Send it with
-        ``append()`` and ``wait()`` again -- or use the lower-level trio
-        directly when you need multiple turns or to interleave other work.
+        unless the agent asked a question: a ``WAITING_FOR_USER`` status
+        means the task is blocked on an answer -- inspect
+        ``result.info.pending_interaction`` for the question, answer it
+        with ``reply()``, and ``wait()`` again -- or use the lower-level
+        trio directly when you need multiple turns or to interleave other
+        work.
 
         Raises ``TaskTimeout`` if the task does not reach a returnable
         state within the combined ``create`` + ``wait`` budget. Other

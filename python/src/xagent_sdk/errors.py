@@ -40,7 +40,13 @@ class TaskNotFound(XAgentError):
 
 
 class TaskBusy(XAgentError):
-    """HTTP 409, code ``task_busy``. Only retryable code (caller decides)."""
+    """HTTP 409, code ``task_busy``. Retryable (caller decides when).
+
+    Raised when the task is currently ``RUNNING`` and cannot accept a
+    new turn or a reply yet, or when a concurrent ``reply()`` already
+    claimed it. ``TemporarilyUnavailable`` is the other retryable code
+    in this hierarchy.
+    """
 
 
 class RateLimited(XAgentError):
@@ -71,6 +77,54 @@ class TemplateNotFound(XAgentError):
     given an unknown ``template_id``. Distinct from ``AgentNotFound``
     because the SaaS UI path treats template-picker mismatch differently
     from agent-lookup mismatch.
+    """
+
+
+class InteractionResponseRequired(XAgentError):
+    """HTTP 409, code ``interaction_response_required``.
+
+    Raised by ``append()`` when the task is currently ``WAITING_FOR_USER``:
+    the task has a pending question and cannot accept a new turn through
+    the append channel. Call ``reply()`` instead -- inspect
+    ``TaskInfo.pending_interaction`` first to see the question.
+    """
+
+
+class NoPendingInteraction(XAgentError):
+    """HTTP 409, code ``no_pending_interaction``.
+
+    Raised by ``reply()`` when the task is not currently
+    ``WAITING_FOR_USER``: it is ``PENDING`` (has not started running
+    yet), ``PAUSED``, or already terminal (``COMPLETED``/``FAILED``).
+    A ``RUNNING`` task raises ``TaskBusy`` instead -- being busy is a
+    different condition from having no pending question. Do not retry
+    this call as-is. A ``PAUSED``, ``COMPLETED``, or ``FAILED`` task can
+    take its next turn via ``append()``; a ``PENDING`` task cannot --
+    there is nothing to append to until it starts running.
+    """
+
+
+class InteractionNotResumable(XAgentError):
+    """HTTP 409, code ``interaction_not_resumable``.
+
+    Raised by ``reply()`` when the task is ``WAITING_FOR_USER`` but the
+    execution state behind it could not be restored well enough to
+    deliver the answer -- confirmed unusable, not a transient hiccup.
+    The task is left exactly as it was (still ``WAITING_FOR_USER``, same
+    ``run_id``, no partial write): do not retry, start a new task
+    instead.
+    """
+
+
+class TemporarilyUnavailable(XAgentError):
+    """HTTP 503, code ``temporarily_unavailable``.
+
+    Raised by ``reply()`` when the task's execution state could not be
+    read because of a transient failure -- unlike
+    ``InteractionNotResumable``, the server cannot yet tell whether the
+    state is usable. The task is left exactly as it was (still
+    ``WAITING_FOR_USER``, same ``run_id``, no partial write). Safe to
+    retry after a short backoff.
     """
 
 
@@ -117,6 +171,10 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "template_not_found": TemplateNotFound,
     "rate_limited": RateLimited,
     "internal_error": InternalError,
+    "interaction_response_required": InteractionResponseRequired,
+    "no_pending_interaction": NoPendingInteraction,
+    "interaction_not_resumable": InteractionNotResumable,
+    "temporarily_unavailable": TemporarilyUnavailable,
 }
 
 

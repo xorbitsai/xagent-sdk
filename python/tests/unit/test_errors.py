@@ -12,13 +12,17 @@ import pytest
 
 from xagent_sdk import (
     AgentNotFound,
+    InteractionNotResumable,
+    InteractionResponseRequired,
     InternalError,
     InvalidAPIKey,
     InvalidInput,
+    NoPendingInteraction,
     RateLimited,
     TaskBusy,
     TaskNotFound,
     TemplateNotFound,
+    TemporarilyUnavailable,
     XAgentError,
 )
 from xagent_sdk.errors import from_response
@@ -56,6 +60,14 @@ class TestFromResponseStableCodes:
             (422, "validation_422", InvalidInput),
             (429, "rate_limited", RateLimited),
             (500, "internal_error", InternalError),
+            (
+                409,
+                "interaction_response_required",
+                InteractionResponseRequired,
+            ),
+            (409, "no_pending_interaction", NoPendingInteraction),
+            (409, "interaction_not_resumable", InteractionNotResumable),
+            (503, "temporarily_unavailable", TemporarilyUnavailable),
         ],
     )
     def test_envelope_maps_to_subclass(

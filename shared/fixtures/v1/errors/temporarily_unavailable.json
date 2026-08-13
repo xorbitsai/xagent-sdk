@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "temporarily_unavailable",
+    "message": "The task's execution state is temporarily unavailable; retry shortly."
+  }
+}

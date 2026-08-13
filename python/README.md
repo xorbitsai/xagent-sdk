@@ -4,7 +4,7 @@ Python client SDK for the [xAgent](https://github.com/xorbitsai/xagent)
 HTTP v1 API. Lets a SaaS app authenticate as a user, mint AI agents
 from templates, and trigger them — all in a handful of lines.
 
-> **Status**: 0.3.1 — early access. Optional
+> **Status**: 0.4.0 — early access. Optional
 > `xagent_sdk.cloud.WorkspaceClient` (hosted workspace surface) selects a
 > hosted region. **Breaking change vs 0.1.0**: the SDK
 > exposes two clients (``UserClient`` for management, ``AgentClient`` for
@@ -17,7 +17,7 @@ from templates, and trigger them — all in a handful of lines.
 Pin to a release tag — do **not** install from `main`:
 
 ```bash
-pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.3.1#subdirectory=python"
+pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.4.0#subdirectory=python"
 ```
 
 The Python client lives under [`python/`](.) in the
@@ -229,7 +229,68 @@ except TaskBusy:
     agent.tasks.append(task.task_id, agent_id=42, message="...")
 ```
 
-### 6. Error handling
+`append()` raises `InteractionResponseRequired` if the task is
+`WAITING_FOR_USER` -- answer its pending question with `reply()`
+instead (see [Example 6](#6-answer-a-pending-question) below).
+
+### 6. Answer a pending question
+
+An agent can pause a task mid-run to ask the caller something. `wait()`
+and `run()` return with `status=WAITING_FOR_USER` when that happens;
+read the question off `pending_interaction` and answer with `reply()`
+(not `append()`):
+
+```python
+from xagent_sdk import AgentClient, TaskStatus
+
+with AgentClient() as agent:
+    result = agent.tasks.run(agent_id=42, message="Book me a flight")
+    if result.status is TaskStatus.WAITING_FOR_USER:
+        pending = result.info.pending_interaction
+        if pending is not None:
+            print(pending.question)          # "Where are you flying to?"
+            print(pending.interactions)      # structured controls, or None
+        # pending can still be None here: the task can pause in
+        # WAITING_FOR_USER without ever recording a question turn.
+        # reply() is valid either way.
+
+        agent.tasks.reply(
+            result.info.task_id, agent_id=42, message="To Tokyo, next Friday"
+        )
+        info = agent.tasks.wait(result.info.task_id)
+```
+
+`reply()` resumes the task's paused execution -- the same server-side
+run continues rather than a new one starting, unlike `append()` -- but
+that continuity is internal server state; the `AppendResult` it returns
+has no `run_id` field to check. It is also **not idempotent** -- there is
+no request-level idempotency key, so a client-side timeout does not tell
+you whether the answer was delivered. If a call raises
+`XAgentTransportError` (network/timeout below the HTTP layer), call
+`get()` first and only retry if `status` is still `WAITING_FOR_USER`:
+
+```python
+from xagent_sdk import XAgentTransportError
+
+task_id = result.info.task_id
+try:
+    agent.tasks.reply(task_id, agent_id=42, message="To Tokyo, next Friday")
+except XAgentTransportError:
+    info = agent.tasks.get(task_id)
+    if info.status is TaskStatus.WAITING_FOR_USER:
+        agent.tasks.reply(task_id, agent_id=42, message="To Tokyo, next Friday")
+```
+
+Even that check is not a full guarantee: the first reply may have
+already gone through, and the agent may have immediately asked a *new*
+question -- which also shows up as `WAITING_FOR_USER`. If
+`pending_interaction` is not `None`, comparing its `question` against
+the one you just answered rules out most of these cases, but not a
+follow-up question that happens to repeat the same text, and
+`pending_interaction` can itself be `None` -- so "compare the question"
+is a partial mitigation, not a guarantee.
+
+### 7. Error handling
 
 All SDK exceptions inherit from `XAgentError` and carry `code`,
 `message`, and `http_status`. Server-mapped codes:
@@ -241,9 +302,13 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `TaskNotFound` | 404 | `task_not_found` |
 | `TemplateNotFound` | 404 | `template_not_found` |
 | `TaskBusy` | 409 | `task_busy` |
+| `InteractionResponseRequired` | 409 | `interaction_response_required` -- raised by `append()` on a `WAITING_FOR_USER` task; use `reply()` instead |
+| `NoPendingInteraction` | 409 | `no_pending_interaction` -- raised by `reply()` when the task is not `WAITING_FOR_USER` |
+| `InteractionNotResumable` | 409 | `interaction_not_resumable` -- raised by `reply()` when the task's execution state could not be restored; do not retry |
 | `InvalidInput` | 422 | `invalid_input` |
 | `RateLimited` | 429 | `rate_limited` |
 | `InternalError` | 500 | `internal_error` |
+| `TemporarilyUnavailable` | 503 | `temporarily_unavailable` -- raised by `reply()` on a transient read failure; safe to retry |
 
 SDK-coined codes:
 
@@ -287,8 +352,9 @@ only.
 |---|---|---|
 | `AgentClient(api_key, base_url, ...)` | `AgentClient` | env-var fallback: `XAGENT_API_KEY` / `XAGENT_BASE_URL` |
 | `agent.tasks.create(*, agent_id, message, metadata=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` |
-| `agent.tasks.append(task_id, *, agent_id, message, metadata=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='running'`; raises `TaskBusy` if prior turn is still running |
-| `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output` |
+| `agent.tasks.append(task_id, *, agent_id, message, metadata=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='running'`; raises `TaskBusy` if prior turn is still running, `InteractionResponseRequired` if `WAITING_FOR_USER` |
+| `agent.tasks.reply(task_id, *, agent_id, message)` | `AppendResult` | POST `/v1/chat/tasks/{id}/reply`; answers a `WAITING_FOR_USER` task's pending question and resumes its server-side run (no `run_id` field on the response to check); not idempotent |
+| `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER` |
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
 | `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline |
 | `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None)` | `RunResult` | `create` + `wait` + `steps` |
@@ -343,17 +409,24 @@ The minted runtime key is an ordinary agent key — drive it with
 - `PAUSED` — agent paused waiting for external action (e.g. another
   caller appending); **not** terminal — `wait()` keeps polling until
   the deadline so you observe the resume transition
-- `WAITING_FOR_USER` — the agent asked for input and is blocked on **your**
-  next turn; **not** terminal, but `wait()`/`run()` return here (a passive
-  poller would never advance it). Send the reply with `append()`, then
+- `WAITING_FOR_USER` — the agent asked a question and is blocked on
+  **your** answer; **not** terminal, but `wait()`/`run()` return here (a
+  passive poller would never advance it). Read the question off
+  `pending_interaction` and answer with `reply()` (not `append()` --
+  `append()` raises `InteractionResponseRequired` on this status), then
   `wait()` again:
   ```python
   result = agent.tasks.run(agent_id=agent_id, message="Book me a flight")
   if result.status is TaskStatus.WAITING_FOR_USER:
       task_id = result.info.task_id
-      agent.tasks.append(task_id, agent_id=agent_id, message="To Tokyo, next Friday")
+      pending = result.info.pending_interaction
+      if pending is not None:  # can be None: see Example 6
+          print(pending.question)
+      agent.tasks.reply(task_id, agent_id=agent_id, message="To Tokyo, next Friday")
       info = agent.tasks.wait(task_id)
   ```
+  See [Example 6](#6-answer-a-pending-question) above for the retry
+  caveat (`reply()` is not idempotent).
 - `COMPLETED`, `FAILED` — terminal; `wait()` returns
 
 ## Configuration
@@ -394,13 +467,13 @@ connection pool).
 
 ## Version policy
 
-- 0.x = alpha. Any minor bump (0.1 → 0.2 → 0.3) may break the
+- 0.x = alpha. Any minor bump (0.1 → 0.2 → 0.3 → 0.4) may break the
   surface. Patch bumps (0.3.0 → 0.3.1) are bugfix-only.
 - A future 1.0 will lock the public API per SemVer.
 - **Always pin to a git tag** in production:
 
   ```bash
-  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.3.1#subdirectory=python"
+  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.4.0#subdirectory=python"
   ```
 
   Installing from `@main` will eventually break you when the surface
@@ -408,7 +481,7 @@ connection pool).
   required because the SDK lives in a subdirectory of the
   multi-language monorepo.
 - The User-Agent header carries the SDK version
-  (`xagent-sdk-python/0.3.1`) so the backend can correlate issues.
+  (`xagent-sdk-python/0.4.0`) so the backend can correlate issues.
 
 ## Development
 

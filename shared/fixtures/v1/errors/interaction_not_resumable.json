@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "interaction_not_resumable",
+    "message": "The task's in-progress execution state could not be restored; the pending question cannot be answered on this task."
+  }
+}

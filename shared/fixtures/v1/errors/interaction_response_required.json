@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "interaction_response_required",
+    "message": "Task is waiting for a response to a pending question; use POST /v1/chat/tasks/{task_id}/reply."
+  }
+}
