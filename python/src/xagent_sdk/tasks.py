@@ -1,6 +1,7 @@
 import time
 from typing import TYPE_CHECKING, Any
 
+from xagent_sdk._events import TaskEventStream, open_task_event_stream
 from xagent_sdk.errors import TaskTimeout
 from xagent_sdk.types import (
     AppendResult,
@@ -202,6 +203,144 @@ class TasksAPI:
         """
         resp = self._client._request("GET", f"/v1/chat/tasks/{task_id}/steps")
         return _parse_steps(resp.json())
+
+    def events(self, task_id: int, *, timeout: float | None = None) -> TaskEventStream:
+        """``GET /v1/chat/tasks/{task_id}/events`` -- attach to the task's
+        live event stream instead of polling ``get()`` / ``steps()``.
+
+        Returns a ``TaskEventStream``: an iterator of ``StreamEvent``
+        (``for event in stream: ...``) that is also a context manager
+        (``with client.tasks.events(task_id) as stream: ...``, which
+        guarantees the connection closes on exit). Iterating it a second
+        time after it has ended yields nothing -- it does not reopen the
+        connection.
+
+        Delivers 8 possible ``event`` names: ``task.status``,
+        ``step.started``, ``step.completed``, ``message.delta``,
+        ``message.completed``, and the three *closing* frames --
+        ``task.completed``, ``task.input_required``, ``stream.error`` --
+        after which the server ends the connection. ``event.step`` is a
+        ``Step`` (the same dataclass ``steps()`` returns) on
+        ``step.*`` frames and ``None`` otherwise; every other field
+        stays in ``event.data`` exactly as the server sent it, including
+        ``status`` on ``task.status`` / ``task.completed`` -- it is kept
+        as a plain string, not ``TaskStatus``, so a status value this
+        SDK release does not know about still reaches you. A frame
+        naming an event this SDK release does not know about, or one
+        that otherwise fails to parse (malformed JSON, an unknown
+        ``step.type``), is dropped rather than raised: count these on
+        ``stream.dropped_frame_count`` and treat them as observability,
+        not as something to recover -- ``steps()`` is the only complete,
+        untruncated record.
+
+        Once the loop ends -- normally or via an exception -- check
+        ``stream.closed_by`` (the ``event`` name of the last frame
+        delivered, or ``None`` if none arrived) and ``stream.last_event``
+        (that frame itself). An exception leaves both exactly as they
+        were at the last frame received, so a caller catching
+        ``XAgentTransportError``/``TaskTimeout`` can still see how far
+        the stream got. A clean end of the loop with ``closed_by`` in
+        ``{"task.completed", "task.input_required", "stream.error"}`` is
+        the only shape that means "the server closed this on purpose" --
+        note ``stream.error`` is a *normal* close in this contract, not
+        a raised exception, because the server still uses it for
+        ordinary reasons such as its 1-hour per-stream cap. Anything
+        else reaching EOF (including zero frames at all) raises
+        ``XAgentTransportError`` itself, because the server ends a
+        stream this way with no ``httpx`` exception to detect it by.
+        Content frames are best-effort: the server can silently drop one
+        (queue overflow, an oversized inbound frame, a step that never
+        gets a matching completion) with no signal on the wire, so
+        "content missing from this stream" never proves it did not
+        happen -- only ``steps()`` is authoritative.
+
+        A step's ``id`` is comparable against the same id from
+        ``steps()`` only for ``tool_call``, ``agent_delegation``, and
+        ``thinking`` steps whose id embeds a source step/tool-call id
+        (see ``Step.id``); ``message`` steps and planning steps
+        (``thinking:plan:...`` / ``thinking:planning:...``) are not --
+        reconcile a planning step by ``started_at`` plus content, never
+        by id, and never merge one you saw on the stream with one you
+        already have from ``steps()`` just because the ids match.
+
+        A final answer can reach this stream twice: once as a
+        ``message.delta`` sequence plus ``message.completed``, and again
+        as a ``message`` step's ``step.completed`` -- the server does
+        this on purpose rather than risk the two channels disagreeing
+        about whether that step exists. The recommended way to fold
+        this back into one string: accumulate
+        by ``message_id`` across ``message.delta``/``message.completed``
+        (preferring the accumulated text over a ``truncated``
+        ``message.completed``), and drop a ``message`` step's
+        ``step.completed`` only when its ``data["role"] == "assistant"``
+        *and* this connection has already delivered at least one
+        ``message.*`` frame -- never drop one with any other
+        ``data["role"]`` (e.g. ``"user"``), it is not a duplicate.
+
+        Args:
+            task_id: The task to attach to.
+            timeout: Wall-clock budget in seconds for the whole call,
+                including the time spent opening the connection. Must be
+                non-negative. ``None`` (the default) sets no local
+                budget -- the connection still cannot idle past the
+                server's 15-second heartbeat, or its 1-hour per-stream
+                cap. ``0`` is legal but not instantaneous: it still
+                opens the connection once (so a 401/404/429 still maps
+                the same way), and only raises ``TaskTimeout`` -- before
+                delivering any event -- once that finishes, which can
+                itself take up to roughly 10s (connect) + 60s (waiting
+                for the first byte) in the worst case. A ``timeout``
+                between 0 and 60 shortens how long a silent connection
+                is tolerated before raising, but does not shorten the
+                fixed 10-second connect phase -- a small ``timeout``
+                whose budget is spent stuck connecting still raises
+                ``XAgentTransportError``, not ``TaskTimeout``, once the
+                fixed connect timeout elapses. ``AgentClient(timeout=...)``
+                has no effect here: this call always overrides it with
+                its own request-level timeout.
+
+        Returns:
+            A ``TaskEventStream`` bound to this ``task_id``.
+
+        Raises:
+            ValueError: ``timeout`` is negative.
+            InvalidAPIKey: the API key is missing, invalid, or revoked.
+            TaskNotFound: unknown ``task_id``, or this runtime key does
+                not own it.
+            RateLimited: this task already has 2 open streams, or this
+                key has 32 open streams across all of its tasks -- both
+                caps are enforced on the server's side. Back off before
+                retrying.
+            MalformedResponse: the response was 200 but its
+                content-type was not ``text/event-stream`` (e.g. a proxy
+                returned an HTML error page).
+            XAgentTransportError: a network failure, or the connection
+                ended before delivering a closing frame.
+            TaskTimeout: the ``timeout`` budget elapsed first.
+            InternalError: falls back here for any response the SDK
+                does not recognize -- notably, calling ``events()``
+                against a server old enough to have no ``/events`` route
+                surfaces as this with ``http_status=404`` (FastAPI's 404
+                carries no V1 error envelope), distinguishable from a
+                real ``TaskNotFound`` by exception type. This happens
+                whenever the SDK is upgraded ahead of the server it
+                talks to.
+
+        A task already ``paused`` does not close this stream on its
+        own -- pass a ``timeout`` (or rely on the server's 1-hour cap)
+        if you attach to one; otherwise the call blocks until some
+        other caller's ``append()`` resumes it.
+
+        This call does not retry or reconnect on its own: attach again
+        with a fresh ``events(task_id)`` after resolving what closed the
+        previous one, reconciling against ``steps()`` first because the
+        server never replays what happened before this connection
+        opened. Do the reconciliation in the order that avoids a gap
+        between the two sources: attach *before* calling ``steps()``,
+        not after, so nothing that happens in between is missed by
+        both.
+        """
+        return open_task_event_stream(self._client._http, task_id, timeout=timeout)
 
     def wait(
         self,

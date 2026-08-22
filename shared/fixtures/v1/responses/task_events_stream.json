@@ -1,0 +1,52 @@
+{
+  "task_id": 10,
+  "agent_id": 7,
+  "frames": [
+    {
+      "event": "task.status",
+      "data": {"status": "running"}
+    },
+    {
+      "event": "step.started",
+      "data": {
+        "step": {
+          "id": "tool_call:py:1",
+          "type": "tool_call",
+          "status": "running",
+          "started_at": "2026-05-10T03:00:02Z",
+          "completed_at": null,
+          "data": {"name": "execute_python_code", "args": {"code": "print(17 * 23)"}}
+        }
+      }
+    },
+    {
+      "event": "step.completed",
+      "data": {
+        "step": {
+          "id": "tool_call:py:1",
+          "type": "tool_call",
+          "status": "completed",
+          "started_at": "2026-05-10T03:00:02Z",
+          "completed_at": "2026-05-10T03:00:03Z",
+          "data": {"name": "execute_python_code", "args": {"code": "print(17 * 23)"}, "result": "391\n"}
+        }
+      }
+    },
+    {
+      "event": "message.delta",
+      "data": {"message_id": "live:1", "text": "39"}
+    },
+    {
+      "event": "message.delta",
+      "data": {"message_id": "live:1", "text": "1"}
+    },
+    {
+      "event": "message.completed",
+      "data": {"message_id": "live:1", "content": "391"}
+    },
+    {
+      "event": "task.completed",
+      "data": {"status": "completed", "output": "391", "error": null}
+    }
+  ]
+}

@@ -263,7 +263,22 @@ class Step:
                                             "content": str}``
 
     ``id`` is a string with a type prefix (e.g. ``"tool_call:abc123"``) and
-    is stable across re-polls, so callers can de-duplicate while streaming.
+    is stable across repeated reads of the *same* face -- polling
+    ``steps()`` in a loop sees a given step keep the same ``id`` every
+    time.
+
+    That stability does **not** carry across faces: comparing an ``id``
+    read from ``TasksAPI.events()`` against one read from ``steps()`` is
+    only meaningful for ``StepType.TOOL_CALL``, ``StepType.AGENT_DELEGATION``,
+    and ``StepType.THINKING`` steps whose id embeds the originating
+    tool-call or step id. ``StepType.MESSAGE`` steps get a freshly
+    generated id on every stream broadcast, different from the id
+    ``steps()`` assigns the same persisted row. Planning steps (id
+    prefixed ``thinking:plan:`` or ``thinking:planning:``) carry a
+    per-connection counter that restarts from zero on every new stream
+    connection, so the same id on the stream and on ``steps()`` can name
+    two different real steps -- reconcile those by ``started_at`` plus
+    content, never by id.
     """
 
     id: str
@@ -272,6 +287,49 @@ class Step:
     started_at: datetime
     completed_at: datetime | None
     data: dict[str, Any]
+
+
+class StreamEventType(StrEnum):
+    """The 8 event names ``TasksAPI.events()`` can deliver on the wire.
+
+    ``StreamEvent.event`` is deliberately typed as plain ``str``, not
+    this enum: a frame whose event name is not one of these 8 is
+    dropped per-frame rather than surfacing here (see
+    ``TasksAPI.events()``), so widening this enum later to cover a new
+    server-side event is additive and does not change how existing
+    callers' comparisons against it behave.
+    """
+
+    TASK_STATUS = "task.status"
+    TASK_COMPLETED = "task.completed"
+    TASK_INPUT_REQUIRED = "task.input_required"
+    STREAM_ERROR = "stream.error"
+    STEP_STARTED = "step.started"
+    STEP_COMPLETED = "step.completed"
+    MESSAGE_DELTA = "message.delta"
+    MESSAGE_COMPLETED = "message.completed"
+
+
+@dataclass(frozen=True)
+class StreamEvent:
+    """One decoded frame from ``TasksAPI.events()``.
+
+    ``data`` is the frame's JSON payload exactly as the server sent it --
+    no key is renamed, added, or removed, including the ``status``
+    string on ``task.status`` / ``task.completed`` (kept as ``str``, not
+    ``TaskStatus``, so a status value this SDK release does not know
+    about still reaches the caller instead of dropping the frame).
+
+    ``step`` is populated only for ``step.started`` / ``step.completed``
+    frames and is ``None`` on every other event; it reuses the same
+    ``Step`` dataclass ``TasksAPI.steps()`` returns, because the server
+    serializes both from the same object. See ``TasksAPI.events()`` for
+    the full per-event field reference and the closing-frame contract.
+    """
+
+    event: str
+    data: dict[str, Any]
+    step: Step | None
 
 
 @dataclass(frozen=True)

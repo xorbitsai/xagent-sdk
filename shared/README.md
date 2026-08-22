@@ -29,6 +29,7 @@ implicit and documented below.
 | `task_info_waiting_plain.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with `pending_interaction.interactions=null` (question asked with no structured controls) |
 | `reply_task.json` | `POST /v1/chat/tasks/{id}/reply` (202) | Same shape as `append_task.json`: `status=running`, `accepted_at` |
 | `steps_full.json` | `GET /v1/chat/tasks/{id}/steps` (200) | Wrapper with all four `Step` types present (`message`, `thinking`, `tool_call`, `agent_delegation`) |
+| `task_events_stream.json` | `GET /v1/chat/tasks/{id}/events` (200, `text/event-stream`) | Not a single response body -- an ordered `frames` array of `{event, data}` pairs covering the wire vocabulary end-to-end (status, a `tool_call` step's start/complete pair, a `message.delta` sequence, `message.completed`, then the `task.completed` closing frame). Each client's test loader turns these into its own SSE wire bytes (`event: <name>\ndata: <json>\n\n`) rather than storing the raw text directly, so the fixture stays language-agnostic. |
 
 ### `fixtures/v1/errors/`
 

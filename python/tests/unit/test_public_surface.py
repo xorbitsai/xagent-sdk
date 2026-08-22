@@ -29,6 +29,10 @@ EXPECTED_SURFACE: set[str] = {
     "PendingInteraction",
     "Step",
     "RunResult",
+    # Task event stream
+    "TaskEventStream",
+    "StreamEvent",
+    "StreamEventType",
     # Enums
     "TaskStatus",
     "StepType",

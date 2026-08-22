@@ -130,10 +130,17 @@ class TemporarilyUnavailable(XAgentError):
 
 # SDK-coined errors (server has no equivalent code).
 class XAgentTransportError(XAgentError):
-    """Network, DNS, TLS, or local timeout below the HTTP layer.
+    """A network failure below the HTTP layer, or a response body that
+    had already started but ended before reaching an outcome its
+    contract allows for.
 
-    Wraps any ``httpx.HTTPError``. ``http_status`` is None because no HTTP
-    response was received.
+    Most raises wrap an ``httpx.HTTPError`` (DNS, TLS, connection reset,
+    a local timeout below the wall-clock budget); ``http_status`` is
+    ``None`` because no HTTP response was received. ``TasksAPI.events()``
+    also raises this when the server closes a 200 response cleanly but
+    the stream ends before delivering one of its closing frames -- httpx
+    reports that as an ordinary end of iteration, not as an
+    ``HTTPError``, so the SDK detects and raises it itself.
     """
 
 
@@ -152,13 +159,15 @@ class MalformedResponse(XAgentError):
 
 
 class TaskTimeout(XAgentError):
-    """``wait()`` / ``run()`` exceeded its local deadline waiting for a task
-    to reach a terminal state.
+    """A local wall-clock budget elapsed before the operation reached a
+    state it was allowed to return.
 
     Raised by ``TasksAPI.wait`` (and indirectly by ``TasksAPI.run``) when
     the wall-clock budget elapses with the task still in a non-terminal
-    state. ``http_status`` is ``None`` because no HTTP exchange surfaced
-    the failure -- the deadline is purely client-side.
+    state, and by ``TasksAPI.events()`` when its own ``timeout`` budget
+    elapses before the stream delivers a closing frame. ``http_status``
+    is ``None`` because no HTTP exchange surfaced the failure -- the
+    deadline is purely client-side.
     """
 
 
