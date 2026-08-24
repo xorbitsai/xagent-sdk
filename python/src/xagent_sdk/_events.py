@@ -407,11 +407,18 @@ class TaskEventStream:
         this is also what makes a second ``for`` loop over an
         already-exhausted stream return no frames instead of reopening
         the connection.
+
+        A failing release is attempted once and then reported: the
+        stream is flagged closed either way, so a later close()/__del__
+        does not re-enter a context manager's __exit__ that already
+        raised.
         """
         if self._closed:
             return
-        self._closed = True
-        self._connection.__exit__(None, None, None)
+        try:
+            self._connection.__exit__(None, None, None)
+        finally:
+            self._closed = True
 
     def _close_quietly(self) -> None:
         """Release on a failing path without letting a close failure
@@ -426,7 +433,7 @@ class TaskEventStream:
 
     def _check_deadline(self) -> None:
         if self._deadline is not None and time.monotonic() >= self._deadline:
-            self.close()
+            self._close_quietly()
             raise TaskTimeout(
                 "task_timeout",
                 _timeout_message(self._task_id, self._timeout, self._closed_by),
@@ -446,7 +453,7 @@ class TaskEventStream:
         except StopIteration:
             return None
         except httpx.ReadTimeout as exc:
-            self.close()
+            self._close_quietly()
             raise _classify_read_timeout(
                 exc,
                 task_id=self._task_id,
@@ -455,7 +462,7 @@ class TaskEventStream:
                 closed_by=self._closed_by,
             ) from exc
         except httpx.HTTPError as exc:
-            self.close()
+            self._close_quietly()
             raise XAgentTransportError(
                 "transport_error", str(exc), http_status=None
             ) from exc
@@ -469,7 +476,7 @@ class TaskEventStream:
         truncated stream, and it has to synthesize the failure itself.
         """
         last = self._closed_by
-        self.close()
+        self._close_quietly()
         if last not in _CLOSE_EVENT_NAMES:
             raise XAgentTransportError(
                 "transport_error",
@@ -526,6 +533,17 @@ def open_task_event_stream(
                     "transport_error", str(exc), http_status=None
                 ) from exc
             raise from_response(resp)
+
+        if resp.status_code != 200:
+            # 3xx (this client does not follow redirects) and 204 are
+            # neither is_error nor the 200 a stream requires, so they
+            # would otherwise reach the content-type branch and be
+            # reported with no status at all.
+            raise MalformedResponse(
+                "malformed_response",
+                f"Expected HTTP 200 for the task event stream, got {resp.status_code}",
+                http_status=resp.status_code,
+            )
 
         content_type = resp.headers.get("content-type", "")
         # Media types are case-insensitive (RFC 9110); the error text

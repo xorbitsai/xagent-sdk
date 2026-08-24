@@ -155,6 +155,12 @@ class MalformedResponse(XAgentError):
     not the problem -- the decoded payload was. The ``code`` is the
     SDK-coined string ``malformed_response``; the server never emits it,
     so it is absent from ``_CODE_MAP``.
+
+    ``TasksAPI.events()`` also raises it when the event-stream endpoint
+    answers with a status that is neither an error nor the 200 a stream
+    requires -- a redirect this client does not follow, or a 204 -- and
+    there it does carry that status, because there the status line is
+    the problem.
     """
 
 
