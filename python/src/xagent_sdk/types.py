@@ -263,11 +263,11 @@ class Step:
                                             "content": str}``
 
     ``id`` is a string with a type prefix (e.g. ``"tool_call:abc123"``) and
-    is stable across repeated reads of the *same* face -- polling
+    is stable across repeated reads of the *same* view -- polling
     ``steps()`` in a loop sees a given step keep the same ``id`` every
     time.
 
-    That stability does **not** carry across faces: comparing an ``id``
+    That stability does **not** carry across views: comparing an ``id``
     read from ``TasksAPI.events()`` against one read from ``steps()`` is
     only meaningful for ``StepType.TOOL_CALL``, ``StepType.AGENT_DELEGATION``,
     and ``StepType.THINKING`` steps whose id embeds the originating
