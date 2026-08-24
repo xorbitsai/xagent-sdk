@@ -6,6 +6,7 @@ cannot reproduce -- see their docstrings for why). None reach the
 network.
 """
 
+import gc
 from collections.abc import Callable
 from types import SimpleNamespace
 
@@ -97,8 +98,15 @@ class TestSSEParsing:
     ) -> None:
         # Hand-built frame: two `data:` lines, which the SSE spec joins
         # with "\n". The server itself never emits this (single-line
-        # json.dumps), but the parser must still support it.
-        raw = 'event: task.status\r\ndata: {"a":\r\ndata: 1}\r\n\r\n'
+        # json.dumps), but the parser must still support it. The split
+        # lands right after the colon -- a real newline there is legal
+        # JSON whitespace between a key and its value -- while the
+        # value itself carries a JSON-escaped "\n" (two characters,
+        # backslash then "n", entirely on the second data: line): a raw
+        # control character inside a JSON string is illegal even once
+        # assembled, so this is the only way to get a genuine embedded
+        # newline into the decoded value and still have valid JSON.
+        raw = 'event: task.status\r\ndata: {"t":\r\ndata: "a\\nb"}\r\n\r\n'
 
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -109,7 +117,7 @@ class TestSSEParsing:
 
         with make_client(handler) as c, c.tasks.events(1) as stream:
             event = next(stream)
-        assert event.data == {"a": 1}
+        assert event.data == {"t": "a\nb"}
 
     def test_eof_before_blank_line_discards_half_frame(
         self, make_client: Callable[..., AgentClient]
@@ -138,6 +146,69 @@ class TestSSEParsing:
             # frame (it was never a frame to begin with).
             assert stream.closed_by == "task.status"
             assert stream.dropped_frame_count == 0
+
+    def test_leading_bom_does_not_drop_the_first_frame(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # A U+FEFF byte-order mark prepended to the very first line, as
+        # a proxy or an httpx decode path might leave it. Without the
+        # strip, "event" reads as "﻿event" -- an unrecognized field
+        # name -- and the whole first frame silently drops.
+        raw = "﻿" + _sse.frame("task.status", {"status": "running"})
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            event = next(stream)
+        assert event.event == "task.status"
+        assert stream.dropped_frame_count == 0
+
+    def test_lf_only_wire_format_parses(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # The server always sends "\r\n" (every other test in this
+        # module relies on that), but a bare "\n" is equally legal SSE.
+        # This must decode identically to the CRLF form.
+        raw = _sse.frame("task.status", {"status": "running"}, sep="\n") + _sse.frame(
+            "task.completed",
+            {"status": "completed", "output": None, "error": None},
+            sep="\n",
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.status", "task.completed"]
+        assert stream.dropped_frame_count == 0
+
+    def test_non_ascii_payload_round_trips(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # CJK text and an emoji (outside the BMP, so a surrogate pair in
+        # UTF-16 but a single code point in Python) must reach the
+        # caller exactly as sent -- no mangling from the byte-level line
+        # assembly this module does before json.loads ever sees it.
+        text = "你好，世界 🎉"
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(
+                _sse.frame("message.delta", {"message_id": "m1", "text": text}),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            event = next(stream)
+        assert event.data["text"] == text
 
 
 class TestPerFrameDefense:
@@ -231,6 +302,57 @@ class TestPerFrameDefense:
         assert len(events) == 1
         assert events[0].data["status"] == "a_status_this_sdk_does_not_know"
         assert stream.dropped_frame_count == 0
+
+    def test_multiple_dropped_frames_accumulate(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(
+                _sse.frame("task.something_new", {"whatever": 1}),
+                _sse.frame("task.something_else_new", {"whatever": 2}),
+                _sse.frame(
+                    "task.completed",
+                    {"status": "completed", "output": None, "error": None},
+                ),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 2
+
+    def test_deeply_nested_payload_dropped_without_leaking(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # A `data:` payload nested deep enough to exhaust Python's
+        # recursion limit inside json.loads must be dropped like any
+        # other malformed frame -- not take the connection down with
+        # it, and not leak the connection either.
+        nested = "[" * 100_000 + "]" * 100_000
+        body_stream = _sse.CloseRecordingStream(
+            [
+                _sse.body(
+                    _sse.frame("task.status", nested),
+                    _sse.frame(
+                        "task.completed",
+                        {"status": "completed", "output": None, "error": None},
+                    ),
+                )
+            ]
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 1
+        assert body_stream.close_count == 1
 
 
 class TestClosingSemantics:
@@ -415,19 +537,25 @@ class TestClosingSemantics:
     def test_truncated_stream_raises_transport_error(
         self, make_client: Callable[..., AgentClient], send_any_frame: bool
     ) -> None:
+        frames = (
+            [_sse.frame("task.status", {"status": "running"})] if send_any_frame else []
+        )
+        body_stream = _sse.CloseRecordingStream([_sse.body(*frames)])
+
         def handler(req: httpx.Request) -> httpx.Response:
-            frames = (
-                [_sse.frame("task.status", {"status": "running"})]
-                if send_any_frame
-                else []
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
             )
-            return _sse.stream_response(*frames)
 
         with make_client(handler) as c:
             stream = c.tasks.events(1)
             with pytest.raises(XAgentTransportError) as excinfo:
                 list(stream)
         assert excinfo.value.code == "transport_error"
+        # Connection released exactly once even on this failing path.
+        assert body_stream.close_count == 1
 
     def test_next_after_truncation_raises_stop_iteration_not_the_same_error_again(
         self, make_client: Callable[..., AgentClient]
@@ -532,6 +660,42 @@ class TestHttpErrorMapping:
 
         with make_client(handler) as c, pytest.raises(expected):
             c.tasks.events(1)
+
+    @pytest.mark.parametrize("status", [302, 204])
+    def test_non_200_open_carries_the_real_status(
+        self, make_client: Callable[..., AgentClient], status: int
+    ) -> None:
+        # Neither an error status (is_error) nor the 200 a stream
+        # requires -- a redirect this client does not follow, or a
+        # 204 -- must surface the actual status, not fall through to
+        # the content-type branch and be reported with no status at
+        # all.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(status=status)
+
+        with make_client(handler) as c, pytest.raises(MalformedResponse) as excinfo:
+            c.tasks.events(1)
+        assert excinfo.value.http_status == status
+
+    def test_open_time_connect_error_maps_to_transport_error(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection refused")
+
+        with make_client(handler) as c, pytest.raises(XAgentTransportError) as excinfo:
+            c.tasks.events(1)
+        assert excinfo.value.code == "transport_error"
+
+    def test_missing_content_type_header_rejected(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(content_type=None)
+
+        with make_client(handler) as c, pytest.raises(MalformedResponse) as excinfo:
+            c.tasks.events(1)
+        assert excinfo.value.http_status is None
 
     def test_missing_route_distinguishable_from_missing_task(
         self, make_client: Callable[..., AgentClient]
@@ -735,6 +899,55 @@ class TestTimeoutValidationAndDeadlines:
         assert [e.event for e in events] == ["task.completed"]
         assert stream.dropped_frame_count == 0
 
+    def test_closing_frame_then_deadline_ends_cleanly(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        # EOF right after the closing frame must win over an
+        # already-elapsed deadline: the connection is exhausted and
+        # ends cleanly, not surfaced as a spurious TaskTimeout.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(
+                _sse.frame(
+                    "task.completed",
+                    {"status": "completed", "output": None, "error": None},
+                )
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1, timeout=10)
+            event = next(stream)
+            assert event.event == "task.completed"
+            clock.advance(60)
+            with pytest.raises(StopIteration):
+                next(stream)
+        assert stream.closed_by == "task.completed"
+
+    def test_deadline_still_fires_after_a_delivered_frame(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        # A delivered frame wins over the checkpoint on its own turn --
+        # even a closing one -- but that is not a standing exemption
+        # for the rest of the stream: if the connection keeps sending
+        # instead of ending at EOF right after (pings, here), the
+        # deadline still fires on a later turn.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(
+                _sse.frame(
+                    "task.completed",
+                    {"status": "completed", "output": None, "error": None},
+                ),
+                *([_sse.ping()] * 5),
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1, timeout=10)
+            first = next(stream)
+            assert first.event == "task.completed"
+            clock.advance(60)
+            with pytest.raises(TaskTimeout):
+                list(stream)
+        assert stream.closed_by == "task.completed"
+
 
 class TestReadTimeoutClassification:
     """The same httpx.ReadTimeout means different SDK exceptions
@@ -746,14 +959,16 @@ class TestReadTimeoutClassification:
     def test_mid_stream_read_timeout_budget_exhausted(
         self, make_client: Callable[..., AgentClient], clock: _FakeClock
     ) -> None:
+        body_stream = _sse.RaisingByteStream(
+            [_sse.frame("task.status", {"status": "running"}).encode()],
+            httpx.ReadTimeout("silence"),
+        )
+
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                stream=_sse.RaisingByteStream(
-                    [_sse.frame("task.status", {"status": "running"}).encode()],
-                    httpx.ReadTimeout("silence"),
-                ),
+                stream=body_stream,
             )
 
         with make_client(handler) as c:
@@ -767,23 +982,27 @@ class TestReadTimeoutClassification:
             with pytest.raises(TaskTimeout) as excinfo:
                 list(stream)
         assert excinfo.value.code == "task_timeout"
+        assert body_stream.close_count == 1
 
     def test_mid_stream_read_timeout_budget_open(
         self, make_client: Callable[..., AgentClient]
     ) -> None:
+        body_stream = _sse.RaisingByteStream(
+            [_sse.frame("task.status", {"status": "running"}).encode()],
+            httpx.ReadTimeout("silence"),
+        )
+
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                stream=_sse.RaisingByteStream(
-                    [_sse.frame("task.status", {"status": "running"}).encode()],
-                    httpx.ReadTimeout("silence"),
-                ),
+                stream=body_stream,
             )
 
         with make_client(handler) as c, pytest.raises(XAgentTransportError) as excinfo:
             list(c.tasks.events(1))  # timeout=None: no local deadline at all
         assert excinfo.value.code == "transport_error"
+        assert body_stream.close_count == 1
 
     def test_read_timeout_while_waiting_for_headers_budget_exhausted(
         self, make_client: Callable[..., AgentClient], clock: _FakeClock
@@ -810,6 +1029,33 @@ class TestReadTimeoutClassification:
         with make_client(handler) as c, pytest.raises(XAgentTransportError) as excinfo:
             c.tasks.events(1, timeout=None)
         assert excinfo.value.code == "transport_error"
+
+    def test_close_failure_does_not_replace_the_sdk_exception(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        # The read timeout is the real story here (budget exhausted ->
+        # TaskTimeout); the underlying close() also failing must not
+        # replace it with an unrelated RuntimeError from the transport.
+        body_stream = _sse.RaisingByteStream(
+            [_sse.frame("task.status", {"status": "running"}).encode()],
+            httpx.ReadTimeout("silence"),
+            close_exc=RuntimeError("connection pool exploded"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1, timeout=5)
+            clock.advance(100)
+            with pytest.raises(TaskTimeout) as excinfo:
+                list(stream)
+        assert excinfo.value.code == "task_timeout"
+        assert body_stream.close_count == 1
 
 
 class TestLifecycle:
@@ -892,6 +1138,48 @@ class TestLifecycle:
         # no-op rather than a second release.
         assert body_stream.close_count == 1
 
+    def test_del_releases_the_connection(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        body_stream = _sse.CloseRecordingStream(
+            [_sse.body(_sse.frame("task.status", {"status": "running"}))]
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1)
+            next(stream)
+            del stream
+            gc.collect()
+            assert body_stream.close_count == 1
+
+    def test_del_after_explicit_close_does_not_double_release(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        body_stream = _sse.CloseRecordingStream(
+            [_sse.body(_sse.frame("task.status", {"status": "running"}))]
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1)
+            stream.close()
+            del stream
+            gc.collect()
+            assert body_stream.close_count == 1
+
     def test_client_close_invalidates_open_stream(self) -> None:
         transport = _sse.ClosableTransport(None)
 
@@ -911,7 +1199,7 @@ class TestLifecycle:
                 ),
             )
 
-        transport._handler = handler
+        transport.set_handler(handler)
         client = AgentClient(
             api_key="k", base_url="https://test.example", transport=transport
         )
@@ -1072,6 +1360,66 @@ class TestOversizedFrame:
             events = list(stream)
         assert [e.event for e in events] == ["task.completed"]
         assert stream.dropped_frame_count == 1
+
+    def test_multiline_frame_crosses_cap_via_separator(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # Two data: lines whose raw lengths sum to exactly
+        # _MAX_FRAME_CHARS: without counting the "\n" _dispatch() joins
+        # them with, this would land exactly at the cap and be
+        # delivered. Counted correctly, the total lands one character
+        # over, so this must be dropped instead.
+        overhead = len('{"status":') + len('"running"}')
+        pad_total = events_mod._MAX_FRAME_CHARS - overhead
+        pad1 = pad_total // 2
+        pad2 = pad_total - pad1
+        line1 = '{"status":' + " " * pad1
+        line2 = " " * pad2 + '"running"}'
+        raw = (
+            f"event: task.status\r\ndata: {line1}\r\ndata: {line2}\r\n\r\n"
+            + _sse.frame(
+                "task.completed",
+                {"status": "completed", "output": None, "error": None},
+            )
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 1
+
+    def test_multiline_frame_exactly_at_cap_is_delivered(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # Same construction, one character shorter overall: the joined
+        # total lands exactly at _MAX_FRAME_CHARS, which the cap
+        # ("> _MAX_FRAME_CHARS") must still deliver, not drop.
+        overhead = len('{"status":') + len('"running"}')
+        pad_total = events_mod._MAX_FRAME_CHARS - 1 - overhead
+        pad1 = pad_total // 2
+        pad2 = pad_total - pad1
+        line1 = '{"status":' + " " * pad1
+        line2 = " " * pad2 + '"running"}'
+        raw = f"event: task.status\r\ndata: {line1}\r\ndata: {line2}\r\n\r\n"
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            event = next(stream)
+        assert event.data == {"status": "running"}
+        assert stream.dropped_frame_count == 0
 
 
 class TestSharedFixtureParses:

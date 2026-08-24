@@ -66,9 +66,16 @@ class RaisingByteStream(httpx.SyncByteStream):
     this failing path.
     """
 
-    def __init__(self, chunks: Iterable[bytes], exc: Exception) -> None:
+    def __init__(
+        self,
+        chunks: Iterable[bytes],
+        exc: Exception,
+        *,
+        close_exc: Exception | None = None,
+    ) -> None:
         self._chunks = list(chunks)
         self._exc = exc
+        self._close_exc = close_exc
         self.close_count = 0
 
     def __iter__(self) -> Iterator[bytes]:
@@ -77,6 +84,8 @@ class RaisingByteStream(httpx.SyncByteStream):
 
     def close(self) -> None:
         self.close_count += 1
+        if self._close_exc is not None:
+            raise self._close_exc
 
 
 class DelayedChunksStream(httpx.SyncByteStream):
@@ -127,19 +136,22 @@ class ClockAdvancingStream(httpx.SyncByteStream):
             yield chunk
 
 
-def frame(event: str, data: dict[str, Any] | str) -> str:
+def frame(event: str, data: dict[str, Any] | str, *, sep: str = "\r\n") -> str:
     """One well-formed SSE frame: ``event:``, ``data:``, then a blank line.
 
     ``data`` is JSON-encoded unless already given as a literal string
-    (for building deliberately malformed bodies).
+    (for building deliberately malformed bodies). ``sep`` is the line
+    terminator: the server always emits ``\\r\\n``, but a bare ``\\n`` is
+    equally legal SSE, and a test can pass it to exercise that wire
+    format too.
     """
     payload = data if isinstance(data, str) else json.dumps(data)
-    return f"event: {event}\r\ndata: {payload}\r\n\r\n"
+    return f"event: {event}{sep}data: {payload}{sep}{sep}"
 
 
-def ping() -> str:
+def ping(*, sep: str = "\r\n") -> str:
     """One heartbeat comment frame, matching the server's ``: ping``."""
-    return ": ping\r\n\r\n"
+    return f": ping{sep}{sep}"
 
 
 def body(*parts: str) -> bytes:
@@ -210,6 +222,18 @@ class ClosableTransport(httpx.BaseTransport):
     def __init__(self, handler: Any) -> None:
         self._handler = handler
         self.closed = False
+
+    def set_handler(self, handler: Any) -> None:
+        """Swap in a handler built after this transport already exists.
+
+        A handler that itself needs to reference this transport (e.g.
+        to build a ``TransportAwareStream`` bound to it) cannot be
+        constructed before the transport is, so the constructor
+        argument is a chicken-and-egg problem for that case -- build
+        the transport with a placeholder, then call this once the real
+        handler closure exists.
+        """
+        self._handler = handler
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         request.read()
