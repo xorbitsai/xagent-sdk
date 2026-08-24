@@ -7,6 +7,7 @@ network.
 """
 
 from collections.abc import Callable
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -45,6 +46,43 @@ def _counting_handler(
         return build()
 
     return handler, calls
+
+
+class _FakeClock:
+    """A monotonic clock a test moves on purpose.
+
+    ``_events.py`` reads the wall clock only through ``time.monotonic``,
+    so a test that wants a deterministic deadline race does not need a
+    real sleep -- it advances this clock by exactly the amount the
+    scenario calls for, between the reads the SDK itself performs.
+    """
+
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> _FakeClock:
+    """Patch ``xagent_sdk._events.time`` with a stand-in whose
+    ``monotonic()`` this fixture controls.
+
+    Deliberately does not ``monkeypatch.setattr("time.monotonic", ...)``
+    -- that patches the standard library module itself, which is
+    process-global and shared with every other consumer of ``time.
+    monotonic`` in the test process, not just this module under test.
+    Patching the ``time`` name inside ``xagent_sdk._events`` instead
+    keeps the fake clock scoped to the code this test is actually
+    exercising.
+    """
+    fake = _FakeClock()
+    monkeypatch.setattr(events_mod, "time", SimpleNamespace(monotonic=fake.monotonic))
+    return fake
 
 
 class TestSSEParsing:
@@ -700,26 +738,13 @@ class TestTimeoutValidationAndDeadlines:
 
 class TestReadTimeoutClassification:
     """The same httpx.ReadTimeout means different SDK exceptions
-    depending on the remaining wall-clock budget. Uses a monkeypatched
-    ``time.monotonic`` rather than a real sleep, so the "budget already
-    exhausted" branch is deterministic instead of racing a real clock.
+    depending on the remaining wall-clock budget. Uses the ``clock``
+    fixture rather than a real sleep, so the "budget already exhausted"
+    branch is deterministic instead of racing a real clock.
     """
 
-    def _patch_monotonic(
-        self, monkeypatch: pytest.MonkeyPatch, values: list[float]
-    ) -> None:
-        it = iter(values)
-
-        def fake_monotonic() -> float:
-            try:
-                return next(it)
-            except StopIteration:
-                return values[-1]
-
-        monkeypatch.setattr("xagent_sdk._events.time.monotonic", fake_monotonic)
-
     def test_mid_stream_read_timeout_budget_exhausted(
-        self, make_client: Callable[..., AgentClient], monkeypatch: pytest.MonkeyPatch
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
     ) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -732,10 +757,13 @@ class TestReadTimeoutClassification:
             )
 
         with make_client(handler) as c:
-            # 0.0 for deadline math + checkpoint (i); 100.0 once the
-            # ReadTimeout classification runs -- well past any timeout.
-            self._patch_monotonic(monkeypatch, [0.0, 0.0, 100.0])
+            # Deadline math + checkpoint (i) both read the clock at 0.0;
+            # advance past the deadline before iterating, so the
+            # ReadTimeout classification -- which reads the clock again
+            # once the RaisingByteStream fires -- sees the budget
+            # already exhausted.
             stream = c.tasks.events(1, timeout=5)
+            clock.advance(100)
             with pytest.raises(TaskTimeout) as excinfo:
                 list(stream)
         assert excinfo.value.code == "task_timeout"
@@ -758,15 +786,19 @@ class TestReadTimeoutClassification:
         assert excinfo.value.code == "transport_error"
 
     def test_read_timeout_while_waiting_for_headers_budget_exhausted(
-        self, make_client: Callable[..., AgentClient], monkeypatch: pytest.MonkeyPatch
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
     ) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
+            # Deadline math already read the clock at 0.0 before this
+            # handler runs; advance it here so the ReadTimeout
+            # classification that follows sees the budget exhausted --
+            # the only point in this single events() call a test can
+            # get between the two reads.
+            clock.advance(100)
             raise httpx.ReadTimeout("still waiting for headers")
 
-        with make_client(handler) as c:
-            self._patch_monotonic(monkeypatch, [0.0, 100.0])
-            with pytest.raises(TaskTimeout) as excinfo:
-                c.tasks.events(1, timeout=5)
+        with make_client(handler) as c, pytest.raises(TaskTimeout) as excinfo:
+            c.tasks.events(1, timeout=5)
         assert excinfo.value.code == "task_timeout"
 
     def test_read_timeout_while_waiting_for_headers_budget_open(
@@ -891,7 +923,7 @@ class TestLifecycle:
             next(stream)
 
     def test_paused_task_stream_exits_only_on_timeout(
-        self, make_client: Callable[..., AgentClient]
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
     ) -> None:
         chunks = [_sse.frame("task.status", {"status": "paused"}).encode()]
         chunks += [_sse.ping().encode()] * 10
@@ -900,7 +932,7 @@ class TestLifecycle:
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                stream=_sse.DelayedChunksStream(chunks, interval=0.05),
+                stream=_sse.ClockAdvancingStream(chunks, clock, interval=0.05),
             )
 
         with make_client(handler) as c:

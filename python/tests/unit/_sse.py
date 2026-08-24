@@ -9,9 +9,13 @@ rather than any shortcut through it.
 import json
 import time
 from collections.abc import Iterable, Iterator
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
+
+
+class _ClockLike(Protocol):
+    def advance(self, seconds: float) -> None: ...
 
 
 class RawByteStream(httpx.SyncByteStream):
@@ -96,6 +100,30 @@ class DelayedChunksStream(httpx.SyncByteStream):
     def __iter__(self) -> Iterator[bytes]:
         for chunk in self._chunks:
             time.sleep(self._interval)
+            yield chunk
+
+
+class ClockAdvancingStream(httpx.SyncByteStream):
+    """Yields ``chunks`` one at a time, advancing a fake clock by
+    ``interval`` before each one instead of sleeping.
+
+    Pairs with the ``clock`` fixture in ``test_events.py``: a test that
+    needs a wall-clock deadline to fire against a stream that otherwise
+    stays "healthy" (steady heartbeats) can drive that clock through
+    ``clock.advance()`` between chunks -- deterministic and instant --
+    instead of ``DelayedChunksStream``'s real ``time.sleep()``.
+    """
+
+    def __init__(
+        self, chunks: Iterable[bytes], clock: _ClockLike, interval: float
+    ) -> None:
+        self._chunks = list(chunks)
+        self._clock = clock
+        self._interval = interval
+
+    def __iter__(self) -> Iterator[bytes]:
+        for chunk in self._chunks:
+            self._clock.advance(self._interval)
             yield chunk
 
 
