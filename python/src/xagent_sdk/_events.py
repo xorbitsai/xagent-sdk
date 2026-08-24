@@ -36,7 +36,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 from xagent_sdk._http import HTTPClient
 from xagent_sdk.errors import (
@@ -45,7 +45,7 @@ from xagent_sdk.errors import (
     XAgentTransportError,
     from_response,
 )
-from xagent_sdk.types import Step, StreamEvent, StreamEventType
+from xagent_sdk.types import _STEP_ADAPTER, Step, StreamEvent, StreamEventType
 
 # How long events() will wait for the next byte (including a heartbeat)
 # before treating the connection as dead. Bounded by the caller's own
@@ -72,8 +72,6 @@ _STEP_EVENT_NAMES = frozenset(
     {StreamEventType.STEP_STARTED.value, StreamEventType.STEP_COMPLETED.value}
 )
 _KNOWN_EVENT_NAMES = frozenset(member.value for member in StreamEventType)
-
-_STEP_ADAPTER: TypeAdapter[Step] = TypeAdapter(Step)
 
 
 # --- SSE line assembly --------------------------------------------------
@@ -142,12 +140,23 @@ class _FrameAssembler:
         simply never dispatched -- the caller does not feed a final
         blank line on EOF, so that half-frame is silently discarded by
         omission, not by any code path here.
+      - The stream's very first line has a leading U+FEFF byte-order
+        mark stripped, if present, before anything else looks at it.
     """
 
     def __init__(self) -> None:
         self._builder = _FrameBuilder()
+        self._at_stream_start = True
 
     def feed(self, line: str) -> _RawFrame | _Ping | _Oversized | None:
+        if self._at_stream_start:
+            self._at_stream_start = False
+            # Per the SSE spec one leading U+FEFF belongs to the body's
+            # encoding, not to the first field name. httpx decodes as
+            # plain utf-8 (not utf-8-sig), so without this the first
+            # line's name is "﻿event" and the whole first frame is
+            # dropped as an unrecognized field.
+            line = line.removeprefix("﻿")
         if line == "":
             return self._dispatch()
         if line.startswith(":"):
@@ -166,8 +175,10 @@ class _FrameAssembler:
         b = self._builder
         if b.oversized:
             return
+        # Count the "\n" _dispatch() will insert before this part, so
+        # the tracked total is exactly len("\n".join(parts)).
+        b.char_count += len(value) + (1 if b.data_parts else 0)
         b.data_parts.append(value)
-        b.char_count += len(value)
         if b.char_count > _MAX_FRAME_CHARS:
             b.oversized = True
             b.data_parts = []  # Stop holding the oversized content in memory.
@@ -188,19 +199,24 @@ def _parse_frame(raw: _RawFrame) -> StreamEvent | None:
 
     Five independent reasons drop a frame rather than raising: no
     ``event:`` line, an event name outside the 8 known ones (forward
-    compatibility with a future 9th event), ``data:`` that is not valid
-    JSON, JSON that decodes to something other than an object, and (for
-    ``step.*`` frames only) a ``step`` payload that fails to parse as a
-    ``Step`` -- most importantly a step type this SDK release does not
-    know about, which is exactly the closed-enum fragility ``StepType``
-    documents. None of these may ever take down the whole stream: a
-    live connection must survive one bad frame.
+    compatibility with a future 9th event), ``data:`` this decoder
+    cannot parse (malformed, or nested deeply enough to exhaust the
+    recursion limit), JSON that decodes to something other than an
+    object, and (for ``step.*`` frames only) a ``step`` payload that
+    fails to parse as a ``Step`` -- most importantly a step type this
+    SDK release does not know about, which is exactly the closed-enum
+    fragility ``StepType`` documents. None of these may ever take down
+    the whole stream: a live connection must survive one bad frame.
     """
     if raw.event is None or raw.event not in _KNOWN_EVENT_NAMES:
         return None
     try:
         data = json.loads(raw.data)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # json.loads recurses per nesting level; a deeply nested `data:`
+        # payload exhausts Python's recursion limit and raises
+        # RecursionError, not ValueError -- still just one bad frame,
+        # not a reason to take down the stream.
         return None
     if not isinstance(data, dict):
         return None

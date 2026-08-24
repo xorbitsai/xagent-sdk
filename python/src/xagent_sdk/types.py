@@ -369,6 +369,7 @@ _CREATE_ADAPTER = TypeAdapter(CreateTaskResult)
 _APPEND_ADAPTER = TypeAdapter(AppendResult)
 _TASK_INFO_ADAPTER = TypeAdapter(TaskInfo)
 _STEP_LIST_ADAPTER = TypeAdapter(list[Step])
+_STEP_ADAPTER: TypeAdapter[Step] = TypeAdapter(Step)
 
 
 def _require_mapping(data: Any, what: str) -> dict[str, Any]:
