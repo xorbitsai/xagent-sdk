@@ -470,21 +470,38 @@ def open_task_event_stream(
             "transport_error", str(exc), http_status=None
         ) from exc
 
-    if resp.is_error:
-        resp.read()  # Required before from_response(): see errors.from_response.
-        error = from_response(resp)
-        connection.__exit__(None, None, None)
-        raise error
+    try:
+        if resp.is_error:
+            try:
+                # Required before from_response(): see errors.from_response.
+                resp.read()
+            except httpx.ReadTimeout as exc:
+                raise _classify_read_timeout(
+                    exc,
+                    task_id=task_id,
+                    timeout=timeout,
+                    deadline=deadline,
+                    closed_by=None,
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise XAgentTransportError(
+                    "transport_error", str(exc), http_status=None
+                ) from exc
+            raise from_response(resp)
 
-    content_type = resp.headers.get("content-type", "")
-    if content_type.split(";", 1)[0].strip() != "text/event-stream":
+        content_type = resp.headers.get("content-type", "")
+        if content_type.split(";", 1)[0].strip() != "text/event-stream":
+            raise MalformedResponse(
+                "malformed_response",
+                f"Expected content-type text/event-stream for the task "
+                f"event stream, got {content_type!r}",
+                http_status=None,
+            )
+    except BaseException:
+        # Covers Ctrl-C too: an interrupt during the error-body read must
+        # not leak the connection either.
         connection.__exit__(None, None, None)
-        raise MalformedResponse(
-            "malformed_response",
-            f"Expected content-type text/event-stream for the task "
-            f"event stream, got {content_type!r}",
-            http_status=None,
-        )
+        raise
 
     stream = TaskEventStream(
         connection=connection,

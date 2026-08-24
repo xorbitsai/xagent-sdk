@@ -57,15 +57,22 @@ class RaisingByteStream(httpx.SyncByteStream):
 
     Simulates a connection that breaks (or times out) partway through a
     response body -- something a canned ``bytes`` payload cannot do.
+    Also counts ``close()`` calls (see ``CloseRecordingStream``) so a
+    test can confirm the connection was released exactly once even on
+    this failing path.
     """
 
     def __init__(self, chunks: Iterable[bytes], exc: Exception) -> None:
         self._chunks = list(chunks)
         self._exc = exc
+        self.close_count = 0
 
     def __iter__(self) -> Iterator[bytes]:
         yield from self._chunks
         raise self._exc
+
+    def close(self) -> None:
+        self.close_count += 1
 
 
 class DelayedChunksStream(httpx.SyncByteStream):

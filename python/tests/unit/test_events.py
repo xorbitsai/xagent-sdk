@@ -529,6 +529,26 @@ class TestHttpErrorMapping:
         assert "text/html" in excinfo.value.message
         assert excinfo.value.http_status is None
 
+    def test_error_body_read_failure_wraps_and_releases_the_connection(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        """``resp.read()`` on an error response can itself fail over the
+        network (the status line arrived, the body did not). That raw
+        httpx failure must come out as an SDK exception, not escape
+        as-is, and the connection must still be released -- not leaked
+        because the cleanup only ran on the content-type/from_response
+        path.
+        """
+        body_stream = _sse.RaisingByteStream([], httpx.ReadError("connection reset"))
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, stream=body_stream)
+
+        with make_client(handler) as c, pytest.raises(XAgentTransportError) as excinfo:
+            c.tasks.events(1)
+        assert excinfo.value.code == "transport_error"
+        assert body_stream.close_count == 1
+
 
 class TestRequestShape:
     """What the request itself looks like: method, path, headers, and
