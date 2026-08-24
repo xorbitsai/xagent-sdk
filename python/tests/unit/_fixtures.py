@@ -33,15 +33,17 @@ def error_envelope(name: str) -> dict[str, Any]:
     return _load("errors", name)
 
 
-def stream_frames(name: str) -> list[dict[str, Any]]:
-    """Load the ordered ``{event, data}`` list from a task-event-stream
-    fixture (e.g. ``task_events_stream``).
+def stream_fixture(name: str) -> dict[str, Any]:
+    """Load a task-event-stream fixture (e.g. ``task_events_stream``) in
+    full: ``task_id``, the ordered ``frames`` list, and the separate
+    ``closing_frame_variants`` list.
 
     Unlike ``response()``, this is not the literal wire body -- callers
-    turn the returned frame list into their own SSE bytes, so the
-    fixture itself stays language-agnostic (see ``shared/README.md``).
+    turn ``frames`` (and, separately, entries from
+    ``closing_frame_variants``) into their own SSE bytes, so the fixture
+    itself stays language-agnostic (see ``shared/README.md``).
     """
-    return _load("responses", name)["frames"]  # type: ignore[no-any-return]
+    return _load("responses", name)
 
 
 def _load(bucket: str, name: str) -> dict[str, Any]:

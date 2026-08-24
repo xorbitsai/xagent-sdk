@@ -90,7 +90,11 @@ class _RawFrame:
 
 class _Ping:
     """Sentinel: a comment line (the server's ``: ping`` keep-alive) was
-    consumed. It produces no frame, but proves the connection is alive.
+    consumed. It produces no frame and advances nothing -- neither the
+    wall-clock deadline nor any liveness window. What keeps a silent
+    connection from hanging is the per-read timeout in
+    ``open_task_event_stream()``; a ping simply arrives before that
+    window elapses.
     """
 
 
@@ -129,8 +133,8 @@ class _FrameAssembler:
         the rest of the frame around it is still assembled normally.
       - A line starting with ``:`` is a comment -- the server's
         heartbeat. It never contributes to a frame; ``feed()`` reports it
-        as ``_PING`` immediately so the caller can treat it as proof the
-        connection is alive without waiting for a frame to complete.
+        as ``_PING`` immediately rather than waiting for a frame to
+        complete.
       - A frame whose accumulated ``data:`` character count exceeds
         ``_MAX_FRAME_CHARS`` is abandoned: further lines belonging to it
         are consumed without buffering, and ``_OVERSIZED`` is reported
@@ -444,9 +448,10 @@ class TaskEventStream:
         """Pull the next line, or ``None`` at EOF.
 
         Folds every lower-layer httpx failure into the SDK's exception
-        hierarchy here, so the frame-assembly loop in ``__next__`` never
-        sees a raw httpx exception. Each raising branch closes this
-        stream first, so no connection outlives an escaping exception.
+        hierarchy here, so the frame-assembly loop in
+        ``_pull_next_event`` never sees a raw httpx exception. Each
+        raising branch closes this stream first, so no connection
+        outlives an escaping exception.
         """
         try:
             return next(self._lines)

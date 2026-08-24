@@ -39,10 +39,13 @@ _WAIT_RETURN_STATUSES = _TERMINAL_STATUSES | frozenset({TaskStatus.WAITING_FOR_U
 class TasksAPI:
     """The ``client.tasks`` namespace.
 
-    All five endpoint methods are thin wrappers over the v1 endpoints:
-    build a request body, hand it to ``AgentClient._request`` for
-    transport + error mapping, then parse the success body into a frozen
-    dataclass.
+    Six of these methods map one-to-one onto a v1 endpoint. Five of them
+    are thin wrappers: build a request body, hand it to
+    ``AgentClient._request`` for transport + error mapping, then parse
+    the success body into a frozen dataclass. ``events()`` is the
+    exception -- it holds a streaming response open instead of parsing
+    one body, so it does its own transport and error mapping (see its
+    docstring).
 
     ``message`` arguments take a plain ``str`` rather than a structured
     object: the SDK only sends user-role messages (the v1 contract pins
@@ -297,7 +300,13 @@ class TasksAPI:
                 ``XAgentTransportError``, not ``TaskTimeout``, once the
                 fixed connect timeout elapses. ``AgentClient(timeout=...)``
                 has no effect here: this call always overrides it with
-                its own request-level timeout.
+                its own request-level timeout. The budget is checked
+                between reads, never during one, so a positive
+                ``timeout`` can overrun by up to one read window --
+                ``min(timeout, 60)`` seconds -- before ``TaskTimeout`` is
+                raised. The window cannot be narrowed as the deadline
+                approaches: the underlying HTTP layer fixes the read
+                timeout when the response body starts being read.
 
         Returns:
             A ``TaskEventStream`` bound to this ``task_id``.
@@ -339,6 +348,11 @@ class TasksAPI:
         between the two sources: attach *before* calling ``steps()``,
         not after, so nothing that happens in between is missed by
         both.
+
+        Not thread-safe: a single stream must be iterated and closed
+        from the thread that opened it. The ``AgentClient`` that created
+        it stays shareable across threads -- that guarantee is
+        unaffected.
         """
         return open_task_event_stream(self._client._http, task_id, timeout=timeout)
 

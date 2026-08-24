@@ -9,6 +9,7 @@ network.
 import gc
 from collections.abc import Callable
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
@@ -28,7 +29,7 @@ from xagent_sdk import (
 from xagent_sdk import _events as events_mod
 
 from . import _sse
-from ._fixtures import error_envelope, stream_frames
+from ._fixtures import error_envelope, stream_fixture
 
 # --- Shared helpers ----------------------------------------------------
 
@@ -47,6 +48,20 @@ def _counting_handler(
         return build()
 
     return handler, calls
+
+
+def _closing_frame_cases() -> list[tuple[str, dict[str, Any]]]:
+    """The three ways a connection can actually end, per the shared
+    fixture: the ``frames`` sequence's own closing frame
+    (``task.completed``), plus each entry of ``closing_frame_variants``
+    -- kept as a separate list there because one connection cannot end
+    three different ways at once (see ``shared/README.md``).
+    """
+    payload = stream_fixture("task_events_stream")
+    tail = payload["frames"][-1]
+    cases = [(tail["event"], tail["data"])]
+    cases += [(f["event"], f["data"]) for f in payload["closing_frame_variants"]]
+    return cases
 
 
 class _FakeClock:
@@ -630,6 +645,23 @@ class TestClosingSemantics:
         assert stream.last_event is not None
         assert stream.last_event.data["code"] == code
         assert events[-1] is stream.last_event
+
+    @pytest.mark.parametrize(("event", "data"), _closing_frame_cases())
+    def test_each_closing_frame_name_closes_cleanly(
+        self,
+        make_client: Callable[..., AgentClient],
+        event: str,
+        data: dict[str, Any],
+    ) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(
+                _sse.frame("task.status", {"status": "running"}),
+                _sse.frame(event, data),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            list(stream)  # must not raise
+        assert stream.closed_by == event
 
 
 class TestHttpErrorMapping:
@@ -1431,15 +1463,20 @@ class TestSharedFixtureParses:
     def test_stream_fixture_parses(
         self, make_client: Callable[..., AgentClient]
     ) -> None:
-        raw_frames = stream_frames("task_events_stream")
+        payload = stream_fixture("task_events_stream")
+        raw_frames = payload["frames"]
+        task_id = payload["task_id"]
+        captured: list[httpx.Request] = []
 
         def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
             return _sse.stream_response(
                 *[_sse.frame(f["event"], f["data"]) for f in raw_frames]
             )
 
-        with make_client(handler) as c, c.tasks.events(10) as stream:
+        with make_client(handler) as c, c.tasks.events(task_id) as stream:
             events = list(stream)
+        assert str(task_id) in captured[0].url.path
         assert [e.event for e in events] == [f["event"] for f in raw_frames]
         assert stream.dropped_frame_count == 0
         assert stream.closed_by == "task.completed"

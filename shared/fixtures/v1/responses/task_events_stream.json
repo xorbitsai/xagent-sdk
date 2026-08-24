@@ -48,5 +48,18 @@
       "event": "task.completed",
       "data": {"status": "completed", "output": "391", "error": null}
     }
+  ],
+  "closing_frame_variants": [
+    {
+      "event": "task.input_required",
+      "data": {
+        "status": "waiting_for_user",
+        "pending_interaction": {"question": "Which currency?", "interactions": null}
+      }
+    },
+    {
+      "event": "stream.error",
+      "data": {"code": "stream_lifetime_exceeded", "message": "stream closed by the server"}
+    }
   ]
 }
