@@ -529,6 +529,31 @@ class TestHttpErrorMapping:
         assert "text/html" in excinfo.value.message
         assert excinfo.value.http_status is None
 
+    def test_content_type_match_is_case_insensitive(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # Media types are case-insensitive (RFC 9110), and httpx returns
+        # header values with their original casing -- a proxy that
+        # normalizes casing must not turn a genuine event stream into a
+        # MalformedResponse.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "Text/Event-Stream; charset=utf-8"},
+                stream=_sse.RawByteStream(
+                    [
+                        _sse.frame(
+                            "task.completed",
+                            {"status": "completed", "output": None, "error": None},
+                        ).encode()
+                    ]
+                ),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+
     def test_error_body_read_failure_wraps_and_releases_the_connection(
         self, make_client: Callable[..., AgentClient]
     ) -> None:

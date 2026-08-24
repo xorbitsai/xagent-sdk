@@ -490,7 +490,9 @@ def open_task_event_stream(
             raise from_response(resp)
 
         content_type = resp.headers.get("content-type", "")
-        if content_type.split(";", 1)[0].strip() != "text/event-stream":
+        # Media types are case-insensitive (RFC 9110); the error text
+        # below still echoes the original casing.
+        if content_type.split(";", 1)[0].strip().lower() != "text/event-stream":
             raise MalformedResponse(
                 "malformed_response",
                 f"Expected content-type text/event-stream for the task "
