@@ -332,28 +332,41 @@ class TaskEventStream:
     def __next__(self) -> StreamEvent:
         if self._closed:
             raise StopIteration
+        try:
+            return self._pull_next_event()
+        except BaseException:
+            # Single owner for "nothing leaves iteration with the
+            # connection still open" -- covers the frame-parsing step,
+            # which has no close() of its own.
+            self._close_quietly()
+            raise
+
+    def _pull_next_event(self) -> StreamEvent:
         while True:
-            self._check_deadline()
             line = self._next_line()
             if line is None:
+                # EOF is checked before the wall-clock budget: a stream
+                # that already reached its end has nothing left to time
+                # out on, and a for-loop always makes one extra call
+                # after the last frame to observe StopIteration.
                 self._finish_eof()
                 raise StopIteration
             parsed = self._assembler.feed(line)
-            if parsed is None:
-                continue
-            if parsed is _PING:
-                continue
-            if parsed is _OVERSIZED:
+            if isinstance(parsed, _RawFrame):
+                event = _parse_frame(parsed)
+                if event is not None:
+                    self._last_event = event
+                    self._closed_by = event.event
+                    return event
                 self._dropped_frame_count += 1
-                continue
-            assert isinstance(parsed, _RawFrame)  # narrows for mypy
-            event = _parse_frame(parsed)
-            if event is None:
+            elif parsed is _OVERSIZED:
                 self._dropped_frame_count += 1
-                continue
-            self._last_event = event
-            self._closed_by = event.event
-            return event
+            # Only reached when another read is needed: a delivered
+            # frame and EOF both win over an elapsed deadline, and a
+            # silent connection still fails on the read timeout, which
+            # _classify_read_timeout turns into TaskTimeout once the
+            # budget is gone.
+            self._check_deadline()
 
     # --- Context manager ----------------------------------------------
 
@@ -383,6 +396,15 @@ class TaskEventStream:
             return
         self._closed = True
         self._connection.__exit__(None, None, None)
+
+    def _close_quietly(self) -> None:
+        """Release on a failing path without letting a close failure
+        replace the exception being raised: the caller is entitled to
+        see the TaskTimeout / XAgentTransportError that actually
+        describes what happened, not an httpx close error.
+        """
+        with contextlib.suppress(Exception):
+            self.close()
 
     # --- Internals ------------------------------------------------
 
