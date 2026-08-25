@@ -914,14 +914,15 @@ class TestRequestShape:
         assert req.headers["authorization"] == "Bearer xag_secret"
 
     @pytest.mark.parametrize(
-        ("timeout", "expected_read"),
-        [(None, 60.0), (120.0, 60.0), (5.0, 5.0)],
+        ("timeout", "expected_read", "expected_connect_pool"),
+        [(None, 60.0, 10.0), (120.0, 60.0, 10.0), (5.0, 5.0, 5.0)],
     )
     def test_stream_request_timeout_override(
         self,
         make_client: Callable[..., AgentClient],
         timeout: float | None,
         expected_read: float,
+        expected_connect_pool: float,
     ) -> None:
         captured: list[httpx.Request] = []
 
@@ -943,10 +944,10 @@ class TestRequestShape:
         # half is covered by TestTimeoutClassification and the e2e
         # suite.
         assert request_timeout == {
-            "connect": 10.0,
+            "connect": expected_connect_pool,
             "read": expected_read,
             "write": 10.0,
-            "pool": 10.0,
+            "pool": expected_connect_pool,
         }
 
 
@@ -968,13 +969,13 @@ class TestTimeoutValidationAndDeadlines:
     def test_timeout_zero_raises_before_any_event(
         self, make_client: Callable[..., AgentClient]
     ) -> None:
-        calls = {"n": 0}
+        captured: list[httpx.Request] = []
         body_stream = _sse.CloseRecordingStream(
             [_sse.body(_sse.frame("task.status", {"status": "running"}))]
         )
 
         def handler(req: httpx.Request) -> httpx.Response:
-            calls["n"] += 1
+            captured.append(req)
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
@@ -992,7 +993,16 @@ class TestTimeoutValidationAndDeadlines:
         # returns one), so "zero events, zero dropped frames" is not
         # independently observable here -- it follows from checkpoint
         # (i) running before the first _next_line() call.
-        assert calls["n"] == 1
+        assert len(captured) == 1
+        # timeout=0 keeps every ceiling: it is documented as "open the
+        # connection once, then raise", so clamping the legs to 0 would
+        # change that contract, not enforce it.
+        assert captured[0].extensions["timeout"] == {
+            "connect": 10.0,
+            "read": 60.0,
+            "write": 10.0,
+            "pool": 10.0,
+        }
         # The connection opened for that one call must still be
         # released, not leaked because the deadline checkpoint fired
         # before a TaskEventStream existed to own the close.
@@ -1067,11 +1077,11 @@ class TestTimeoutValidationAndDeadlines:
         assert stream.closed_by == "task.completed"
 
 
-class TestReadTimeoutClassification:
-    """The same httpx.ReadTimeout means different SDK exceptions
-    depending on the remaining wall-clock budget. Uses the ``clock``
-    fixture rather than a real sleep, so the "budget already exhausted"
-    branch is deterministic instead of racing a real clock.
+class TestTimeoutClassification:
+    """The same httpx timeout means different SDK exceptions depending
+    on the remaining wall-clock budget. Uses the ``clock`` fixture
+    rather than a real sleep, so the "budget already exhausted" branch
+    is deterministic instead of racing a real clock.
     """
 
     def test_mid_stream_read_timeout_budget_exhausted(
@@ -1143,6 +1153,39 @@ class TestReadTimeoutClassification:
     ) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             raise httpx.ReadTimeout("still waiting for headers")
+
+        with make_client(handler) as c, pytest.raises(XAgentTransportError) as excinfo:
+            c.tasks.events(1, timeout=None)
+        assert excinfo.value.code == "transport_error"
+
+    @pytest.mark.parametrize("exc_type", [httpx.ConnectTimeout, httpx.PoolTimeout])
+    def test_open_time_timeout_budget_exhausted(
+        self,
+        make_client: Callable[..., AgentClient],
+        clock: _FakeClock,
+        exc_type: type[httpx.TimeoutException],
+    ) -> None:
+        # Connect and pool legs are clamped to the caller's budget too,
+        # so either of them can be how the budget runs out. Both must
+        # classify as TaskTimeout, not as a transport failure.
+        def handler(req: httpx.Request) -> httpx.Response:
+            clock.advance(100)
+            raise exc_type("leg timed out")
+
+        with make_client(handler) as c, pytest.raises(TaskTimeout) as excinfo:
+            c.tasks.events(1, timeout=5)
+        assert excinfo.value.code == "task_timeout"
+
+    @pytest.mark.parametrize("exc_type", [httpx.ConnectTimeout, httpx.PoolTimeout])
+    def test_open_time_timeout_budget_open(
+        self,
+        make_client: Callable[..., AgentClient],
+        exc_type: type[httpx.TimeoutException],
+    ) -> None:
+        # Control leg: with no budget to exhaust, the same exception is
+        # a transport failure -- the ceiling was hit on its own.
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise exc_type("leg timed out")
 
         with make_client(handler) as c, pytest.raises(XAgentTransportError) as excinfo:
             c.tasks.events(1, timeout=None)

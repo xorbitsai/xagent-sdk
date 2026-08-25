@@ -284,29 +284,34 @@ class TasksAPI:
             task_id: The task to attach to.
             timeout: Wall-clock budget in seconds for the whole call,
                 including the time spent opening the connection. Must be
-                non-negative. ``None`` (the default) sets no local
-                budget -- the connection still cannot idle past the
-                server's 15-second heartbeat, or its 1-hour per-stream
-                cap. ``0`` is legal but not instantaneous: it still
-                opens the connection once (so a 401/404/429 still maps
-                the same way), and only raises ``TaskTimeout`` -- before
+                non-negative. It is a budget enforced at checkpoints,
+                not a hard cap -- see the overrun note at the end.
+                ``None`` (the default) sets no local budget -- the
+                connection still cannot idle past the server's
+                15-second heartbeat, or its 1-hour per-stream cap.
+                ``0`` is legal but not instantaneous: it still opens
+                the connection once (so a 401/404/429 still maps the
+                same way), and only raises ``TaskTimeout`` -- before
                 delivering any event -- once that finishes, which can
                 itself take up to roughly 10s (connect) + 60s (waiting
-                for the first byte) in the worst case. A ``timeout``
-                between 0 and 60 shortens how long a silent connection
-                is tolerated before raising, but does not shorten the
-                fixed 10-second connect phase -- a small ``timeout``
-                whose budget is spent stuck connecting still raises
-                ``XAgentTransportError``, not ``TaskTimeout``, once the
-                fixed connect timeout elapses. ``AgentClient(timeout=...)``
-                has no effect here: this call always overrides it with
-                its own request-level timeout. The budget is checked
-                between reads, never during one, so a positive
-                ``timeout`` can overrun by up to one read window --
-                ``min(timeout, 60)`` seconds -- before ``TaskTimeout`` is
-                raised. The window cannot be narrowed as the deadline
-                approaches: the underlying HTTP layer fixes the read
-                timeout when the response body starts being read.
+                for the first byte) in the worst case. For a positive
+                ``timeout``, every phase that can block is clamped to
+                it: connect and the wait for a free connection get
+                ``min(timeout, 10)`` seconds, each read window gets
+                ``min(timeout, 60)``. So a budget spent stuck
+                connecting, stuck waiting for a connection, or stuck
+                waiting for the next byte raises ``TaskTimeout``. The
+                reverse case -- a leg hitting its own ceiling while the
+                budget still has room -- is ``XAgentTransportError``.
+                ``AgentClient(timeout=...)`` has no effect here: this
+                call always overrides it with its own request-level
+                timeout. The budget is checked between reads, never
+                during one, so a positive ``timeout`` can overrun by up
+                to one read window -- ``min(timeout, 60)`` seconds --
+                before ``TaskTimeout`` is raised. The window cannot be
+                narrowed as the deadline approaches: the underlying
+                HTTP layer fixes the read timeout when the response
+                body starts being read.
 
         Returns:
             A ``TaskEventStream`` bound to this ``task_id``.

@@ -40,7 +40,11 @@ from dataclasses import dataclass, field
 import httpx
 from pydantic import ValidationError
 
-from xagent_sdk._http import HTTPClient
+from xagent_sdk._http import (
+    _STREAM_CONNECT_TIMEOUT,
+    _STREAM_POOL_TIMEOUT,
+    HTTPClient,
+)
 from xagent_sdk.errors import (
     MalformedResponse,
     TaskTimeout,
@@ -53,6 +57,23 @@ from xagent_sdk.types import _STEP_ADAPTER, Step, StreamEvent, StreamEventType
 # before treating the connection as dead. Bounded by the caller's own
 # timeout when that is smaller -- see open_task_event_stream().
 _STREAM_READ_TIMEOUT = 60.0
+
+
+def _clamped_leg(ceiling: float, timeout: float | None) -> float:
+    """One httpx timeout leg, never outlasting the caller's budget.
+
+    With a positive ``timeout``, a blocking phase gets the smaller of
+    its own ceiling and the whole budget, so a budget spent stuck
+    connecting or stuck waiting for a free pool slot expires as a
+    ``TaskTimeout`` instead of running the fixed ceiling out first.
+    ``timeout is None`` means no budget, and ``timeout == 0`` keeps the
+    full ceilings on purpose: that value is documented as "open the
+    connection once, then raise", not "raise instantly".
+    """
+    if timeout is None or timeout <= 0.0:
+        return ceiling
+    return min(timeout, ceiling)
+
 
 # The server silently drops an inbound broadcast frame once its own
 # measured text exceeds 262144 characters. This SDK-side cap on a
@@ -256,8 +277,8 @@ def _parse_frame(raw: _RawFrame) -> StreamEvent | None:
 
 def _timeout_message(task_id: int, timeout: float | None, closed_by: str | None) -> str:
     """Shared wording for every ``TaskTimeout`` this module raises, so the
-    proactive wall-clock checkpoints and the ``ReadTimeout`` classification
-    branch (see ``_classify_read_timeout``) cannot drift apart.
+    proactive wall-clock checkpoints and the timeout classification
+    branch (see ``_classify_timeout``) cannot drift apart.
     """
     return (
         f"Stream for task {task_id} did not close within {timeout}s "
@@ -265,24 +286,29 @@ def _timeout_message(task_id: int, timeout: float | None, closed_by: str | None)
     )
 
 
-def _classify_read_timeout(
-    exc: httpx.ReadTimeout,
+def _classify_timeout(
+    exc: httpx.TimeoutException,
     *,
     task_id: int,
     timeout: float | None,
     deadline: float | None,
     closed_by: str | None,
 ) -> TaskTimeout | XAgentTransportError:
-    """Turn one ``httpx.ReadTimeout`` into the right SDK exception.
+    """Turn one ``httpx.TimeoutException`` into the right SDK exception.
 
-    The same httpx exception means two different things depending on
-    the caller's remaining wall-clock budget: budget exhausted means the
-    caller's own ``timeout`` elapsed (``TaskTimeout``); budget still open
-    means the connection stayed silent for a full read-timeout window
-    without even a heartbeat, which is a transport problem, not a
-    deadline (``XAgentTransportError``). Shared by the open-time
-    ReadTimeout (still waiting for response headers) and every
-    mid-stream ReadTimeout, so the two do not classify differently by
+    Every leg that can block -- connect, read, pool -- is clamped to
+    the caller's own budget in ``open_task_event_stream()``, so any of
+    them can be the way that budget runs out and all of them classify
+    here. The same exception means two different things depending on
+    the remaining wall-clock budget: budget exhausted means the
+    caller's own ``timeout`` elapsed (``TaskTimeout``); budget still
+    open means one leg hit its own ceiling with room to spare -- a
+    connection that never came up, a pool slot that never freed, or a
+    connection that stayed silent for a full read window without even a
+    heartbeat -- which is a transport problem, not a deadline
+    (``XAgentTransportError``). Shared by the open-time path (still
+    waiting for response headers, or waiting for a slot) and every
+    mid-stream timeout, so the two do not classify differently by
     accident.
     """
     if deadline is not None and time.monotonic() >= deadline:
@@ -405,8 +431,8 @@ class TaskEventStream:
             # Only reached when another read is needed: a delivered
             # frame and EOF both win over an elapsed deadline, and a
             # silent connection still fails on the read timeout, which
-            # _classify_read_timeout turns into TaskTimeout once the
-            # budget is gone.
+            # _classify_timeout turns into TaskTimeout once the budget
+            # is gone.
             self._check_deadline()
 
     # --- Context manager ----------------------------------------------
@@ -484,9 +510,9 @@ class TaskEventStream:
             return next(self._lines)
         except StopIteration:
             return None
-        except httpx.ReadTimeout as exc:
+        except httpx.TimeoutException as exc:
             self._close_quietly()
-            raise _classify_read_timeout(
+            raise _classify_timeout(
                 exc,
                 task_id=self._task_id,
                 timeout=self._timeout,
@@ -527,19 +553,18 @@ def open_task_event_stream(
     if timeout is not None and timeout < 0:
         raise ValueError("timeout must be non-negative")
     deadline = None if timeout is None else time.monotonic() + timeout
-    read_timeout = (
-        _STREAM_READ_TIMEOUT
-        if timeout is None or timeout <= 0.0
-        else min(timeout, _STREAM_READ_TIMEOUT)
-    )
 
     connection = http.stream_lines(
-        "GET", f"/v1/chat/tasks/{task_id}/events", read_timeout=read_timeout
+        "GET",
+        f"/v1/chat/tasks/{task_id}/events",
+        connect_timeout=_clamped_leg(_STREAM_CONNECT_TIMEOUT, timeout),
+        read_timeout=_clamped_leg(_STREAM_READ_TIMEOUT, timeout),
+        pool_timeout=_clamped_leg(_STREAM_POOL_TIMEOUT, timeout),
     )
     try:
         resp, lines = connection.__enter__()
-    except httpx.ReadTimeout as exc:
-        raise _classify_read_timeout(
+    except httpx.TimeoutException as exc:
+        raise _classify_timeout(
             exc, task_id=task_id, timeout=timeout, deadline=deadline, closed_by=None
         ) from exc
     except httpx.HTTPError as exc:
@@ -552,8 +577,8 @@ def open_task_event_stream(
             try:
                 # Required before from_response(): see errors.from_response.
                 resp.read()
-            except httpx.ReadTimeout as exc:
-                raise _classify_read_timeout(
+            except httpx.TimeoutException as exc:
+                raise _classify_timeout(
                     exc,
                     task_id=task_id,
                     timeout=timeout,
