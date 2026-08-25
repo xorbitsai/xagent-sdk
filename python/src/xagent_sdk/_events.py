@@ -14,13 +14,16 @@ frame this stream delivered" is the fact this module tracks, not "stop
 at the first closing frame seen": a ``[conclusion, stream.error]``
 close must resolve to the ``stream.error``.
 
-No independent ``httpx.Client`` is used for streaming, and no
-constructor parameter tunes how many streams may run at once at the
-transport level: httpx's connection-pool limit does not govern how many
-concurrent streaming responses share a pool, and an open stream does
-not block ordinary requests sharing the same pool. A second ``Client``
-(and the extra close()/lifecycle it would need) would not buy any
-isolation those two claims don't already give up front.
+Streaming shares the enclosing client's single ``httpx.Client``, and so
+shares that client's connection pool: an open stream holds one of the
+pool's ``max_connections`` slots for as long as it stays open, and an
+ordinary request that finds every slot taken waits out its pool timeout
+and then fails with ``XAgentTransportError``. The server allows 2
+concurrent streams per task and 32 per API key; a caller that wants to
+run several at once has to raise ``max_connections`` (default 10) to
+cover the streams plus whatever headroom its ordinary calls need. This
+release has no separate pool for streams and no admission control --
+the pool size is the only knob.
 
 Only a frame's ``event`` name is ever branch-matched on in this module.
 A ``stream.error`` frame's ``message`` text is not part of the wire

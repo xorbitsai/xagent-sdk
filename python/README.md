@@ -477,6 +477,13 @@ in the same process is safe: each holds its own ``httpx.Client``, so
 their default headers (and connection pools) do not bleed into each
 other.
 
+**Streams and the pool**: each open `agent.tasks.events(...)` stream holds one
+connection from the same pool until it is closed. The server allows 2
+concurrent streams per task and 32 per API key, so if you intend to run
+several at once, raise `max_connections` above the number of concurrent
+streams plus the headroom your ordinary calls need — otherwise an ordinary
+request can wait out its pool timeout and fail with `XAgentTransportError`.
+
 `transport=` accepts any `httpx.BaseTransport` — useful for custom
 retry/proxy/TLS configuration in production, and for
 `httpx.MockTransport` in tests.
