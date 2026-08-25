@@ -315,7 +315,7 @@ SDK-coined codes:
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream that ended before delivering a closing frame |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers with a status other than 200 |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream`, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status` |
 | `TaskTimeout` | `wait()` / `run()` deadline elapsed, or `events()`'s own `timeout` budget elapsed |
 
 The SDK does **not** retry automatically. Wrap calls with your own

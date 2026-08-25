@@ -322,7 +322,9 @@ class TasksAPI:
                 retrying.
             MalformedResponse: the response was 200 but its
                 content-type was not ``text/event-stream`` (e.g. a proxy
-                returned an HTML error page).
+                returned an HTML error page), or the response's status
+                was neither an error nor 200 (a redirect or a 204) --
+                that status is carried on ``http_status`` in this case.
             XAgentTransportError: a network failure, or the connection
                 ended before delivering a closing frame.
             TaskTimeout: the ``timeout`` budget elapsed first.

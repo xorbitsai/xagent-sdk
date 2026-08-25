@@ -6,11 +6,13 @@ one frame per named event (an ``event: <name>`` line, a ``data:
 <json>`` line, then a blank line), plus an occasional ``: ping``
 comment line as a keep-alive. There are 8 event names; three of them --
 ``task.completed``, ``task.input_required``, ``stream.error`` -- are
-closing frames. A server that attaches to an already-finished task can
-still send step frames *after* one of those (a one-time history
-snapshot) followed by another closing frame, so "the last frame this
-stream delivered" is the fact this module tracks -- not "stop at the
-first closing frame seen".
+closing frames. When the server attaches to an already-finished task it
+sends that attach's one-shot step snapshot *before* the conclusion
+frame, and the only frame that can follow a conclusion is a
+``stream.error`` naming why the snapshot is incomplete -- so "the last
+frame this stream delivered" is the fact this module tracks, not "stop
+at the first closing frame seen": a ``[conclusion, stream.error]``
+close must resolve to the ``stream.error``.
 
 No independent ``httpx.Client`` is used for streaming, and no
 constructor parameter tunes how many streams may run at once at the

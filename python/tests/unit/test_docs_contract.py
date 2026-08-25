@@ -154,3 +154,20 @@ class TestStreamingErrorTable:
                     assert "events()" in stripped
                     found.add(name)
         assert found == expected
+
+    def test_malformed_response_row_mentions_events_and_both_causes(self) -> None:
+        # MalformedResponse has two events()-specific triggers (a
+        # wrong content-type, and a status that is neither an error
+        # nor 200) -- a doc edit that drops either one back to a
+        # single cause must fail this, not just an edit that deletes
+        # the row outright.
+        found = False
+        for line in self._table_block().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("| `MalformedResponse`"):
+                assert "events()" in stripped
+                assert "content type" in stripped
+                assert "text/event-stream" in stripped
+                assert "neither an error nor 200" in stripped
+                found = True
+        assert found
