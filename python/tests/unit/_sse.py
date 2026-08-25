@@ -7,7 +7,6 @@ rather than any shortcut through it.
 """
 
 import json
-import time
 from collections.abc import Iterable, Iterator
 from typing import Any, Protocol
 
@@ -97,30 +96,6 @@ class RaisingByteStream(httpx.SyncByteStream):
             raise self._close_exc
 
 
-class DelayedChunksStream(httpx.SyncByteStream):
-    """Yields ``chunks`` one at a time, sleeping ``interval`` real
-    wall-clock seconds before each one.
-
-    ``httpx.MockTransport`` does not enforce read timeouts on its own --
-    a stub that merely calls ``time.sleep()`` inside a single ``__iter__``
-    body still returns to the caller in one shot with no ``ReadTimeout``.
-    A test that needs a wall-clock deadline to actually observe elapsed
-    time (e.g. a stream that must eventually time out while an
-    otherwise-healthy peer keeps sending heartbeats) needs the sleep to
-    happen *between* chunks the SDK reads one at a time, which is what
-    this does.
-    """
-
-    def __init__(self, chunks: Iterable[bytes], interval: float) -> None:
-        self._chunks = list(chunks)
-        self._interval = interval
-
-    def __iter__(self) -> Iterator[bytes]:
-        for chunk in self._chunks:
-            time.sleep(self._interval)
-            yield chunk
-
-
 class ClockAdvancingStream(httpx.SyncByteStream):
     """Yields ``chunks`` one at a time, advancing a fake clock by
     ``interval`` before each one instead of sleeping.
@@ -129,7 +104,7 @@ class ClockAdvancingStream(httpx.SyncByteStream):
     needs a wall-clock deadline to fire against a stream that otherwise
     stays "healthy" (steady heartbeats) can drive that clock through
     ``clock.advance()`` between chunks -- deterministic and instant --
-    instead of ``DelayedChunksStream``'s real ``time.sleep()``.
+    without a real ``time.sleep()``.
     """
 
     def __init__(

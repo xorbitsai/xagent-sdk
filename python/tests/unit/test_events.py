@@ -892,11 +892,16 @@ class TestTimeoutValidationAndDeadlines:
         self, make_client: Callable[..., AgentClient]
     ) -> None:
         calls = {"n": 0}
+        body_stream = _sse.CloseRecordingStream(
+            [_sse.body(_sse.frame("task.status", {"status": "running"}))]
+        )
 
         def handler(req: httpx.Request) -> httpx.Response:
             calls["n"] += 1
-            return _sse.stream_response(
-                _sse.frame("task.status", {"status": "running"})
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
             )
 
         with make_client(handler) as c, pytest.raises(TaskTimeout) as excinfo:
@@ -911,6 +916,10 @@ class TestTimeoutValidationAndDeadlines:
         # independently observable here -- it follows from checkpoint
         # (i) running before the first _next_line() call.
         assert calls["n"] == 1
+        # The connection opened for that one call must still be
+        # released, not leaked because the deadline checkpoint fired
+        # before a TaskEventStream existed to own the close.
+        assert body_stream.close_count == 1
 
     def test_pings_are_swallowed_and_do_not_count_as_dropped(
         self, make_client: Callable[..., AgentClient]
@@ -1472,6 +1481,34 @@ class TestOversizedFrame:
                 "task.completed",
                 {"status": "completed", "output": None, "error": None},
             )
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 1
+
+    def test_oversized_frame_ignores_further_data_lines_until_resync(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # Once a frame has already tripped the cap, more `data:` lines
+        # belonging to that same frame must not grow the abandoned
+        # buffer or count as further drops -- the frame is dispatched
+        # (dropped) exactly once, at its terminating blank line, and
+        # the connection resyncs cleanly on the next frame.
+        huge = "x" * (events_mod._MAX_FRAME_CHARS + 1)
+        raw = (
+            f"event: task.status\r\ndata: {huge}\r\n"
+            f'data: {{"status": "still oversized"}}\r\n\r\n'
+        ) + _sse.frame(
+            "task.completed", {"status": "completed", "output": None, "error": None}
         )
 
         def handler(req: httpx.Request) -> httpx.Response:
