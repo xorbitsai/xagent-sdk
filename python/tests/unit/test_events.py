@@ -111,16 +111,24 @@ class TestSSEParsing:
     def test_multiline_data_joins_with_newline(
         self, make_client: Callable[..., AgentClient]
     ) -> None:
-        # Hand-built frame: two `data:` lines, which the SSE spec joins
-        # with "\n". The server itself never emits this (single-line
-        # json.dumps), but the parser must still support it. The split
-        # lands right after the colon -- a real newline there is legal
-        # JSON whitespace between a key and its value -- while the
-        # value itself carries a JSON-escaped "\n" (two characters,
-        # backslash then "n", entirely on the second data: line): a raw
-        # control character inside a JSON string is illegal even once
-        # assembled, so this is the only way to get a genuine embedded
-        # newline into the decoded value and still have valid JSON.
+        # Two `data:` lines, which the SSE spec joins with "\n". The
+        # server itself never emits this (single-line json.dumps), but
+        # the parser must still support it.
+        #
+        # The decoded value on its own cannot pin the separator, and no
+        # payload can make it: a raw newline is illegal inside a JSON
+        # string, and outside one it is ignorable whitespace, so every
+        # split point that keeps the payload decodable yields the same
+        # object under "\n", "" and " ". The assembled `_RawFrame.data`
+        # is the observation that does change, so assert on that
+        # first, then keep the decoded value for the end-to-end path.
+        assembler = events_mod._FrameAssembler()
+        for line in ("event: task.status", 'data: {"t":', 'data: "a\\nb"}'):
+            assert assembler.feed(line) is None
+        assert assembler.feed("") == events_mod._RawFrame(
+            event="task.status", data='{"t":\n"a\\nb"}'
+        )
+
         raw = 'event: task.status\r\ndata: {"t":\r\ndata: "a\\nb"}\r\n\r\n'
 
         def handler(req: httpx.Request) -> httpx.Response:
