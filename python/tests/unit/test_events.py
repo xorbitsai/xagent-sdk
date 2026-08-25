@@ -1150,6 +1150,65 @@ class TestLifecycle:
             # never read.
             assert body_stream.close_count == 1
 
+    def test_exit_keeps_in_flight_exception_over_close_failure(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # The caller's own ValueError is the reason this `with` block is
+        # unwinding; a close() failure on the way out must not shadow
+        # it with an unrelated httpx teardown error.
+        body_stream = _sse.CloseRecordingStream(
+            [_sse.body(_sse.frame("task.status", {"status": "running"}))],
+            close_exc=RuntimeError("connection pool exploded"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        def fail_mid_stream(c: AgentClient) -> None:
+            with c.tasks.events(1) as stream:
+                next(stream)
+                raise ValueError("business logic failed")
+
+        with (
+            make_client(handler) as c,
+            pytest.raises(ValueError, match="business logic failed"),
+        ):
+            fail_mid_stream(c)
+        assert body_stream.close_count == 1
+
+    def test_exit_reports_close_failure_when_no_exception_in_flight(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # Control leg for the case above: with no business exception to
+        # protect, a close() failure on a clean exit must still surface
+        # normally rather than being swallowed.
+        body_stream = _sse.CloseRecordingStream(
+            [_sse.body(_sse.frame("task.status", {"status": "running"}))],
+            close_exc=RuntimeError("connection pool exploded"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        def read_one_frame(c: AgentClient) -> None:
+            with c.tasks.events(1) as stream:
+                next(stream)
+
+        with (
+            make_client(handler) as c,
+            pytest.raises(RuntimeError, match="connection pool exploded"),
+        ):
+            read_one_frame(c)
+        assert body_stream.close_count == 1
+
     def test_close_idempotent(self, make_client: Callable[..., AgentClient]) -> None:
         body_stream = _sse.CloseRecordingStream(
             [_sse.body(_sse.frame("task.status", {"status": "running"}))]

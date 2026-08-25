@@ -394,7 +394,13 @@ class TaskEventStream:
         return self
 
     def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
-        self.close()
+        if exc_type is not None:
+            # A close failure must not replace the exception already in
+            # flight -- the caller is owed the error that describes what
+            # happened, not an httpx teardown error.
+            self._close_quietly()
+        else:
+            self.close()
 
     def __del__(self) -> None:
         # Delegates to the idempotent close(), so running after an

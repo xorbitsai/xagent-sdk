@@ -42,18 +42,27 @@ class CloseRecordingStream(httpx.SyncByteStream):
 
     Lets a test observe that the SDK really released the underlying
     response body -- and released it exactly once -- with no side
-    channel other than the byte stream itself.
+    channel other than the byte stream itself. ``close_exc``, if given,
+    is raised from ``close()`` after the count is still recorded --
+    for a test that needs a clean read followed by a *failing* close,
+    as opposed to ``RaisingByteStream``, which always fails the read
+    too.
     """
 
-    def __init__(self, chunks: Iterable[bytes]) -> None:
+    def __init__(
+        self, chunks: Iterable[bytes], *, close_exc: Exception | None = None
+    ) -> None:
         self._chunks = list(chunks)
         self.close_count = 0
+        self._close_exc = close_exc
 
     def __iter__(self) -> Iterator[bytes]:
         yield from self._chunks
 
     def close(self) -> None:
         self.close_count += 1
+        if self._close_exc is not None:
+            raise self._close_exc
 
 
 class RaisingByteStream(httpx.SyncByteStream):
