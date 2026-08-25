@@ -7,7 +7,8 @@ network.
 """
 
 import gc
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -1400,6 +1401,78 @@ class TestLifecycle:
             del stream
             gc.collect()
             assert body_stream.close_count == 1
+
+    def test_close_failure_is_not_retried_by_a_later_close(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # The failure surfaces once (the control leg above already pins
+        # that), and then the release stays one-shot: neither a second
+        # close() nor __del__ makes another attempt.
+        body_stream = _sse.CloseRecordingStream(
+            [_sse.body(_sse.frame("task.status", {"status": "running"}))],
+            close_exc=RuntimeError("connection pool exploded"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1)
+            next(stream)
+            with pytest.raises(RuntimeError, match="connection pool exploded"):
+                stream.close()
+            # A failed release still counts as closed: iteration must stop
+            # quietly, per close()'s contract, rather than resume reading.
+            with pytest.raises(StopIteration):
+                next(stream)
+            stream.close()  # must not raise, and must not release again
+            del stream
+            gc.collect()
+        assert body_stream.close_count == 1
+
+    def test_a_failed_context_manager_exit_cannot_be_retried(self) -> None:
+        # Why close() is one-shot rather than retrying: the connection
+        # is a @contextmanager generator. Once its first __exit__ has
+        # run it past the final yield, a second __exit__ gets
+        # StopIteration from the exhausted generator and returns False
+        # without running any release code -- a "retry" there would
+        # report success while doing nothing at all.
+        releases: list[str] = []
+
+        @contextmanager
+        def connection() -> Iterator[None]:
+            try:
+                yield None
+            finally:
+                releases.append("release")
+                raise RuntimeError("release failed")
+
+        cm = connection()
+        cm.__enter__()
+        with pytest.raises(RuntimeError, match="release failed"):
+            cm.__exit__(None, None, None)
+        assert cm.__exit__(None, None, None) is False
+        assert releases == ["release"]
+
+    def test_httpx_close_does_not_attempt_a_second_release(self) -> None:
+        # The other half of why a retry is a no-op: httpx.Response.close()
+        # flips is_closed before touching the stream, so a second call
+        # returns without a second release attempt. If httpx ever
+        # reverses that order, this SDK's one-shot release policy would
+        # need to change with it.
+        body_stream = _sse.CloseRecordingStream(
+            [b"x"], close_exc=RuntimeError("teardown failed")
+        )
+        resp = httpx.Response(200, stream=body_stream)
+        resp.request = httpx.Request("GET", "https://test.example")
+        with pytest.raises(RuntimeError, match="teardown failed"):
+            resp.close()
+        resp.close()
+        assert body_stream.close_count == 1
 
     def test_client_close_invalidates_open_stream(self) -> None:
         transport = _sse.ClosableTransport(None)

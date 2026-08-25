@@ -468,10 +468,26 @@ class TaskEventStream:
         already-exhausted stream return no frames instead of reopening
         the connection.
 
-        A failing release is attempted once and then reported: the
-        stream is flagged closed either way, so a later close()/__del__
-        does not re-enter a context manager's __exit__ that already
-        raised.
+        A failing release is attempted exactly once, then reported.
+        Retrying it is not possible, and would report success without
+        doing anything:
+
+        - ``self._connection`` is a ``@contextmanager`` generator. Its
+          first ``__exit__`` already drove that generator past its final
+          ``yield``; a second ``__exit__`` calls ``next()`` on an
+          exhausted generator, receives ``StopIteration``, and returns
+          ``False`` without running one line of release code.
+        - The release underneath is ``httpx.Response.close()``, which
+          sets ``is_closed = True`` *before* touching the stream, so
+          even reached directly a second call returns immediately.
+        - The connection lease goes back to the pool regardless: a
+          raising ``close()`` reports a teardown error, it does not
+          strand the lease. (Measured against a real server on a
+          one-slot pool: the next ordinary request succeeded.)
+
+        So the stream is flagged closed either way, and a later
+        ``close()``/``__del__`` is a no-op rather than a re-entry into a
+        context manager's ``__exit__`` that already raised.
         """
         if self._closed:
             return
