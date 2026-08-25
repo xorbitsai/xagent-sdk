@@ -322,6 +322,26 @@ The SDK does **not** retry automatically. Wrap calls with your own
 policy (e.g., [tenacity](https://tenacity.readthedocs.io/)) if you
 want retry on transport errors or `TaskBusy`.
 
+### 8. Stream task events
+
+`events()` delivers each frame as it arrives instead of waiting for the
+task to finish. `closed_by` tells you which frame ended the stream:
+
+```python
+from xagent_sdk import AgentClient
+
+with AgentClient() as agent:
+    task = agent.tasks.create(agent_id=42, message="Summarize the doc.")
+    with agent.tasks.events(task.task_id) as stream:
+        for ev in stream:
+            print(ev.event, ev.data)
+    print(stream.closed_by)  # 'task.completed' on a clean finish
+```
+
+This is the minimal shape only -- reconnecting after a dropped
+connection and reconciling against `steps()` is its own recipe, covered
+in a later change.
+
 ## API reference
 
 All methods are synchronous.
