@@ -103,9 +103,11 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> _FakeClock:
 
 class TestSSEParsing:
     """Line-level framing: multi-line data, comment lines, blank-line
-    framing, EOF residue discard. CRLF handling itself is httpx's
-    ``iter_lines()``, exercised implicitly by every test in this module
-    (``stream_response`` always sends ``\\r\\n``).
+    framing, EOF residue discard. The frame builders default to the
+    server's own LF terminator; CRLF handling itself is httpx's
+    ``iter_lines()``, exercised by ``test_crlf_wire_format_parses``
+    below and by the hand-built ``\\r\\n`` payloads used throughout the
+    rest of this module.
     """
 
     def test_multiline_data_joins_with_newline(
@@ -191,16 +193,15 @@ class TestSSEParsing:
         assert event.event == "task.status"
         assert stream.dropped_frame_count == 0
 
-    def test_lf_only_wire_format_parses(
+    def test_crlf_wire_format_parses(
         self, make_client: Callable[..., AgentClient]
     ) -> None:
-        # The server always sends "\r\n" (every other test in this
-        # module relies on that), but a bare "\n" is equally legal SSE.
-        # This must decode identically to the CRLF form.
-        raw = _sse.frame("task.status", {"status": "running"}, sep="\n") + _sse.frame(
+        # The server sends "\n" -- what the builders now default to --
+        # but "\r\n" is equally legal SSE and must decode identically.
+        raw = _sse.frame("task.status", {"status": "running"}, sep="\r\n") + _sse.frame(
             "task.completed",
             {"status": "completed", "output": None, "error": None},
-            sep="\n",
+            sep="\r\n",
         )
 
         def handler(req: httpx.Request) -> httpx.Response:

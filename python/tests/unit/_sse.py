@@ -120,21 +120,25 @@ class ClockAdvancingStream(httpx.SyncByteStream):
             yield chunk
 
 
-def frame(event: str, data: dict[str, Any] | str, *, sep: str = "\r\n") -> str:
+def frame(event: str, data: dict[str, Any] | str, *, sep: str = "\n") -> str:
     """One well-formed SSE frame: ``event:``, ``data:``, then a blank line.
 
     ``data`` is JSON-encoded unless already given as a literal string
     (for building deliberately malformed bodies). ``sep`` is the line
-    terminator: the server always emits ``\\r\\n``, but a bare ``\\n`` is
-    equally legal SSE, and a test can pass it to exercise that wire
-    format too.
+    terminator and defaults to the server's own: it emits ``\\n``
+    (``shared/README.md`` documents that wire form). ``\\r\\n`` is
+    equally legal SSE, and a test that wants that variant passes it
+    explicitly.
     """
     payload = data if isinstance(data, str) else json.dumps(data)
     return f"event: {event}{sep}data: {payload}{sep}{sep}"
 
 
-def ping(*, sep: str = "\r\n") -> str:
-    """One heartbeat comment frame, matching the server's ``: ping``."""
+def ping(*, sep: str = "\n") -> str:
+    """One heartbeat comment frame, matching the server's ``: ping``.
+
+    Same default as ``frame()``: the server terminates it with ``\\n``.
+    """
     return f": ping{sep}{sep}"
 
 
