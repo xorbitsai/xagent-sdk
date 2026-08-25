@@ -841,6 +841,50 @@ class TestHttpErrorMapping:
         assert excinfo.value.code == "transport_error"
         assert body_stream.close_count == 1
 
+    def test_open_time_close_failure_keeps_the_malformed_response(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # A 200 with the wrong content-type is rejected before the body
+        # is ever read, so the cleanup at the end of the open path is
+        # what performs the release. If that release also fails, the
+        # caller is still owed the MalformedResponse that explains what
+        # was wrong -- not the transport's teardown error.
+        body_stream = _sse.CloseRecordingStream(
+            [_sse.body(_sse.frame("task.status", {"status": "running"}))],
+            close_exc=RuntimeError("connection pool exploded"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, headers={"content-type": "text/html"}, stream=body_stream
+            )
+
+        with make_client(handler) as c, pytest.raises(MalformedResponse) as excinfo:
+            c.tasks.events(1)
+        assert excinfo.value.code == "malformed_response"
+        assert body_stream.close_count == 1
+
+    def test_open_time_close_failure_keeps_the_body_read_error(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # Same rule on the error-body path: a read that dies mid-body
+        # leaves the response open, so the cleanup performs the release
+        # here too, and a failing release must not replace the
+        # XAgentTransportError that describes the read failure.
+        body_stream = _sse.RaisingByteStream(
+            [],
+            httpx.ReadError("connection reset"),
+            close_exc=RuntimeError("connection pool exploded"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, stream=body_stream)
+
+        with make_client(handler) as c, pytest.raises(XAgentTransportError) as excinfo:
+            c.tasks.events(1)
+        assert excinfo.value.code == "transport_error"
+        assert body_stream.close_count == 1
+
 
 class TestRequestShape:
     """What the request itself looks like: method, path, headers, and

@@ -589,8 +589,14 @@ def open_task_event_stream(
             )
     except BaseException:
         # Covers Ctrl-C too: an interrupt during the error-body read must
-        # not leak the connection either.
-        connection.__exit__(None, None, None)
+        # not leak the connection either. Suppressed like every other
+        # failing path in this module (see
+        # ``TaskEventStream._close_quietly``): an exception is always
+        # already in flight here, and it is the one that describes what
+        # happened -- a TaskNotFound or a MalformedResponse must not be
+        # replaced by an httpx teardown error.
+        with contextlib.suppress(Exception):
+            connection.__exit__(None, None, None)
         raise
 
     stream = TaskEventStream(
