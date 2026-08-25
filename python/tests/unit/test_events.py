@@ -377,6 +377,31 @@ class TestPerFrameDefense:
         assert stream.dropped_frame_count == 1
         assert body_stream.close_count == 1
 
+    @pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+    def test_non_finite_json_constant_is_dropped(
+        self, make_client: Callable[..., AgentClient], constant: str
+    ) -> None:
+        # Python's json decoder accepts these three by default. They are
+        # not JSON, the server cannot emit them, and the contract says a
+        # frame whose data: does not decode is dropped and counted --
+        # not delivered carrying a float nobody promised.
+        raw = _sse.frame("task.status", f'{{"value": {constant}}}') + _sse.frame(
+            "task.completed",
+            {"status": "completed", "output": None, "error": None},
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 1
+
 
 class TestClosingSemantics:
     """The closing-frame set, EOF judgment, and how exceptions preserve

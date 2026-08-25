@@ -199,6 +199,21 @@ class _FrameAssembler:
         return _RawFrame(event=b.event, data="\n".join(b.data_parts))
 
 
+def _reject_non_finite(constant: str) -> float:
+    """``json.loads`` hook for ``NaN`` / ``Infinity`` / ``-Infinity``.
+
+    Python's decoder accepts all three by default; JSON has no
+    non-finite number literal, and the server's own serializer cannot
+    produce one -- every payload it sends is either a pydantic
+    ``model_dump(mode="json")`` (which renders a non-finite float as
+    ``null``) or a hand-built literal. A frame carrying one is
+    therefore malformed, and raising ``ValueError`` routes it into the
+    same drop-and-count path as any other undecodable ``data:`` rather
+    than delivering a float the wire contract never promised.
+    """
+    raise ValueError(f"{constant} is not valid JSON")
+
+
 def _parse_frame(raw: _RawFrame) -> StreamEvent | None:
     """Decode one assembled frame into a ``StreamEvent``, or ``None`` if
     it should be dropped.
@@ -206,23 +221,27 @@ def _parse_frame(raw: _RawFrame) -> StreamEvent | None:
     Five independent reasons drop a frame rather than raising: no
     ``event:`` line, an event name outside the 8 known ones (forward
     compatibility with a future 9th event), ``data:`` this decoder
-    cannot parse (malformed, or nested deeply enough to exhaust the
-    recursion limit), JSON that decodes to something other than an
-    object, and (for ``step.*`` frames only) a ``step`` payload that
-    fails to parse as a ``Step`` -- most importantly a step type this
-    SDK release does not know about, which is exactly the closed-enum
-    fragility ``StepType`` documents. None of these may ever take down
-    the whole stream: a live connection must survive one bad frame.
+    cannot parse (malformed, carrying a non-finite number literal, or
+    nested deeply enough to exhaust the recursion limit), JSON that
+    decodes to something other than an object, and (for ``step.*``
+    frames only) a ``step`` payload that fails to parse as a ``Step``
+    -- most importantly a step type this SDK release does not know
+    about, which is exactly the closed-enum fragility ``StepType``
+    documents. None of these may ever take down the whole stream: a
+    live connection must survive one bad frame.
     """
     if raw.event is None or raw.event not in _KNOWN_EVENT_NAMES:
         return None
     try:
-        data = json.loads(raw.data)
+        data = json.loads(raw.data, parse_constant=_reject_non_finite)
     except (ValueError, RecursionError):
-        # json.loads recurses per nesting level; a deeply nested `data:`
-        # payload exhausts Python's recursion limit and raises
-        # RecursionError, not ValueError -- still just one bad frame,
-        # not a reason to take down the stream.
+        # Two shapes of undecodable data land here. json.loads recurses
+        # per nesting level, so a deeply nested `data:` payload
+        # exhausts Python's recursion limit and raises RecursionError,
+        # not ValueError. And `_reject_non_finite` raises ValueError for
+        # NaN / Infinity / -Infinity, which the decoder would otherwise
+        # accept. Either way it is one bad frame, not a reason to take
+        # down the stream.
         return None
     if not isinstance(data, dict):
         return None
