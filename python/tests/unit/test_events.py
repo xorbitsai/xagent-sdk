@@ -102,6 +102,24 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> _FakeClock:
     return fake
 
 
+class _LogRecorder:
+    """Stand-in for ``_events.logger``: records ``warning()`` calls.
+
+    Bound in with ``monkeypatch.setattr(events_mod, "logger", recorder)``
+    rather than asserting via ``caplog`` -- that reads the standard
+    logging machinery back after the fact, whereas replacing the module's
+    own ``logger`` name observes exactly what this module called and
+    with what arguments, with no handler/propagation configuration in
+    between.
+    """
+
+    def __init__(self) -> None:
+        self.warnings: list[tuple[str, tuple[Any, ...]]] = []
+
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self.warnings.append((msg, args))
+
+
 class TestSSEParsing:
     """Line-level framing: multi-line data, comment lines, blank-line
     framing, EOF residue discard. The frame builders default to the
@@ -1442,6 +1460,43 @@ class TestTimeoutClassification:
                 list(stream)
         assert excinfo.value.code == "task_timeout"
         assert body_stream.close_count == 1
+
+    def test_a_failed_quiet_release_is_reported(
+        self,
+        make_client: Callable[..., AgentClient],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The read failure is the real story (-> XAgentTransportError,
+        # as in the control cases above); the underlying close() also
+        # failing must not replace that exception, and must not vanish
+        # unreported either -- a release that raises can leave this
+        # connection's pool slot held for the life of the client, and
+        # nothing else would ever say so.
+        recorder = _LogRecorder()
+        monkeypatch.setattr(events_mod, "logger", recorder)
+        body_stream = _sse.RaisingByteStream(
+            [_sse.frame("task.status", {"status": "running"}).encode()],
+            httpx.ReadError("connection reset"),
+            close_exc=RuntimeError("connection pool exploded"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        with make_client(handler) as c, pytest.raises(XAgentTransportError) as excinfo:
+            list(c.tasks.events(1))
+        assert excinfo.value.code == "transport_error"
+        assert body_stream.close_count == 1
+        assert len(recorder.warnings) == 1
+        msg, args = recorder.warnings[0]
+        assert (msg % args) == (
+            "releasing the event stream for task 1 failed; its "
+            "connection may still be holding a slot in the client's pool"
+        )
 
 
 class TestLifecycle:

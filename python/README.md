@@ -483,6 +483,9 @@ concurrent streams per task and 32 per API key, so if you intend to run
 several at once, raise `max_connections` above the number of concurrent
 streams plus the headroom your ordinary calls need — otherwise an ordinary
 request can wait out its pool timeout and fail with `XAgentTransportError`.
+A release that itself fails to close can hold its slot for the life of the
+client; the SDK logs a warning naming the task when that happens rather than
+letting it pass unnoticed.
 
 `transport=` accepts any `httpx.BaseTransport` — useful for custom
 retry/proxy/TLS configuration in production, and for

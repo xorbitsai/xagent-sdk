@@ -23,7 +23,10 @@ concurrent streams per task and 32 per API key; a caller that wants to
 run several at once has to raise ``max_connections`` (default 10) to
 cover the streams plus whatever headroom its ordinary calls need. This
 release has no separate pool for streams and no admission control --
-the pool size is the only knob.
+the pool size is the only knob. A release that fails to close can hold
+its slot for the life of the client (see ``TaskEventStream.close()``);
+a failure on a path that cannot re-raise it is logged instead of being
+silently dropped.
 
 Only a frame's ``event`` name is ever branch-matched on in this module.
 A ``stream.error`` frame's ``message`` text is not part of the wire
@@ -35,6 +38,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import math
 import time
 from collections.abc import Iterator
@@ -56,6 +60,8 @@ from xagent_sdk.errors import (
     from_response,
 )
 from xagent_sdk.types import _STEP_ADAPTER, Step, StreamEvent, StreamEventType
+
+logger = logging.getLogger(__name__)
 
 # How long events() will wait for the next byte (including a heartbeat)
 # before treating the connection as dead. Bounded by the caller's own
@@ -521,10 +527,14 @@ class TaskEventStream:
             self.close()
 
     def __del__(self) -> None:
-        # Delegates to the idempotent close(), so running after an
-        # explicit close() releases nothing a second time.
+        # Delegates to the idempotent close() (via _close_quietly(), so
+        # a failing release here is logged rather than lost), so
+        # running after an explicit close() releases nothing a second
+        # time. The outer suppress stays regardless: __del__ runs
+        # during interpreter teardown on an unpredictable schedule, and
+        # even the logging call itself can raise at that point.
         with contextlib.suppress(Exception):
-            self.close()
+            self._close_quietly()
 
     def close(self) -> None:
         """Release the connection.
@@ -548,10 +558,16 @@ class TaskEventStream:
         - The release underneath is ``httpx.Response.close()``, which
           sets ``is_closed = True`` *before* touching the stream, so
           even reached directly a second call returns immediately.
-        - The connection lease goes back to the pool regardless: a
-          raising ``close()`` reports a teardown error, it does not
-          strand the lease. (Measured against a real server on a
-          one-slot pool: the next ordinary request succeeded.)
+        - The connection lease is *not* guaranteed to go back to the
+          pool. ``httpcore``'s ``PoolByteStream.close()`` marks itself
+          closed, then closes the underlying stream -- where a raise
+          can happen -- and only afterwards removes the request from
+          the pool's queue; a raising close skips that removal, and
+          because the closed flag is already set, nothing can retry it
+          and get a second chance. The slot can stay held for the life
+          of the client. So a failing release has to be reported
+          rather than trusted to have cleaned up after itself -- see
+          ``_close_quietly()``.
 
         So the stream is flagged closed either way, and a later
         ``close()``/``__del__`` is a no-op rather than a re-entry into a
@@ -568,10 +584,21 @@ class TaskEventStream:
         """Release on a failing path without letting a close failure
         replace the exception being raised: the caller is entitled to
         see the TaskTimeout / XAgentTransportError that actually
-        describes what happened, not an httpx close error.
+        describes what happened, not an httpx close error. Reported
+        rather than swallowed -- a release that raises can leave this
+        connection's pool slot held for the life of the client (see
+        ``close()``), and nothing else would ever say so.
         """
-        with contextlib.suppress(Exception):
+        try:
             self.close()
+        except Exception:
+            logger.warning(
+                "releasing the event stream for task %s failed; its "
+                "connection may still be holding a slot in the client's "
+                "pool",
+                self._task_id,
+                exc_info=True,
+            )
 
     # --- Internals ------------------------------------------------
 
