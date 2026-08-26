@@ -25,8 +25,9 @@ cover the streams plus whatever headroom its ordinary calls need. This
 release has no separate pool for streams and no admission control --
 the pool size is the only knob. A release that fails to close can hold
 its slot for the life of the client (see ``TaskEventStream.close()``);
-a failure on a path that cannot re-raise it is logged instead of being
-silently dropped.
+once a ``TaskEventStream`` exists, a failure on a path that cannot
+re-raise it is logged instead of being silently dropped (see
+``TaskEventStream._close_quietly()``).
 
 Only a frame's ``event`` name is ever branch-matched on in this module.
 A ``stream.error`` frame's ``message`` text is not part of the wire
