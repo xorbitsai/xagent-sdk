@@ -447,11 +447,10 @@ class TestPerFrameDefense:
     @pytest.mark.parametrize(
         "literal",
         [
-            "1e999",
-            "-1e999",
-            "1e400",
             '{"x": 1e999}',
-            "[1, 2, 1e999]",
+            '{"x": -1e999}',
+            '{"x": 1e400}',
+            '{"a": [1, 2, 1e999]}',
         ],
     )
     def test_overflowing_float_literal_is_dropped(
@@ -460,9 +459,47 @@ class TestPerFrameDefense:
         # An ordinary float literal that overflows float() to +-inf
         # (not one of the NaN/Infinity/-Infinity tokens _reject_non_finite
         # already catches) must still be caught -- it is not valid JSON
-        # either. The nested cases (object/array) confirm parse_float
-        # fires regardless of where the literal sits in the payload.
+        # either. Every row here is wrapped in a dict specifically so it
+        # actually reaches _reject_non_finite_number: a bare top-level
+        # scalar or array carrying the same overflowing literal is
+        # dropped anyway by the unrelated "data: must decode to a JSON
+        # object" rule, so it would stay green with parse_float removed
+        # and would not be testing this guard at all -- see
+        # test_non_dict_top_level_payload_with_an_overflowing_literal_
+        # is_dropped for that case, pinned separately as existing
+        # behavior. The nested-array case (last row) confirms
+        # parse_float fires regardless of how deep the literal sits,
+        # as long as the payload is still an object at the top.
         raw = _sse.frame("task.status", literal) + _sse.frame(
+            "task.completed",
+            {"status": "completed", "output": None, "error": None},
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 1
+
+    def test_non_dict_top_level_payload_with_an_overflowing_literal_is_dropped(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # Not a test of parse_float, deliberately: a top-level array
+        # (or scalar) is dropped by _parse_frame's existing
+        # isinstance(data, dict) check regardless of what overflows
+        # inside it -- removing parse_float=_reject_non_finite_number
+        # and rerunning confirmed this row stays green either way.
+        # Pinned here as its own existing-behavior guard, kept apart
+        # from the dict-wrapped rows above that actually exercise the
+        # new guard, so a future change to either rule gets caught by
+        # the test that actually depends on it.
+        raw = _sse.frame("task.status", "[1, 2, 1e999]") + _sse.frame(
             "task.completed",
             {"status": "completed", "output": None, "error": None},
         )
