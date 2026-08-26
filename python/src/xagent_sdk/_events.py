@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import time
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
@@ -238,6 +239,25 @@ def _reject_non_finite(constant: str) -> float:
     raise ValueError(f"{constant} is not valid JSON")
 
 
+def _reject_non_finite_number(literal: str) -> float:
+    """``json.loads`` hook for ordinary float literals.
+
+    ``_reject_non_finite`` only fires for the three non-finite
+    *tokens* (``NaN`` / ``Infinity`` / ``-Infinity``); an ordinary
+    literal that overflows on conversion (``1e999``) is handled by the
+    default ``float()`` and silently becomes ``inf`` unless this hook
+    catches it too. Same conclusion either way: JSON has no non-finite
+    number, so a frame carrying one is malformed and goes down the
+    drop-and-count path. A literal that underflows to ``0.0`` (e.g.
+    ``1e-999``) is a legitimate, representable JSON number and is not
+    rejected here -- underflow does not produce a non-finite value.
+    """
+    value = float(literal)
+    if not math.isfinite(value):
+        raise ValueError(f"{literal} is not a finite JSON number")
+    return value
+
+
 def _parse_frame(raw: _RawFrame) -> StreamEvent | None:
     """Decode one assembled frame into a ``StreamEvent``, or ``None`` if
     it should be dropped.
@@ -245,14 +265,21 @@ def _parse_frame(raw: _RawFrame) -> StreamEvent | None:
     Five independent reasons drop a frame rather than raising: no
     ``event:`` line, an event name outside the 8 known ones (forward
     compatibility with a future 9th event), ``data:`` this decoder
-    cannot parse (malformed, carrying a non-finite number literal, or
-    nested deeply enough to exhaust the recursion limit), JSON that
-    decodes to something other than an object, and (for ``step.*``
-    frames only) a ``step`` payload that fails to parse as a ``Step``
-    -- most importantly a step type this SDK release does not know
-    about, which is exactly the closed-enum fragility ``StepType``
-    documents. None of these may ever take down the whole stream: a
-    live connection must survive one bad frame.
+    cannot parse (malformed, carrying a non-finite number literal or a
+    float literal that overflows to one, or nested deeply enough to
+    exhaust the recursion limit), JSON that decodes to something other
+    than an object, and (for ``step.*`` frames only) a ``step`` payload
+    that fails to parse as a ``Step`` -- most importantly a step type
+    this SDK release does not know about, which is exactly the
+    closed-enum fragility ``StepType`` documents. None of these may
+    ever take down the whole stream: a live connection must survive
+    one bad frame.
+
+    An oversized *integer* literal is not a separate reason: CPython's
+    string-to-int conversion already refuses one past
+    ``sys.get_int_max_str_digits()`` with a ``ValueError``, which the
+    ``except`` clause below catches like any other malformed ``data:``.
+    There is no non-finite ``int``, so nothing else is needed there.
 
     One exception to the "data: does not parse -> drop" reason: a
     closing frame (``task.completed``, ``task.input_required``,
@@ -276,14 +303,20 @@ def _parse_frame(raw: _RawFrame) -> StreamEvent | None:
         # something this module observed, "corrupt" would be a guess.
         return StreamEvent(event=raw.event, data={}, step=None)
     try:
-        data = json.loads(raw.data, parse_constant=_reject_non_finite)
+        data = json.loads(
+            raw.data,
+            parse_constant=_reject_non_finite,
+            parse_float=_reject_non_finite_number,
+        )
     except (ValueError, RecursionError):
         # Two shapes of undecodable data land here. json.loads recurses
         # per nesting level, so a deeply nested `data:` payload
         # exhausts Python's recursion limit and raises RecursionError,
-        # not ValueError. And `_reject_non_finite` raises ValueError for
-        # NaN / Infinity / -Infinity, which the decoder would otherwise
-        # accept. Either way it is one bad frame, not a reason to take
+        # not ValueError. And `_reject_non_finite` /
+        # `_reject_non_finite_number` raise ValueError for NaN /
+        # Infinity / -Infinity and for a float literal that overflows
+        # to one, which the decoder would otherwise accept or silently
+        # coerce. Either way it is one bad frame, not a reason to take
         # down the stream.
         return None
     if not isinstance(data, dict):

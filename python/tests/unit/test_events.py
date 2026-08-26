@@ -404,6 +404,87 @@ class TestPerFrameDefense:
         assert [e.event for e in events] == ["task.completed"]
         assert stream.dropped_frame_count == 1
 
+    @pytest.mark.parametrize(
+        "literal",
+        [
+            "1e999",
+            "-1e999",
+            "1e400",
+            '{"x": 1e999}',
+            "[1, 2, 1e999]",
+        ],
+    )
+    def test_overflowing_float_literal_is_dropped(
+        self, make_client: Callable[..., AgentClient], literal: str
+    ) -> None:
+        # An ordinary float literal that overflows float() to +-inf
+        # (not one of the NaN/Infinity/-Infinity tokens _reject_non_finite
+        # already catches) must still be caught -- it is not valid JSON
+        # either. The nested cases (object/array) confirm parse_float
+        # fires regardless of where the literal sits in the payload.
+        raw = _sse.frame("task.status", literal) + _sse.frame(
+            "task.completed",
+            {"status": "completed", "output": None, "error": None},
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 1
+
+    def test_underflowing_float_literal_is_delivered(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # The reverse control: a literal that underflows to 0.0 is a
+        # legitimate, representable JSON number and must not be caught
+        # by the same guard -- only non-finite results are rejected.
+        raw = _sse.frame("task.status", '{"x": 1e-999}')
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            event = next(stream)
+        assert event.data["x"] == 0.0
+        assert stream.dropped_frame_count == 0
+
+    def test_oversized_integer_literal_is_dropped(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # A 5000-digit integer literal exceeds CPython's
+        # sys.get_int_max_str_digits() (4300 by default) and is caught
+        # by the same except clause as any other undecodable data:,
+        # with no dedicated handling needed -- there is no non-finite
+        # int.
+        digits = "1" * 5000
+        raw = _sse.frame("task.status", f'{{"x": {digits}}}') + _sse.frame(
+            "task.completed",
+            {"status": "completed", "output": None, "error": None},
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 1
+
     @pytest.mark.parametrize("event", ["task.status", "message.delta"])
     def test_content_frame_without_a_body_is_still_dropped(
         self, make_client: Callable[..., AgentClient], event: str
