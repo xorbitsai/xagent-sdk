@@ -288,10 +288,17 @@ class TasksAPI:
         Args:
             task_id: The task to attach to.
             timeout: Wall-clock budget in seconds for the whole call,
-                including the time spent opening the connection. Must be
-                a finite, non-negative number. It is a budget enforced
-                at checkpoints, not a hard cap -- see the overrun note
-                at the end.
+                including the time spent opening the connection and the
+                time this call is idle between frames -- once you get an
+                event back, the clock keeps running while your code
+                holds onto it before asking for the next one. It stops
+                applying the moment a closing frame (``task.completed``,
+                ``task.input_required``, or ``stream.error``) has
+                arrived: the stream is then let to end on a clean EOF no
+                matter how much of the budget is left. Must be a finite,
+                non-negative number. It is a budget enforced at
+                checkpoints, not a hard cap -- see the overrun note at
+                the end.
                 ``None`` (the default) sets no local budget -- the
                 connection still cannot idle past the server's
                 15-second heartbeat, or its 1-hour per-stream cap.

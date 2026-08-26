@@ -104,7 +104,16 @@ class ClockAdvancingStream(httpx.SyncByteStream):
     needs a wall-clock deadline to fire against a stream that otherwise
     stays "healthy" (steady heartbeats) can drive that clock through
     ``clock.advance()`` between chunks -- deterministic and instant --
-    without a real ``time.sleep()``.
+    without a real ``time.sleep()``. ``interval=0`` advances the clock
+    by nothing on each pull, leaving a test free to call
+    ``clock.advance()`` itself between reads instead.
+
+    ``sent`` counts how many chunks have actually been pulled off the
+    stream so far -- not how many were handed to the constructor. A
+    test asserting a deadline fired *before* the next read (rather than
+    merely before that read finished) checks ``sent`` stayed at the
+    count it had after the last frame it saw, not that the read failed
+    or was interrupted midway.
     """
 
     def __init__(
@@ -113,10 +122,12 @@ class ClockAdvancingStream(httpx.SyncByteStream):
         self._chunks = list(chunks)
         self._clock = clock
         self._interval = interval
+        self.sent = 0
 
     def __iter__(self) -> Iterator[bytes]:
         for chunk in self._chunks:
             self._clock.advance(self._interval)
+            self.sent += 1
             yield chunk
 
 

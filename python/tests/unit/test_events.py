@@ -1293,14 +1293,35 @@ class TestTimeoutValidationAndDeadlines:
                 next(stream)
         assert stream.closed_by == "task.completed"
 
-    def test_deadline_still_fires_after_a_delivered_frame(
+    def test_deadline_still_fires_after_a_delivered_non_closing_frame(
         self, make_client: Callable[..., AgentClient], clock: _FakeClock
     ) -> None:
-        # A delivered frame wins over the checkpoint on its own turn --
-        # even a closing one -- but that is not a standing exemption
-        # for the rest of the stream: if the connection keeps sending
-        # instead of ending at EOF right after (pings, here), the
-        # deadline still fires on a later turn.
+        # A non-closing frame does not exempt the rest of the stream
+        # from the budget: if the connection keeps sending instead of
+        # closing right after (pings, here), the deadline still fires
+        # on a later turn.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(
+                _sse.frame("task.status", {"status": "running"}),
+                *([_sse.ping()] * 5),
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1, timeout=10)
+            first = next(stream)
+            assert first.event == "task.status"
+            clock.advance(60)
+            with pytest.raises(TaskTimeout):
+                list(stream)
+        assert stream.closed_by == "task.status"
+
+    def test_a_closing_frame_ends_the_budget(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        # The mirror image of the test above: once the delivered frame
+        # is a closing one, the budget stops applying for the rest of
+        # the stream -- an elapsed deadline no longer fires even though
+        # the connection keeps sending (pings) before EOF.
         def handler(req: httpx.Request) -> httpx.Response:
             return _sse.stream_response(
                 _sse.frame(
@@ -1315,9 +1336,76 @@ class TestTimeoutValidationAndDeadlines:
             first = next(stream)
             assert first.event == "task.completed"
             clock.advance(60)
+            with pytest.raises(StopIteration):
+                next(stream)
+        assert stream.closed_by == "task.completed"
+        assert stream.dropped_frame_count == 0
+
+    def test_a_producing_stream_still_hits_the_budget(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        # Guards against the R4 claim that a stream where every read
+        # yields a complete frame can never hit the budget: even a
+        # steadily producing, never-closing stream is checked before
+        # every read, so it still times out. This is a regression
+        # guard, not proof the checkpoint moved -- it was already true
+        # before this change (a frame's own field line always makes at
+        # least one read that returns no event, which is where the old
+        # end-of-loop checkpoint fired); ``sent < 50`` is what actually
+        # distinguishes "timed out" from "ran the producer dry".
+        stream_body = _sse.ClockAdvancingStream(
+            [_sse.frame("task.status", {"status": "running"}).encode()] * 50,
+            clock,
+            interval=5,
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=stream_body,
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1, timeout=10)
             with pytest.raises(TaskTimeout):
                 list(stream)
-        assert stream.closed_by == "task.completed"
+        assert stream_body.sent < 50
+
+    def test_budget_spent_in_the_caller_loop_raises_before_the_next_read(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        # The one test in this group that actually distinguishes the
+        # old checkpoint position from the new one: both raise
+        # TaskTimeout here, so the exception type alone proves nothing.
+        # What only the new position (checked before a read, not after
+        # one) gets right is that no further chunk is pulled off the
+        # wire once the caller's own time between calls has already
+        # spent the budget.
+        stream_body = _sse.ClockAdvancingStream(
+            [
+                _sse.frame("task.status", {"status": "running"}).encode(),
+                _sse.frame("task.status", {"status": "running"}).encode(),
+            ],
+            clock,
+            interval=0,
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=stream_body,
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1, timeout=10)
+            first = next(stream)
+            assert first.event == "task.status"
+            clock.advance(60)  # spent entirely between reads, by the caller
+            with pytest.raises(TaskTimeout):
+                next(stream)
+        assert stream_body.sent == 1
 
 
 class TestTimeoutClassification:

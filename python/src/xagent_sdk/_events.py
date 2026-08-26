@@ -499,12 +499,10 @@ class TaskEventStream:
 
     def _pull_next_event(self) -> StreamEvent:
         while True:
+            if self._budget_applies():
+                self._check_deadline()
             line = self._next_line()
             if line is None:
-                # EOF is checked before the wall-clock budget: a stream
-                # that already reached its end has nothing left to time
-                # out on, and a for-loop always makes one extra call
-                # after the last frame to observe StopIteration.
                 self._finish_eof()
                 raise StopIteration
             parsed = self._assembler.feed(line)
@@ -517,12 +515,24 @@ class TaskEventStream:
                 self._dropped_frame_count += 1
             elif parsed is _OVERSIZED:
                 self._dropped_frame_count += 1
-            # Only reached when another read is needed: a delivered
-            # frame and EOF both win over an elapsed deadline, and a
-            # silent connection still fails on the read timeout, which
-            # _classify_timeout turns into TaskTimeout once the budget
-            # is gone.
-            self._check_deadline()
+
+    def _budget_applies(self) -> bool:
+        """Whether the caller's wall-clock budget still governs this stream.
+
+        It governs every read this stream has yet to make -- including
+        the time the caller itself spends between frames -- and stops
+        governing exactly once: after a closing frame has arrived. The
+        server puts the conclusion last on every path that ends a
+        stream (see the module docstring), so past that point the only
+        thing left is the EOF that ends the body, and a task that
+        finished on the last second of its budget is owed the clean
+        close. A connection that goes silent instead of ending still
+        fails on its read window, which ``_classify_timeout`` turns
+        into ``TaskTimeout`` once the budget is gone -- the exemption
+        covers the proactive checkpoint, not a leg that genuinely
+        blocked.
+        """
+        return self._closed_by not in _CLOSE_EVENT_NAMES
 
     # --- Context manager ----------------------------------------------
 
