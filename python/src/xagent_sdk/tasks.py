@@ -289,8 +289,9 @@ class TasksAPI:
             task_id: The task to attach to.
             timeout: Wall-clock budget in seconds for the whole call,
                 including the time spent opening the connection. Must be
-                non-negative. It is a budget enforced at checkpoints,
-                not a hard cap -- see the overrun note at the end.
+                a finite, non-negative number. It is a budget enforced
+                at checkpoints, not a hard cap -- see the overrun note
+                at the end.
                 ``None`` (the default) sets no local budget -- the
                 connection still cannot idle past the server's
                 15-second heartbeat, or its 1-hour per-stream cap.
@@ -322,7 +323,7 @@ class TasksAPI:
             A ``TaskEventStream`` bound to this ``task_id``.
 
         Raises:
-            ValueError: ``timeout`` is negative.
+            ValueError: ``timeout`` is negative, ``NaN``, or infinite.
             InvalidAPIKey: the API key is missing, invalid, or revoked.
             TaskNotFound: unknown ``task_id``, or this runtime key does
                 not own it.

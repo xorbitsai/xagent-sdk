@@ -1178,17 +1178,18 @@ class TestRequestShape:
 class TestTimeoutValidationAndDeadlines:
     """Parameter validation and the wall-clock checkpoints."""
 
-    def test_negative_timeout_raises_value_error(
-        self, make_client: Callable[..., AgentClient]
+    @pytest.mark.parametrize("timeout", [-1, float("nan"), float("inf"), float("-inf")])
+    def test_invalid_timeout_raises_value_error(
+        self, make_client: Callable[..., AgentClient], timeout: float
     ) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
-            raise AssertionError("request must never be sent for a negative timeout")
+            raise AssertionError("request must never be sent for an invalid timeout")
 
         with (
             make_client(handler) as c,
-            pytest.raises(ValueError, match="timeout must be non-negative"),
+            pytest.raises(ValueError, match="finite, non-negative"),
         ):
-            c.tasks.events(1, timeout=-1)
+            c.tasks.events(1, timeout=timeout)
 
     def test_timeout_zero_raises_before_any_event(
         self, make_client: Callable[..., AgentClient]

@@ -644,9 +644,16 @@ def open_task_event_stream(
 ) -> TaskEventStream:
     """Open the v1 task event stream. See ``TasksAPI.events()`` for the
     full public contract; this is its implementation.
+
+    ``timeout`` must be a finite, non-negative number: a deadline built
+    from ``NaN`` never compares true against ``time.monotonic()`` (a
+    checkpoint that "elapses" would never actually fire), and one built
+    from ``inf`` is equivalent to no budget at all but without saying
+    so. Both are rejected here rather than accepted and silently
+    behaving like ``None``.
     """
-    if timeout is not None and timeout < 0:
-        raise ValueError("timeout must be non-negative")
+    if timeout is not None and (not math.isfinite(timeout) or timeout < 0):
+        raise ValueError("timeout must be a finite, non-negative number")
     deadline = None if timeout is None else time.monotonic() + timeout
 
     connection = http.stream_lines(
