@@ -33,7 +33,9 @@ after (see ``TaskEventStream._close_quietly()``).
 Only a frame's ``event`` name is ever branch-matched on in this module.
 A ``stream.error`` frame's ``message`` text is not part of the wire
 contract and can change between server releases without notice; callers
-must do the same and branch on ``data["code"]`` only.
+must do the same and branch on ``data.get("code")`` only (``.get()``
+because a closing frame whose body never arrived carries empty
+``data``).
 """
 
 from __future__ import annotations

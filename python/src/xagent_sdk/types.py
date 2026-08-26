@@ -318,7 +318,10 @@ class StreamEvent:
     no key is renamed, added, or removed, including the ``status``
     string on ``task.status`` / ``task.completed`` (kept as ``str``, not
     ``TaskStatus``, so a status value this SDK release does not know
-    about still reaches the caller instead of dropping the frame).
+    about still reaches the caller instead of dropping the frame). The
+    one exception is a closing frame whose body never arrived: it is
+    delivered with an empty ``data`` so the close still reaches the
+    caller, which is why closing-frame fields are read with ``.get()``.
 
     ``step`` is populated only for ``step.started`` / ``step.completed``
     frames and is ``None`` on every other event; it reuses the same

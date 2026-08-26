@@ -225,7 +225,8 @@ class TasksAPI:
         after which the server ends the connection. ``event.step`` is a
         ``Step`` (the same dataclass ``steps()`` returns) on
         ``step.*`` frames and ``None`` otherwise; every other field
-        stays in ``event.data`` exactly as the server sent it, including
+        stays in ``event.data`` exactly as the server sent it (one
+        exception: a body-less closing frame, described below), including
         ``status`` on ``task.status`` / ``task.completed`` -- it is kept
         as a plain string, not ``TaskStatus``, so a status value this
         SDK release does not know about still reaches you. A frame
