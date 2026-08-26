@@ -365,7 +365,10 @@ class TasksAPI:
         Not thread-safe: a single stream must be iterated and closed
         from the thread that opened it. The ``AgentClient`` that created
         it stays shareable across threads -- that guarantee is
-        unaffected.
+        unaffected. The only exception is garbage collection releasing
+        an abandoned stream's connection as a best-effort backstop,
+        which can run on any thread -- that is not a second supported
+        way to use a stream.
         """
         return open_task_event_stream(self._client._http, task_id, timeout=timeout)
 

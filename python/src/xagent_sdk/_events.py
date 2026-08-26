@@ -407,6 +407,13 @@ class TaskEventStream:
     Not thread-safe: a single stream must be iterated and closed from
     the thread that opened it. The ``AgentClient`` that created it may
     still be shared across threads (its own guarantee is unaffected).
+
+    The one exception is the ``__del__`` safety net: garbage collection
+    runs on whatever thread happens to trigger it, so a stream
+    abandoned without ``close()`` may have its connection released
+    from a thread that never touched it. That is a best-effort
+    backstop for a leak, not a second supported way to use a stream --
+    the rule above still stands.
     """
 
     def __init__(
@@ -480,8 +487,12 @@ class TaskEventStream:
             return self._pull_next_event()
         except BaseException:
             # Single owner for "nothing leaves iteration with the
-            # connection still open" -- covers the frame-parsing step,
-            # which has no close() of its own.
+            # connection still open": covers a raising ``_next_line()``
+            # leg (timeout or other httpx error), a truncated stream
+            # reported by ``_finish_eof()``, and the frame-parsing step
+            # itself, none of which close the connection on their own.
+            # ``StopIteration`` on a clean EOF is caught here too --
+            # it is a ``BaseException`` subclass like any other.
             self._close_quietly()
             raise
 
@@ -532,7 +543,10 @@ class TaskEventStream:
         # running after an explicit close() releases nothing a second
         # time. The outer suppress stays regardless: __del__ runs
         # during interpreter teardown on an unpredictable schedule, and
-        # even the logging call itself can raise at that point.
+        # even the logging call itself can raise at that point. This is
+        # the one path that can run on a thread other than the one that
+        # opened the stream -- see the class docstring's thread-safety
+        # note.
         with contextlib.suppress(Exception):
             self._close_quietly()
 
@@ -617,15 +631,16 @@ class TaskEventStream:
         Folds every lower-layer httpx failure into the SDK's exception
         hierarchy here, so the frame-assembly loop in
         ``_pull_next_event`` never sees a raw httpx exception. Each
-        raising branch closes this stream first, so no connection
-        outlives an escaping exception.
+        raising branch leaves the connection open on its own -- every
+        failure here reaches ``__next__`` through ``_pull_next_event``,
+        and ``__next__`` is the single owner that closes it on the way
+        out (see its own comment).
         """
         try:
             return next(self._lines)
         except StopIteration:
             return None
         except httpx.TimeoutException as exc:
-            self._close_quietly()
             raise _classify_timeout(
                 exc,
                 task_id=self._task_id,
@@ -634,7 +649,6 @@ class TaskEventStream:
                 closed_by=self._closed_by,
             ) from exc
         except httpx.HTTPError as exc:
-            self._close_quietly()
             raise XAgentTransportError(
                 "transport_error", str(exc), http_status=None
             ) from exc
@@ -650,9 +664,10 @@ class TaskEventStream:
         the server produces (see the module docstring); if it happens
         anyway, this reports the connection as truncated at EOF rather
         than passing it off as a clean close -- deliberately strict.
+        Does not close the connection itself -- ``__next__`` does that
+        on both the raising and the clean-``StopIteration`` path.
         """
         last = self._closed_by
-        self._close_quietly()
         if last not in _CLOSE_EVENT_NAMES:
             detail = (
                 "delivered no frames at all"
