@@ -25,9 +25,10 @@ cover the streams plus whatever headroom its ordinary calls need. This
 release has no separate pool for streams and no admission control --
 the pool size is the only knob. A release that fails to close can hold
 its slot for the life of the client (see ``TaskEventStream.close()``);
-once a ``TaskEventStream`` exists, a failure on a path that cannot
-re-raise it is logged instead of being silently dropped (see
-``TaskEventStream._close_quietly()``).
+a failure on a path that cannot re-raise it is logged instead of being
+silently dropped, both before a ``TaskEventStream`` exists to own the
+release (``open_task_event_stream()``'s own open-time cleanup) and
+after (see ``TaskEventStream._close_quietly()``).
 
 Only a frame's ``event`` name is ever branch-matched on in this module.
 A ``stream.error`` frame's ``message`` text is not part of the wire
@@ -769,14 +770,22 @@ def open_task_event_stream(
             )
     except BaseException:
         # Covers Ctrl-C too: an interrupt during the error-body read must
-        # not leak the connection either. Suppressed like every other
-        # failing path in this module (see
-        # ``TaskEventStream._close_quietly``): an exception is always
-        # already in flight here, and it is the one that describes what
-        # happened -- a TaskNotFound or a MalformedResponse must not be
-        # replaced by an httpx teardown error.
-        with contextlib.suppress(Exception):
+        # not leak the connection either. A close failure here must not
+        # replace the exception already in flight -- the caller is
+        # owed the TaskNotFound / MalformedResponse that describes what
+        # happened, not an httpx teardown error -- so it is reported
+        # instead, the same as every other failing close in this module
+        # (see ``TaskEventStream._close_quietly``).
+        try:
             connection.__exit__(None, None, None)
+        except Exception:
+            logger.warning(
+                "releasing the event stream for task %s failed while "
+                "reporting an earlier open failure; its connection may "
+                "still be holding a slot in the client's pool",
+                task_id,
+                exc_info=True,
+            )
         raise
 
     stream = TaskEventStream(

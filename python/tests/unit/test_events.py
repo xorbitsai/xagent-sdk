@@ -1106,6 +1106,41 @@ class TestHttpErrorMapping:
         assert excinfo.value.code == "malformed_response"
         assert body_stream.close_count == 1
 
+    def test_open_time_close_failure_is_reported(
+        self,
+        make_client: Callable[..., AgentClient],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Same scenario as test_open_time_close_failure_keeps_the_malformed_
+        # response, but checking the other half of the contract: a close
+        # failure here has no TaskEventStream to report through later --
+        # this is the caller's only chance to ever hear about it -- so it
+        # must be logged right here, the same as a failing release once a
+        # TaskEventStream exists (test_a_failed_quiet_release_is_reported).
+        recorder = _LogRecorder()
+        monkeypatch.setattr(events_mod, "logger", recorder)
+        body_stream = _sse.CloseRecordingStream(
+            [_sse.body(_sse.frame("task.status", {"status": "running"}))],
+            close_exc=RuntimeError("connection pool exploded"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, headers={"content-type": "text/html"}, stream=body_stream
+            )
+
+        with make_client(handler) as c, pytest.raises(MalformedResponse) as excinfo:
+            c.tasks.events(1)
+        assert excinfo.value.code == "malformed_response"
+        assert body_stream.close_count == 1
+        assert len(recorder.warnings) == 1
+        msg, args = recorder.warnings[0]
+        assert (msg % args) == (
+            "releasing the event stream for task 1 failed while reporting "
+            "an earlier open failure; its connection may still be holding "
+            "a slot in the client's pool"
+        )
+
     def test_open_time_close_failure_keeps_the_body_read_error(
         self, make_client: Callable[..., AgentClient]
     ) -> None:
