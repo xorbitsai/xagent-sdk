@@ -138,8 +138,8 @@ class XAgentTransportError(XAgentError):
     a local timeout below the wall-clock budget); ``http_status`` is
     ``None`` because no HTTP response was received. ``TasksAPI.events()``
     also raises this when the server closes a 200 response cleanly but
-    the stream ends before delivering one of its closing frames -- httpx
-    reports that as an ordinary end of iteration, not as an
+    the last frame it delivered was not one of its closing frames --
+    httpx reports that as an ordinary end of iteration, not as an
     ``HTTPError``, so the SDK detects and raises it itself.
     """
 

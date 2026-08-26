@@ -330,8 +330,8 @@ class TasksAPI:
                 returned an HTML error page), or the response's status
                 was neither an error nor 200 (a redirect or a 204) --
                 that status is carried on ``http_status`` in this case.
-            XAgentTransportError: a network failure, or the connection
-                ended before delivering a closing frame.
+            XAgentTransportError: a network failure, or the connection's
+                last frame was not a closing frame.
             TaskTimeout: the ``timeout`` budget elapsed first.
             InternalError: falls back here for any response the SDK
                 does not recognize -- notably, calling ``events()``

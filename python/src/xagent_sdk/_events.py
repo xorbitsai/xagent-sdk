@@ -551,14 +551,22 @@ class TaskEventStream:
         close, so "EOF and the last frame delivered was not one of the
         three closing frames" is the only signal this module has for a
         truncated stream, and it has to synthesize the failure itself.
+        An ordinary frame arriving after a closing one is not a shape
+        the server produces (see the module docstring); if it happens
+        anyway, this reports the connection as truncated at EOF rather
+        than passing it off as a clean close -- deliberately strict.
         """
         last = self._closed_by
         self._close_quietly()
         if last not in _CLOSE_EVENT_NAMES:
+            detail = (
+                "delivered no frames at all"
+                if last is None
+                else f"ended on {last!r}, which is not a closing frame"
+            )
             raise XAgentTransportError(
                 "transport_error",
-                f"the task {self._task_id} event stream ended before "
-                f"delivering a closing frame (last event: {last!r})",
+                f"the task {self._task_id} event stream {detail}",
                 http_status=None,
             )
 

@@ -698,6 +698,53 @@ class TestClosingSemantics:
             list(stream)  # must not raise
         assert stream.closed_by == event
 
+    def test_ordinary_frame_after_a_closing_frame_is_a_protocol_violation(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        """The server never sends an ordinary frame after a closing one
+        (see the module docstring), but if it did, this must not be
+        passed off as a clean close: strict is the intended behavior.
+        """
+        step = _sse.step_payload("tool_call:py:1")
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(
+                _sse.frame(
+                    "task.completed",
+                    {"status": "completed", "output": None, "error": None},
+                ),
+                _sse.frame("step.completed", {"step": step}),
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1)
+            with pytest.raises(XAgentTransportError) as excinfo:
+                list(stream)
+        assert stream.closed_by == "step.completed"
+        assert "'step.completed'" in excinfo.value.message
+        assert "not a closing frame" in excinfo.value.message
+
+    @pytest.mark.parametrize("send_any_frame", [True, False])
+    def test_truncated_stream_message_names_what_it_saw(
+        self, make_client: Callable[..., AgentClient], send_any_frame: bool
+    ) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            frames = (
+                [_sse.frame("task.status", {"status": "running"})]
+                if send_any_frame
+                else []
+            )
+            return _sse.stream_response(*frames)
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1)
+            with pytest.raises(XAgentTransportError) as excinfo:
+                list(stream)
+        if send_any_frame:
+            assert "'task.status'" in excinfo.value.message
+        else:
+            assert "no frames" in excinfo.value.message
+
 
 class TestHttpErrorMapping:
     """HTTP-layer failures before the stream ever opens."""
