@@ -235,6 +235,28 @@ class TestSSEParsing:
             event = next(stream)
         assert event.data["text"] == text
 
+    def test_blank_lines_between_frames_are_not_counted(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # Consecutive blank lines are frame separators with nothing
+        # buffered between them -- there is no frame there to drop.
+        raw = "\n\n\n" + _sse.frame(
+            "task.completed",
+            {"status": "completed", "output": None, "error": None},
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 0
+
 
 class TestPerFrameDefense:
     """Per-frame defense: an unrecognized event name, malformed ``data:``
@@ -1799,6 +1821,32 @@ class TestIdAndRetryFieldsIgnored:
         assert event.event == "task.status"
         assert event.data == {"status": "running"}
         assert stream.dropped_frame_count == 0
+
+    @pytest.mark.parametrize("field_line", ["id: 7", "retry: 3000", "x-future: 1"])
+    def test_frame_of_only_ignored_fields_counts_as_a_drop(
+        self, make_client: Callable[..., AgentClient], field_line: str
+    ) -> None:
+        # A frame made up entirely of field lines this module ignores
+        # (no event:, no data:) is still a frame that was seen -- it
+        # must be counted as a drop, not vanish silently like a stray
+        # blank line.
+        raw = f"{field_line}\r\n\r\n" + _sse.frame(
+            "task.completed",
+            {"status": "completed", "output": None, "error": None},
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.closed_by == "task.completed"
+        assert stream.dropped_frame_count == 1
 
 
 class TestOversizedFrame:

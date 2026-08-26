@@ -141,6 +141,7 @@ class _FrameBuilder:
     data_parts: list[str] = field(default_factory=list)
     char_count: int = 0
     oversized: bool = False
+    saw_field_line: bool = False
 
 
 class _FrameAssembler:
@@ -157,7 +158,12 @@ class _FrameAssembler:
         always emits a single line, but a hand-built test frame may not).
       - Any other field name (``id:``, ``retry:``, or one this module
         does not know about) is a recognized field line and is ignored;
-        the rest of the frame around it is still assembled normally.
+        the rest of the frame around it is still assembled normally. A
+        frame built entirely out of such lines (no ``event:``, no
+        ``data:``) is still a frame -- it is dispatched with no event
+        name and dropped downstream by ``_parse_frame``'s "no ``event:``
+        line" reason, counted like any other discarded frame, rather
+        than vanishing silently.
       - A line starting with ``:`` is a comment -- the server's
         heartbeat. It never contributes to a frame; ``feed()`` reports it
         as ``_PING`` immediately rather than waiting for a frame to
@@ -192,6 +198,10 @@ class _FrameAssembler:
             return self._dispatch()
         if line.startswith(":"):
             return _PING
+        # A comment line (above) never reaches here, so this marks
+        # every field line that does -- order is the contract: a
+        # heartbeat must never set this.
+        self._builder.saw_field_line = True
         name, _, value = line.partition(":")
         if value.startswith(" "):
             value = value[1:]
@@ -219,8 +229,12 @@ class _FrameAssembler:
         self._builder = _FrameBuilder()
         if b.oversized:
             return _OVERSIZED
-        if b.event is None and not b.data_parts:
-            return None  # A stray blank line with nothing buffered.
+        if not b.saw_field_line:
+            return None  # A stray blank line: nothing preceded it.
+        # A frame built only of field lines this module ignores (id:,
+        # retry:, a field a later server adds) has no event name, so it
+        # goes out as one -- drop reason #1, counted like every other
+        # discarded frame, instead of vanishing.
         return _RawFrame(event=b.event, data="\n".join(b.data_parts))
 
 
@@ -436,9 +450,11 @@ class TaskEventStream:
     @property
     def dropped_frame_count(self) -> int:
         """How many frames this stream discarded because they failed to
-        parse or named an event this SDK release does not know about.
-        Observability only -- there is no way to recover a dropped
-        frame's content; ``TasksAPI.steps()`` is the only backstop.
+        parse, named an event this SDK release does not know about, or
+        had no event name at all (a frame built only of field lines
+        this module ignores, such as a bare ``id:``). Observability
+        only -- there is no way to recover a dropped frame's content;
+        ``TasksAPI.steps()`` is the only backstop.
         """
         return self._dropped_frame_count
 
