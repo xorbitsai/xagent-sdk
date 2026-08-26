@@ -247,8 +247,13 @@ class TasksAPI:
         the only shape that means "the server closed this on purpose" --
         note ``stream.error`` is a *normal* close in this contract, not
         a raised exception, because the server still uses it for
-        ordinary reasons such as its 1-hour per-stream cap. Anything
-        else reaching EOF (including zero frames at all) raises
+        ordinary reasons such as its 1-hour per-stream cap. A closing
+        frame whose body never reached this connection still closes the
+        stream this way, delivered with ``event.data == {}`` -- its
+        name alone already says how the stream ended, so read its
+        fields with ``.get()`` rather than assuming ``"code"`` or
+        ``"status"`` is always present. Anything else reaching EOF
+        (including zero frames at all) raises
         ``XAgentTransportError`` itself, because the server ends a
         stream this way with no ``httpx`` exception to detect it by.
         Content frames are best-effort: the server can silently drop one

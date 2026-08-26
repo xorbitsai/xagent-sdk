@@ -404,6 +404,29 @@ class TestPerFrameDefense:
         assert [e.event for e in events] == ["task.completed"]
         assert stream.dropped_frame_count == 1
 
+    @pytest.mark.parametrize("event", ["task.status", "message.delta"])
+    def test_content_frame_without_a_body_is_still_dropped(
+        self, make_client: Callable[..., AgentClient], event: str
+    ) -> None:
+        # The reverse of the closing-frame exemption: a content frame's
+        # name alone says nothing about its payload, so a missing body
+        # is not synthesized into {} -- it is dropped and counted like
+        # any other undecodable frame.
+        raw = f"event: {event}\n\n"
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1)
+            with pytest.raises(XAgentTransportError):
+                list(stream)
+        assert stream.dropped_frame_count == 1
+
 
 class TestClosingSemantics:
     """The closing-frame set, EOF judgment, and how exceptions preserve
@@ -744,6 +767,55 @@ class TestClosingSemantics:
             assert "'task.status'" in excinfo.value.message
         else:
             assert "no frames" in excinfo.value.message
+
+    @pytest.mark.parametrize(
+        "event", ["task.completed", "task.input_required", "stream.error"]
+    )
+    def test_closing_frame_without_a_body_still_closes(
+        self, make_client: Callable[..., AgentClient], event: str
+    ) -> None:
+        # A closing frame's name alone says the stream ended and how --
+        # a body that never arrived costs this frame's payload, not the
+        # fact that the stream closed on purpose. _sse.frame() always
+        # writes a data: line, so this is hand-written to omit it.
+        raw = f"event: {event}\n\n"
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)  # must not raise
+        assert [e.event for e in events] == [event]
+        assert events[0].data == {}
+        assert events[0].step is None
+        assert stream.closed_by == event
+        assert stream.dropped_frame_count == 0
+
+    def test_closing_frame_with_an_undecodable_body_is_a_truncation(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # The reverse of the case above: the body did arrive but does
+        # not decode. "Absent" is observed fact; "corrupt" is not
+        # synthesized into {} -- it is dropped and counted like any
+        # other undecodable frame, and the stream ends truncated.
+        raw = "event: task.completed\ndata: {oops\n\n"
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([raw.encode()]),
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1)
+            with pytest.raises(XAgentTransportError):
+                list(stream)
+        assert stream.dropped_frame_count == 1
 
 
 class TestHttpErrorMapping:

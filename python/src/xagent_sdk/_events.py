@@ -253,9 +253,28 @@ def _parse_frame(raw: _RawFrame) -> StreamEvent | None:
     about, which is exactly the closed-enum fragility ``StepType``
     documents. None of these may ever take down the whole stream: a
     live connection must survive one bad frame.
+
+    One exception to the "data: does not parse -> drop" reason: a
+    closing frame (``task.completed``, ``task.input_required``,
+    ``stream.error``) whose body never arrived is delivered with an
+    empty ``data``, not dropped -- its name alone already says the
+    stream ended and how. A closing frame whose body arrived but does
+    not decode is still dropped like any other frame; only "absent" is
+    treated as observed fact, not "corrupt".
     """
     if raw.event is None or raw.event not in _KNOWN_EVENT_NAMES:
         return None
+    if not raw.data and raw.event in _CLOSE_EVENT_NAMES:
+        # A closing frame's meaning is carried by its name: it says the
+        # stream ended, and how. A body that never arrived costs this
+        # frame's payload, not the fact that the stream ended -- dropping
+        # it would report a truncation at EOF for a stream the server
+        # did close on purpose. A content frame is the reverse (its name
+        # says nothing without its body), so this is deliberately not
+        # extended to the other five names; and a body that did arrive
+        # but does not decode is not synthesized either: "absent" is
+        # something this module observed, "corrupt" would be a guess.
+        return StreamEvent(event=raw.event, data={}, step=None)
     try:
         data = json.loads(raw.data, parse_constant=_reject_non_finite)
     except (ValueError, RecursionError):
