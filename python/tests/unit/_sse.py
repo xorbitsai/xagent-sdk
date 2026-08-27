@@ -71,7 +71,13 @@ class RaisingByteStream(httpx.SyncByteStream):
     response body -- something a canned ``bytes`` payload cannot do.
     Also counts ``close()`` calls (see ``CloseRecordingStream``) so a
     test can confirm the connection was released exactly once even on
-    this failing path.
+    this failing path. ``raise_count`` counts how many times ``exc`` was
+    actually raised out of ``__iter__`` -- a test asserting the SDK
+    reached the code path that reads this exception (rather than
+    short-circuiting before ever calling ``next()`` on this stream, e.g.
+    because a wall-clock checkpoint fired first) checks this instead of
+    just the exception type it eventually observes, since the wrong
+    code path can raise the same exception type for the wrong reason.
     """
 
     def __init__(
@@ -85,9 +91,11 @@ class RaisingByteStream(httpx.SyncByteStream):
         self._exc = exc
         self._close_exc = close_exc
         self.close_count = 0
+        self.raise_count = 0
 
     def __iter__(self) -> Iterator[bytes]:
         yield from self._chunks
+        self.raise_count += 1
         raise self._exc
 
     def close(self) -> None:

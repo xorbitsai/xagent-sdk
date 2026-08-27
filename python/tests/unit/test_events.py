@@ -879,32 +879,6 @@ class TestClosingSemantics:
             list(stream)  # must not raise
         assert stream.closed_by == event
 
-    def test_ordinary_frame_after_a_closing_frame_is_a_protocol_violation(
-        self, make_client: Callable[..., AgentClient]
-    ) -> None:
-        """The server never sends an ordinary frame after a closing one
-        (see the module docstring), but if it did, this must not be
-        passed off as a clean close: strict is the intended behavior.
-        """
-        step = _sse.step_payload("tool_call:py:1")
-
-        def handler(req: httpx.Request) -> httpx.Response:
-            return _sse.stream_response(
-                _sse.frame(
-                    "task.completed",
-                    {"status": "completed", "output": None, "error": None},
-                ),
-                _sse.frame("step.completed", {"step": step}),
-            )
-
-        with make_client(handler) as c:
-            stream = c.tasks.events(1)
-            with pytest.raises(XAgentTransportError) as excinfo:
-                list(stream)
-        assert stream.closed_by == "step.completed"
-        assert "'step.completed'" in excinfo.value.message
-        assert "not a closing frame" in excinfo.value.message
-
     @pytest.mark.parametrize("send_any_frame", [True, False])
     def test_truncated_stream_message_names_what_it_saw(
         self, make_client: Callable[..., AgentClient], send_any_frame: bool
@@ -1342,29 +1316,6 @@ class TestTimeoutValidationAndDeadlines:
         assert [e.event for e in events] == ["task.completed"]
         assert stream.dropped_frame_count == 0
 
-    def test_closing_frame_then_deadline_ends_cleanly(
-        self, make_client: Callable[..., AgentClient], clock: _FakeClock
-    ) -> None:
-        # EOF right after the closing frame must win over an
-        # already-elapsed deadline: the connection is exhausted and
-        # ends cleanly, not surfaced as a spurious TaskTimeout.
-        def handler(req: httpx.Request) -> httpx.Response:
-            return _sse.stream_response(
-                _sse.frame(
-                    "task.completed",
-                    {"status": "completed", "output": None, "error": None},
-                )
-            )
-
-        with make_client(handler) as c:
-            stream = c.tasks.events(1, timeout=10)
-            event = next(stream)
-            assert event.event == "task.completed"
-            clock.advance(60)
-            with pytest.raises(StopIteration):
-                next(stream)
-        assert stream.closed_by == "task.completed"
-
     def test_deadline_still_fires_after_a_delivered_non_closing_frame(
         self, make_client: Callable[..., AgentClient], clock: _FakeClock
     ) -> None:
@@ -1386,32 +1337,6 @@ class TestTimeoutValidationAndDeadlines:
             with pytest.raises(TaskTimeout):
                 list(stream)
         assert stream.closed_by == "task.status"
-
-    def test_a_closing_frame_ends_the_budget(
-        self, make_client: Callable[..., AgentClient], clock: _FakeClock
-    ) -> None:
-        # The mirror image of the test above: once the delivered frame
-        # is a closing one, the budget stops applying for the rest of
-        # the stream -- an elapsed deadline no longer fires even though
-        # the connection keeps sending (pings) before EOF.
-        def handler(req: httpx.Request) -> httpx.Response:
-            return _sse.stream_response(
-                _sse.frame(
-                    "task.completed",
-                    {"status": "completed", "output": None, "error": None},
-                ),
-                *([_sse.ping()] * 5),
-            )
-
-        with make_client(handler) as c:
-            stream = c.tasks.events(1, timeout=10)
-            first = next(stream)
-            assert first.event == "task.completed"
-            clock.advance(60)
-            with pytest.raises(StopIteration):
-                next(stream)
-        assert stream.closed_by == "task.completed"
-        assert stream.dropped_frame_count == 0
 
     def test_a_producing_stream_still_hits_the_budget(
         self, make_client: Callable[..., AgentClient], clock: _FakeClock
@@ -1478,6 +1403,447 @@ class TestTimeoutValidationAndDeadlines:
             with pytest.raises(TaskTimeout):
                 next(stream)
         assert stream_body.sent == 1
+
+
+class TestPostCloseDrain:
+    """Once a closing frame has been delivered, the caller's wall-clock
+    budget stops governing this stream and a bounded post-close drain
+    takes over: it reads out what is left of the response body, and it
+    is bounded twice over -- by which frames it still accepts
+    (``TaskEventStream._drain_accepts()``) and by a read window of its
+    own (``TaskEventStream._check_drain_window()``). See
+    ``TaskEventStream._draining()`` for the full contract this group
+    exercises.
+    """
+
+    def test_the_drain_delivers_the_trailing_stream_error_after_the_budget_is_gone(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(
+                _sse.frame(
+                    "task.completed",
+                    {"status": "completed", "output": None, "error": None},
+                ),
+                _sse.frame(
+                    "stream.error",
+                    {"code": "resync_required", "message": "reattach and resync"},
+                ),
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1, timeout=5)
+            first = next(stream)
+            assert first.event == "task.completed"
+            # The caller's own budget is long gone by the time it comes
+            # back for the next event -- the drain must not care.
+            clock.advance(3600)
+            second = next(stream)
+        assert second.event == "stream.error"
+        assert stream.closed_by == "stream.error"
+        assert stream.last_event is not None
+        assert stream.last_event.data["code"] == "resync_required"
+        assert stream.dropped_frame_count == 0
+
+    @pytest.mark.parametrize(
+        ("chunks", "expected_sent"),
+        [
+            pytest.param(
+                [
+                    _sse.frame(
+                        "task.completed",
+                        {"status": "completed", "output": None, "error": None},
+                    ),
+                    _sse.frame(
+                        "stream.error",
+                        {"code": "resync_required", "message": "m"},
+                    ),
+                    _sse.frame(
+                        "stream.error",
+                        {"code": "resync_required", "message": "m"},
+                    ),
+                    _sse.ping(),
+                    _sse.ping(),
+                ],
+                3,
+                id="a_second_stream_error",
+            ),
+            pytest.param(
+                [
+                    _sse.frame(
+                        "task.completed",
+                        {"status": "completed", "output": None, "error": None},
+                    ),
+                    _sse.frame(
+                        "stream.error",
+                        {"code": "resync_required", "message": "m"},
+                    ),
+                    _sse.frame(
+                        "task.completed",
+                        {"status": "completed", "output": None, "error": None},
+                    ),
+                    _sse.ping(),
+                    _sse.ping(),
+                ],
+                3,
+                id="a_repeated_task_completed",
+            ),
+            pytest.param(
+                [
+                    _sse.frame(
+                        "task.completed",
+                        {"status": "completed", "output": None, "error": None},
+                    ),
+                    _sse.frame(
+                        "stream.error",
+                        {"code": "resync_required", "message": "m"},
+                    ),
+                    _sse.frame(
+                        "task.input_required",
+                        {
+                            "status": "waiting_for_user",
+                            "pending_interaction": None,
+                        },
+                    ),
+                    _sse.ping(),
+                    _sse.ping(),
+                ],
+                3,
+                id="a_repeated_task_input_required",
+            ),
+            pytest.param(
+                [
+                    _sse.frame(
+                        "task.completed",
+                        {"status": "completed", "output": None, "error": None},
+                    ),
+                    _sse.frame(
+                        "stream.error",
+                        {"code": "resync_required", "message": "m"},
+                    ),
+                    _sse.ping(),
+                    _sse.frame(
+                        "stream.error",
+                        {"code": "resync_required", "message": "m"},
+                    ),
+                ],
+                4,
+                id="a_second_stream_error_after_a_heartbeat",
+            ),
+        ],
+    )
+    def test_a_repeated_closing_frame_ends_the_drain(
+        self,
+        make_client: Callable[..., AgentClient],
+        clock: _FakeClock,
+        chunks: list[str],
+        expected_sent: int,
+    ) -> None:
+        stream_body = _sse.ClockAdvancingStream(
+            [c.encode() for c in chunks], clock, interval=0
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=stream_body,
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert len(events) == 2
+        assert stream.dropped_frame_count == 1
+        assert stream_body.sent == expected_sent
+
+    @pytest.mark.parametrize(
+        "offending",
+        [
+            pytest.param(
+                "event: task.status\ndata: {not valid json\n\n", id="undecodable_data"
+            ),
+            pytest.param(
+                _sse.frame("task.something_new", {"whatever": 1}),
+                id="unknown_event_name",
+            ),
+            pytest.param("id: 123\n\n", id="no_event_name"),
+        ],
+    )
+    def test_post_close_discarded_frames_end_the_drain(
+        self,
+        make_client: Callable[..., AgentClient],
+        clock: _FakeClock,
+        offending: str,
+    ) -> None:
+        chunks = [
+            _sse.frame(
+                "task.completed",
+                {"status": "completed", "output": None, "error": None},
+            ),
+            offending,
+        ]
+        stream_body = _sse.ClockAdvancingStream(
+            [c.encode() for c in chunks], clock, interval=0
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=stream_body,
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 1
+        assert stream_body.sent == 2
+
+    def test_a_post_close_oversized_frame_ends_the_drain(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        huge = "x" * (events_mod._MAX_FRAME_CHARS + 1)
+        chunks = [
+            _sse.frame(
+                "task.completed",
+                {"status": "completed", "output": None, "error": None},
+            ),
+            f"event: task.status\r\ndata: {huge}\r\n\r\n",
+        ]
+        stream_body = _sse.ClockAdvancingStream(
+            [c.encode() for c in chunks], clock, interval=0
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=stream_body,
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 1
+        assert stream_body.sent == 2
+
+    def test_post_close_heartbeats_neither_end_nor_extend_the_drain(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        chunks = [
+            _sse.frame(
+                "task.completed",
+                {"status": "completed", "output": None, "error": None},
+            )
+        ] + [_sse.ping()] * 5
+        stream_body = _sse.ClockAdvancingStream(
+            [c.encode() for c in chunks], clock, interval=0
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=stream_body,
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1, timeout=10)
+            first = next(stream)
+            assert first.event == "task.completed"
+            clock.advance(60)
+            events = list(stream)
+        assert events == []
+        assert stream.closed_by == "task.completed"
+        assert stream.dropped_frame_count == 0
+        assert stream_body.sent == 6
+
+    @pytest.mark.parametrize(
+        "timeout", [None, 120.0], ids=["timeout_none", "timeout_120"]
+    )
+    @pytest.mark.parametrize("filler_kind", ["heartbeat", "incomplete_data_line"])
+    def test_the_drain_window_stops_an_endless_post_close_tail(
+        self,
+        make_client: Callable[..., AgentClient],
+        clock: _FakeClock,
+        filler_kind: str,
+        timeout: float | None,
+    ) -> None:
+        filler = _sse.ping() if filler_kind == "heartbeat" else "data: filler\n"
+        chunks = [
+            _sse.frame(
+                "task.completed",
+                {"status": "completed", "output": None, "error": None},
+            )
+        ] + [filler] * 20
+        stream_body = _sse.ClockAdvancingStream(
+            [c.encode() for c in chunks], clock, interval=10
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=stream_body,
+            )
+
+        with make_client(handler) as c, c.tasks.events(1, timeout=timeout) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+        assert stream.dropped_frame_count == 0
+        assert stream_body.sent == 7
+
+    @pytest.mark.parametrize(
+        ("timeout", "advance_before_next"),
+        [
+            pytest.param(10.0, 0.0, id="budget_untouched"),
+            pytest.param(5.0, 30.0, id="budget_exhausted_window_open"),
+        ],
+    )
+    def test_a_read_timeout_inside_the_drain_ends_it_cleanly(
+        self,
+        make_client: Callable[..., AgentClient],
+        clock: _FakeClock,
+        timeout: float,
+        advance_before_next: float,
+    ) -> None:
+        body_stream = _sse.RaisingByteStream(
+            [
+                _sse.frame(
+                    "task.completed",
+                    {"status": "completed", "output": None, "error": None},
+                ).encode()
+            ],
+            httpx.ReadTimeout("silence"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1, timeout=timeout)
+            first = next(stream)
+            assert first.event == "task.completed"
+            clock.advance(advance_before_next)
+            with pytest.raises(StopIteration):
+                next(stream)
+        assert stream.closed_by == "task.completed"
+        assert body_stream.raise_count == 1
+        assert body_stream.close_count == 1
+
+    def test_an_ordinary_frame_after_a_close_is_delivered_before_the_truncation_error(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        """The server never sends an ordinary frame after a closing one
+        (see the module docstring), but if it did, this proves it is
+        still delivered -- the drain accepts it and hands the caller's
+        budget back -- before the connection is later reported as
+        truncated once the body actually ends.
+        """
+        step = _sse.step_payload("tool_call:py:1")
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return _sse.stream_response(
+                _sse.frame(
+                    "task.completed",
+                    {"status": "completed", "output": None, "error": None},
+                ),
+                _sse.frame("step.completed", {"step": step}),
+            )
+
+        def drain_into(events: list[Any]) -> None:
+            for event in stream:
+                events.append(event)
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1)
+            delivered: list[Any] = []
+            with pytest.raises(XAgentTransportError) as excinfo:
+                drain_into(delivered)
+        assert [e.event for e in delivered] == ["task.completed", "step.completed"]
+        assert stream.last_event is delivered[-1]
+        assert stream.closed_by == "step.completed"
+        assert "'step.completed'" in excinfo.value.message
+        assert "not a closing frame" in excinfo.value.message
+
+    def test_a_delivered_ordinary_frame_gives_a_later_close_a_fresh_drain_window(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        chunks = [
+            _sse.frame(
+                "task.completed",
+                {"status": "completed", "output": None, "error": None},
+            ),
+            _sse.frame("step.completed", {"step": _sse.step_payload("tool_call:py:1")}),
+            _sse.frame(
+                "task.completed",
+                {"status": "completed", "output": None, "error": None},
+            ),
+            _sse.frame(
+                "stream.error",
+                {"code": "resync_required", "message": "reattach and resync"},
+            ),
+        ]
+        stream_body = _sse.ClockAdvancingStream(
+            [c.encode() for c in chunks], clock, interval=30
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=stream_body,
+            )
+
+        with make_client(handler) as c, c.tasks.events(1, timeout=None) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == [
+            "task.completed",
+            "step.completed",
+            "task.completed",
+            "stream.error",
+        ]
+        assert stream.closed_by == "stream.error"
+        assert stream.dropped_frame_count == 0
+
+    def test_closing_frame_then_deadline_ends_cleanly(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        # EOF right after the closing frame must win over an
+        # already-elapsed deadline: the connection ends cleanly because
+        # the body actually ends, not because a stale window cut it off
+        # early -- the window itself never trips in this scenario.
+        chunks = [
+            _sse.frame(
+                "task.completed",
+                {"status": "completed", "output": None, "error": None},
+            ),
+            _sse.ping(),
+        ]
+        stream_body = _sse.ClockAdvancingStream(
+            [c.encode() for c in chunks], clock, interval=0
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=stream_body,
+            )
+
+        with make_client(handler) as c:
+            stream = c.tasks.events(1, timeout=10)
+            event = next(stream)
+            assert event.event == "task.completed"
+            clock.advance(60)
+            with pytest.raises(StopIteration):
+                next(stream)
+        assert stream.closed_by == "task.completed"
+        assert stream_body.sent == 2
 
 
 class TestTimeoutClassification:

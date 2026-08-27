@@ -105,6 +105,7 @@ _CLOSE_EVENT_NAMES = frozenset(
         StreamEventType.STREAM_ERROR.value,
     }
 )
+_STREAM_ERROR_NAME = StreamEventType.STREAM_ERROR.value
 _STEP_EVENT_NAMES = frozenset(
     {StreamEventType.STEP_STARTED.value, StreamEventType.STEP_COMPLETED.value}
 )
@@ -439,6 +440,7 @@ class TaskEventStream:
         self._last_event: StreamEvent | None = None
         self._dropped_frame_count = 0
         self._closed = False
+        self._drain_deadline: float | None = None
 
     # --- Public read-only state -----------------------------------
 
@@ -469,9 +471,12 @@ class TaskEventStream:
         """How many frames this stream discarded because they failed to
         parse, named an event this SDK release does not know about, or
         had no event name at all (a frame built only of field lines
-        this module ignores, such as a bare ``id:``). Observability
-        only -- there is no way to recover a dropped frame's content;
-        ``TasksAPI.steps()`` is the only backstop.
+        this module ignores, such as a bare ``id:``), or arrived after
+        a closing frame, where the only frame this stream still accepts
+        is the documented trailing ``stream.error`` (see
+        ``_draining()``). Observability only -- there is no way to
+        recover a dropped frame's content; ``TasksAPI.steps()`` is the
+        only backstop.
         """
         return self._dropped_frame_count
 
@@ -502,7 +507,9 @@ class TaskEventStream:
 
     def _pull_next_event(self) -> StreamEvent:
         while True:
-            if self._budget_applies():
+            if self._draining():
+                self._check_drain_window()
+            else:
                 self._check_deadline()
             line = self._next_line()
             if line is None:
@@ -511,31 +518,119 @@ class TaskEventStream:
             parsed = self._assembler.feed(line)
             if isinstance(parsed, _RawFrame):
                 event = _parse_frame(parsed)
-                if event is not None:
-                    self._last_event = event
-                    self._closed_by = event.event
-                    return event
-                self._dropped_frame_count += 1
+                if event is None or (
+                    self._draining() and not self._drain_accepts(event)
+                ):
+                    self._drop_frame()
+                    continue
+                return self._deliver(event)
             elif parsed is _OVERSIZED:
-                self._dropped_frame_count += 1
+                self._drop_frame()
 
-    def _budget_applies(self) -> bool:
-        """Whether the caller's wall-clock budget still governs this stream.
+    def _draining(self) -> bool:
+        """Whether this stream is in its bounded post-close drain.
 
-        It governs every read this stream has yet to make -- including
-        the time the caller itself spends between frames -- and stops
-        governing exactly once: after a closing frame has arrived. The
-        server puts the conclusion last on every path that ends a
-        stream (see the module docstring), so past that point the only
-        thing left is the EOF that ends the body, and a task that
-        finished on the last second of its budget is owed the clean
-        close. A connection that goes silent instead of ending still
-        fails on its read window, which ``_classify_timeout`` turns
-        into ``TaskTimeout`` once the budget is gone -- the exemption
-        covers the proactive checkpoint, not a leg that genuinely
-        blocked.
+        A closing frame ends the stream's content; what is left is the
+        end of the response body and -- on an attach that could not take
+        a complete step snapshot -- one trailing ``stream.error`` saying
+        so (see the module docstring). Reading that tail out is the
+        drain, and it is bounded twice over, because either bound alone
+        leaves a peer or an intermediary able to hold the response, and
+        its pool slot, open indefinitely:
+
+        - by content: the frames a drain still delivers are the ones
+          ``_drain_accepts()`` lists. Anything else ends it and is
+          counted on ``dropped_frame_count``.
+        - by time: ``_check_drain_window()`` gives the drain one read
+          window, which is finite even when the caller set no budget.
+
+        The caller's wall-clock budget deliberately does not govern this
+        phase, and nothing in it raises ``TaskTimeout``: a task that
+        finished on the last second of its budget is owed a clean close,
+        so an elapsed window, a read that times out inside one, and a
+        frame the drain does not accept all end the stream the way EOF
+        does. Heartbeats are skipped here as they are anywhere else --
+        they neither end the drain nor extend it, because the window is
+        wall-clock and does not count frames.
         """
-        return self._closed_by not in _CLOSE_EVENT_NAMES
+        return self._closed_by in _CLOSE_EVENT_NAMES
+
+    def _check_drain_window(self) -> None:
+        """Open the drain's window on first use, then enforce it.
+
+        Counted from the moment the caller comes back for another event,
+        not from the moment the closing frame was handed over. The time
+        a caller spends holding that frame is its own; charging the
+        drain for it would silently drop the trailing ``stream.error``
+        -- the frame that says a step snapshot was incomplete -- for
+        any caller that takes longer to process one event than the
+        window lasts. What the window bounds is unaffected: a peer that
+        will not stop sending is held to one window from the moment this
+        stream starts reading again either way.
+
+        Its length is the read window this stream already uses to wait
+        for the next byte -- ``min(timeout, 60)``, and 60 seconds when
+        there is no budget -- because the next byte is exactly what a
+        drain is waiting for: one frame, or the end of the body.
+        """
+        if self._drain_deadline is None:
+            self._drain_deadline = time.monotonic() + _clamped_leg(
+                _STREAM_READ_TIMEOUT, self._timeout
+            )
+        if time.monotonic() >= self._drain_deadline:
+            raise StopIteration
+
+    def _drain_accepts(self, event: StreamEvent) -> bool:
+        """Whether a drain still delivers ``event`` to the caller.
+
+        One frame gets through: the trailing ``stream.error`` the server
+        sends after a conclusion when an attach's step snapshot is
+        incomplete (see the module docstring). Only one, because the
+        conclusion it follows is never itself a ``stream.error`` -- so a
+        second one is a peer repeating itself, not the documented tail.
+
+        A frame that is not a closing frame at all is not a drain
+        decision: the server does not produce that shape, and this
+        module already reports the stream as truncated when the body
+        ends (``_finish_eof()``). That judgment is deliberately left
+        exactly as it was.
+        """
+        if event.event not in _CLOSE_EVENT_NAMES:
+            return True
+        return (
+            event.event == _STREAM_ERROR_NAME and self._closed_by != _STREAM_ERROR_NAME
+        )
+
+    def _drop_frame(self) -> None:
+        """Count one discarded frame, and end a drain on it.
+
+        A drain accepts one frame and the end of the body; anything else
+        on the wire is the peer continuing past the close, so the drain
+        stops reading there rather than letting that traffic hold the
+        response open. It is counted like every other discarded frame --
+        a drain that threw frames away without saying so would break
+        ``dropped_frame_count``'s own promise.
+        """
+        self._dropped_frame_count += 1
+        if self._draining():
+            raise StopIteration
+
+    def _deliver(self, event: StreamEvent) -> StreamEvent:
+        """Hand one frame to the caller, and record it as delivered.
+
+        The single writer for ``last_event`` and ``closed_by``: both
+        mean "the last frame this stream *delivered*", so a frame that
+        is dropped, or one this module only looked at, must never set
+        them. A frame that is not a closing frame also puts the caller's
+        budget back in charge, so a window left over from an earlier
+        closing frame is discarded here instead of being carried into a
+        later one.
+        """
+        self._last_event = event
+        self._closed_by = event.event
+        if event.event not in _CLOSE_EVENT_NAMES:
+            self._drain_deadline = None
+        return event
 
     # --- Context manager ----------------------------------------------
 
@@ -640,7 +735,9 @@ class TaskEventStream:
             )
 
     def _next_line(self) -> str | None:
-        """Pull the next line, or ``None`` at EOF.
+        """Pull the next line, or ``None`` when this stream has no more
+        lines to take: the end of the response body, or a read that
+        timed out inside the post-close drain (see ``_draining()``).
 
         Folds every lower-layer httpx failure into the SDK's exception
         hierarchy here, so the frame-assembly loop in
@@ -655,6 +752,14 @@ class TaskEventStream:
         except StopIteration:
             return None
         except httpx.TimeoutException as exc:
+            if self._draining():
+                # The stream already ended on a closing frame. A read
+                # that times out while draining the rest of the body is
+                # the drain reaching its own bound, not the caller's
+                # budget elapsing, so it ends the stream the way EOF
+                # does -- raising TaskTimeout here would time out a
+                # stream that closed cleanly.
+                return None
             raise _classify_timeout(
                 exc,
                 task_id=self._task_id,
@@ -668,7 +773,9 @@ class TaskEventStream:
             ) from exc
 
     def _finish_eof(self) -> None:
-        """Called once ``_next_line()`` reports EOF.
+        """Called once ``_next_line()`` reports it has no more lines --
+        the end of the response body, or a read that timed out while
+        draining.
 
         The server does not raise an ``httpx.HTTPError`` on a clean
         close, so "EOF and the last frame delivered was not one of the
@@ -676,10 +783,14 @@ class TaskEventStream:
         truncated stream, and it has to synthesize the failure itself.
         An ordinary frame arriving after a closing one is not a shape
         the server produces (see the module docstring); if it happens
-        anyway, this reports the connection as truncated at EOF rather
-        than passing it off as a clean close -- deliberately strict.
-        Does not close the connection itself -- ``__next__`` does that
-        on both the raising and the clean-``StopIteration`` path.
+        anyway, this reports the connection as truncated where the body
+        ended rather than passing it off as a clean close --
+        deliberately strict. This branch is only ever reached from a
+        genuine end of the body: a drain's own read timeout only
+        happens once the last frame delivered already was a closing
+        one, and this function does not raise in that case. Does not
+        close the connection itself -- ``__next__`` does that on both
+        the raising and the clean-``StopIteration`` path.
         """
         last = self._closed_by
         if last not in _CLOSE_EVENT_NAMES:
