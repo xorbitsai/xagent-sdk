@@ -1645,6 +1645,13 @@ class TestPostCloseDrain:
                         "stream.error",
                         {"code": "resync_required", "message": "m"},
                     ),
+                    # Trailing junk after the offending frame: without
+                    # it, a drain that keeps reading past the drop
+                    # would happen to run out of chunks at the same
+                    # point anyway, and the mutation this guards
+                    # against would go unnoticed.
+                    _sse.ping(),
+                    _sse.ping(),
                 ],
                 4,
                 id="a_second_stream_error_after_a_heartbeat",
@@ -1700,6 +1707,12 @@ class TestPostCloseDrain:
                 {"status": "completed", "output": None, "error": None},
             ),
             offending,
+            # Trailing junk after the offending frame: without it, a
+            # drain that keeps reading past the drop would happen to
+            # run out of chunks at the same point anyway, and the
+            # mutation this guards against would go unnoticed.
+            _sse.ping(),
+            _sse.ping(),
         ]
         stream_body = _sse.ClockAdvancingStream(
             [c.encode() for c in chunks], clock, interval=0
@@ -1728,6 +1741,10 @@ class TestPostCloseDrain:
                 {"status": "completed", "output": None, "error": None},
             ),
             f"event: task.status\r\ndata: {huge}\r\n\r\n",
+            # Trailing junk after the offending frame -- see the
+            # comment in test_post_close_discarded_frames_end_the_drain.
+            _sse.ping(),
+            _sse.ping(),
         ]
         stream_body = _sse.ClockAdvancingStream(
             [c.encode() for c in chunks], clock, interval=0
@@ -2775,12 +2792,18 @@ class TestSharedFixtureParses:
         raw_frames = payload["frames"]
         task_id = payload["task_id"]
         captured: list[httpx.Request] = []
+        wire_frames = [_sse.frame(f["event"], f["data"], sep=sep) for f in raw_frames]
+        # Prove sep was actually honored on the wire -- parsing alone
+        # cannot tell CRLF from LF apart, since the SDK's line reader
+        # accepts both, so a builder that silently ignored sep would
+        # still pass every assertion below.
+        assert all(sep in wf for wf in wire_frames)
+        if sep == "\r\n":
+            assert all("\n" not in wf.replace("\r\n", "") for wf in wire_frames)
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return _sse.stream_response(
-                *[_sse.frame(f["event"], f["data"], sep=sep) for f in raw_frames]
-            )
+            return _sse.stream_response(*wire_frames)
 
         with make_client(handler) as c, c.tasks.events(task_id) as stream:
             events = list(stream)
