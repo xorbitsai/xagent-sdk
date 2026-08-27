@@ -237,6 +237,50 @@ class TasksAPI:
         not as something to recover -- ``steps()`` is the only complete,
         untruncated record.
 
+        Per-event field reference for ``event.data`` (describing current
+        server behavior: the server can add a field to any of these
+        without a corresponding SDK release, and this reference does not
+        update itself when that happens -- an unrecognized key still
+        reaches you unchanged, per the "no key is renamed, added, or
+        removed" rule above):
+
+          - ``task.status`` -- ``{"status": str}``. Always exactly this
+            one key.
+          - ``step.started`` / ``step.completed`` -- ``{"step": {...}}``,
+            the same object ``event.step`` is parsed from (``Step.id`` /
+            ``type`` / ``status`` / ``started_at`` / ``completed_at`` /
+            ``data``; see ``Step``'s own docstring for its type-specific
+            ``data`` keys). The ``"step"`` key is not removed from
+            ``event.data`` once ``event.step`` is populated -- they are
+            the same information read two different ways.
+          - ``message.delta`` -- ``{"message_id": str, "text": str}``,
+            plus ``"truncated": True`` only when the server capped this
+            chunk's length; omitted (not ``False``) when it did not.
+          - ``message.completed`` -- ``{"message_id": str, "content":
+            str}``, with the same optional ``"truncated": True`` as
+            ``message.delta``.
+          - ``task.completed`` (closing) -- ``{"status": str, "output":
+            str | None, "error": str | None}``, plus
+            ``"snapshot_truncated": True`` and ``"snapshot_total_steps":
+            int`` together, only on the two attach-time fast-path exits
+            where the step snapshot handed to this connection was cut
+            short by a size cap -- absent (not ``null``) otherwise.
+          - ``task.input_required`` (closing) -- ``{"task_id": int,
+            "prompt": str | None}``, plus the same optional
+            ``snapshot_truncated`` / ``snapshot_total_steps`` pair as
+            ``task.completed``, for the same reason.
+          - ``stream.error`` (closing) -- ``{"code": str, "message":
+            str}``, both always present. ``code`` is a short
+            machine-readable string meant to be branched on; the
+            server's current set is ``"resync_required"``,
+            ``"unauthorized"``, ``"task_deleted"``, ``"stream_expired"``
+            -- treat it as open-ended, not exhaustive.
+
+        Any of the three closing events above can instead deliver
+        ``event.data == {}`` when its body never reached this connection
+        (see the closing-frame contract below) -- the field lists above
+        describe a body that did arrive.
+
         Once the loop ends -- normally or via an exception -- check
         ``stream.closed_by`` (the ``event`` name of the last frame
         delivered, or ``None`` if none arrived) and ``stream.last_event``

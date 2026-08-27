@@ -326,8 +326,10 @@ class StreamEvent:
     ``step`` is populated only for ``step.started`` / ``step.completed``
     frames and is ``None`` on every other event; it reuses the same
     ``Step`` dataclass ``TasksAPI.steps()`` returns, because the server
-    serializes both from the same object. See ``TasksAPI.events()`` for
-    the full per-event field reference and the closing-frame contract.
+    serializes both from the same object. See ``TasksAPI.events()``'s
+    "Per-event field reference" section for the full per-event field
+    reference, and its docstring generally for the closing-frame
+    contract.
     """
 
     event: str
