@@ -1972,9 +1972,18 @@ class TestTimeoutClassification:
     is deterministic instead of racing a real clock.
     """
 
-    def test_mid_stream_read_timeout_budget_exhausted(
+    def test_the_deadline_checkpoint_fires_before_the_next_read(
         self, make_client: Callable[..., AgentClient], clock: _FakeClock
     ) -> None:
+        # The proactive checkpoint (_check_deadline(), run before every
+        # read) must fire on its own once the budget is already gone --
+        # without ever reaching a read that could raise. Advancing the
+        # clock past the deadline before iterating means the injected
+        # ReadTimeout below is never actually triggered; raise_count
+        # stays at 0 to prove that, rather than trusting the exception
+        # type alone (the sibling test below reaches TaskTimeout by a
+        # completely different path and must not be confused with this
+        # one).
         body_stream = _sse.RaisingByteStream(
             [_sse.frame("task.status", {"status": "running"}).encode()],
             httpx.ReadTimeout("silence"),
@@ -1988,16 +1997,42 @@ class TestTimeoutClassification:
             )
 
         with make_client(handler) as c:
-            # Deadline math + checkpoint (i) both read the clock at 0.0;
-            # advance past the deadline before iterating, so the
-            # ReadTimeout classification -- which reads the clock again
-            # once the RaisingByteStream fires -- sees the budget
-            # already exhausted.
             stream = c.tasks.events(1, timeout=5)
             clock.advance(100)
             with pytest.raises(TaskTimeout) as excinfo:
                 list(stream)
         assert excinfo.value.code == "task_timeout"
+        assert body_stream.raise_count == 0
+        assert body_stream.close_count == 1
+
+    def test_an_injected_read_timeout_classifies_as_the_budget_running_out(
+        self, make_client: Callable[..., AgentClient], clock: _FakeClock
+    ) -> None:
+        # The other way TaskTimeout can be reached: the proactive
+        # checkpoint passes (the deadline has not elapsed yet), the
+        # read is actually attempted, and only then -- while that read
+        # is in flight -- does the clock cross the deadline and the
+        # injected ReadTimeout fire. This exercises _classify_timeout's
+        # own deadline check, not the proactive checkpoint above; the
+        # two must not be conflated.
+        body_stream = _sse.RaisingByteStream(
+            [_sse.frame("task.status", {"status": "running"}).encode()],
+            httpx.ReadTimeout("silence"),
+            clock=clock,
+            advance_before_raise=100,
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        with make_client(handler) as c, pytest.raises(TaskTimeout) as excinfo:
+            list(c.tasks.events(1, timeout=5))
+        assert excinfo.value.code == "task_timeout"
+        assert body_stream.raise_count == 1
         assert body_stream.close_count == 1
 
     def test_mid_stream_read_timeout_budget_open(

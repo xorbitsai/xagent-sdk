@@ -78,6 +78,15 @@ class RaisingByteStream(httpx.SyncByteStream):
     because a wall-clock checkpoint fired first) checks this instead of
     just the exception type it eventually observes, since the wrong
     code path can raise the same exception type for the wrong reason.
+
+    ``clock`` and ``advance_before_raise`` (shape borrowed from
+    ``ClockAdvancingStream``) advance a fake clock immediately before
+    raising, rather than the test doing it beforehand: a test that
+    needs the deadline to elapse *during* the read that hits ``exc`` --
+    not already elapsed before that read is even attempted -- cannot
+    build that timing by calling ``clock.advance()`` before iterating,
+    since a proactive checkpoint would then fire first and ``exc``
+    would never actually be raised.
     """
 
     def __init__(
@@ -86,15 +95,21 @@ class RaisingByteStream(httpx.SyncByteStream):
         exc: Exception,
         *,
         close_exc: Exception | None = None,
+        clock: _ClockLike | None = None,
+        advance_before_raise: float = 0.0,
     ) -> None:
         self._chunks = list(chunks)
         self._exc = exc
         self._close_exc = close_exc
+        self._clock = clock
+        self._advance_before_raise = advance_before_raise
         self.close_count = 0
         self.raise_count = 0
 
     def __iter__(self) -> Iterator[bytes]:
         yield from self._chunks
+        if self._clock is not None:
+            self._clock.advance(self._advance_before_raise)
         self.raise_count += 1
         raise self._exc
 
