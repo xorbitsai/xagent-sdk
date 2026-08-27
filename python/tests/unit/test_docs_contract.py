@@ -116,3 +116,60 @@ class TestReplyGuidancePresent:
         block = text.split("### Status semantics")[1]
         assert "reply()" in block
         assert "InteractionResponseRequired" in block
+
+
+class TestStreamingErrorTable:
+    """The SDK-coined error table in README.md must list exactly the
+    three codes this SDK ever raises on its own, with events()'s two
+    stream-specific cases called out on the rows they actually belong
+    to -- an edit that adds a row without updating this count, or that
+    documents an events() case on the wrong row, drifts silently
+    otherwise.
+    """
+
+    def _table_block(self) -> str:
+        text = _read("python/README.md")
+        after_heading = text.split("SDK-coined codes:")[1]
+        return after_heading.split("The SDK does **not** retry automatically.")[0]
+
+    def test_table_has_exactly_three_data_rows(self) -> None:
+        rows = [
+            line
+            for line in self._table_block().splitlines()
+            if line.strip().startswith("| `")
+        ]
+        assert len(rows) == 3
+
+    def test_transport_error_and_timeout_rows_mention_events(self) -> None:
+        # Track which of the two rows were actually seen, not just
+        # whether every seen row passed: a row rename (or the whole
+        # table going missing) would otherwise let this loop match
+        # nothing and pass vacuously.
+        expected = {"XAgentTransportError", "TaskTimeout"}
+        found: set[str] = set()
+        for line in self._table_block().splitlines():
+            stripped = line.strip()
+            for name in expected:
+                if stripped.startswith(f"| `{name}`"):
+                    assert "events()" in stripped
+                    found.add(name)
+        assert found == expected
+
+    def test_malformed_response_row_mentions_events_and_all_causes(self) -> None:
+        # MalformedResponse has three events()-specific triggers (a
+        # wrong content-type, a declared charset other than UTF-8, and
+        # a status that is neither an error nor 200) -- a doc edit
+        # that drops any one of them back to fewer causes must fail
+        # this, not just an edit that deletes the row outright.
+        found = False
+        for line in self._table_block().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("| `MalformedResponse`"):
+                assert "events()" in stripped
+                assert "content type" in stripped
+                assert "text/event-stream" in stripped
+                assert "charset" in stripped
+                assert "UTF-8" in stripped
+                assert "neither an error nor 200" in stripped
+                found = True
+        assert found

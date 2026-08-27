@@ -314,13 +314,33 @@ SDK-coined codes:
 
 | Exception | Cause |
 |---|---|
-| `XAgentTransportError` | network / DNS / TLS error below the HTTP layer |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs |
-| `TaskTimeout` | `wait()` / `run()` deadline elapsed |
+| `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status` |
+| `TaskTimeout` | `wait()` / `run()` deadline elapsed, or `events()`'s own `timeout` budget -- which covers every read the stream still owes, including time spent between frames, and hands over to a bounded post-close drain once a closing frame has arrived, which ends the stream cleanly rather than raising -- ran out first |
 
 The SDK does **not** retry automatically. Wrap calls with your own
 policy (e.g., [tenacity](https://tenacity.readthedocs.io/)) if you
 want retry on transport errors or `TaskBusy`.
+
+### 8. Stream task events
+
+`events()` delivers each frame as it arrives instead of waiting for the
+task to finish. `closed_by` tells you which frame ended the stream:
+
+```python
+from xagent_sdk import AgentClient
+
+with AgentClient() as agent:
+    task = agent.tasks.create(agent_id=42, message="Summarize the doc.")
+    with agent.tasks.events(task.task_id) as stream:
+        for ev in stream:
+            print(ev.event, ev.data)
+    print(stream.closed_by)  # 'task.completed' on a clean finish
+```
+
+This is the minimal shape only -- reconnecting after a dropped
+connection and reconciling against `steps()` is its own recipe, covered
+in a later change.
 
 ## API reference
 
@@ -356,6 +376,7 @@ only.
 | `agent.tasks.reply(task_id, *, agent_id, message)` | `AppendResult` | POST `/v1/chat/tasks/{id}/reply`; answers a `WAITING_FOR_USER` task's pending question and resumes its server-side run (no `run_id` field on the response to check); not idempotent |
 | `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER` |
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
+| `agent.tasks.events(task_id, *, timeout=None)` | `TaskEventStream` | GET `/v1/chat/tasks/{id}/events` (SSE); iterate decoded `StreamEvent` frames as the task runs; `closed_by` tells how the stream ended |
 | `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline |
 | `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None)` | `RunResult` | `create` + `wait` + `steps` |
 | `agent.close()` / `with ... as agent` | — | release the connection pool |
@@ -455,6 +476,16 @@ Both clients share the same configuration surface. Constructing both
 in the same process is safe: each holds its own ``httpx.Client``, so
 their default headers (and connection pools) do not bleed into each
 other.
+
+**Streams and the pool**: each open `agent.tasks.events(...)` stream holds one
+connection from the same pool until it is closed. The server allows 2
+concurrent streams per task and 32 per API key, so if you intend to run
+several at once, raise `max_connections` above the number of concurrent
+streams plus the headroom your ordinary calls need — otherwise an ordinary
+request can wait out its pool timeout and fail with `XAgentTransportError`.
+A release that itself fails to close can hold its slot for the life of the
+client; the SDK logs a warning naming the task when that happens rather than
+letting it pass unnoticed.
 
 `transport=` accepts any `httpx.BaseTransport` — useful for custom
 retry/proxy/TLS configuration in production, and for

@@ -8,9 +8,16 @@ re-typing the v1 wire contract from scratch.
 ## `fixtures/v1/`
 
 Canonical request and response bodies of the xAgent v1 HTTP API, as
-plain JSON. Each file holds the **raw body** the server sends — no
-wrapping, no metadata, no comments. HTTP status codes and headers are
-implicit and documented below.
+plain JSON. HTTP status codes and headers are implicit and documented
+below.
+
+Most files hold the **raw body** the server sends — no wrapping, no
+metadata, no comments. A small number instead describe a protocol
+scenario: they carry metadata plus the material needed to construct
+that scenario's wire bytes, and each language's tests build the actual
+wire representation from that material rather than reading the file as
+a literal body. `task_events_stream.json` is one of these — see its
+row below.
 
 ### `fixtures/v1/responses/`
 
@@ -29,6 +36,7 @@ implicit and documented below.
 | `task_info_waiting_plain.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with `pending_interaction.interactions=null` (question asked with no structured controls) |
 | `reply_task.json` | `POST /v1/chat/tasks/{id}/reply` (202) | Same shape as `append_task.json`: `status=running`, `accepted_at` |
 | `steps_full.json` | `GET /v1/chat/tasks/{id}/steps` (200) | Wrapper with all four `Step` types present (`message`, `thinking`, `tool_call`, `agent_delegation`) |
+| `task_events_stream.json` | `GET /v1/chat/tasks/{id}/events` (200, `text/event-stream`) | Not a single response body -- `frames` is the ordered sequence of one connection: status, a `tool_call` step's start/complete pair, a `message.delta` sequence, `message.completed`, then the `task.completed` closing frame. `closing_frame_variants` is a separate, unordered list -- one connection cannot end three different ways, so `task.input_required` and `stream.error` live outside `frames` rather than pretending to follow it. Each client's test loader turns these into its own SSE wire bytes rather than storing the raw text directly, so the fixture stays language-agnostic; the server actually emits `event: <name>\ndata: <json>\n\n` (LF-terminated), and `\r\n` is equally legal SSE -- the Python suite exercises both wire forms against the same fixture data. |
 
 ### `fixtures/v1/errors/`
 

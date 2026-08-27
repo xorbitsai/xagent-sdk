@@ -130,10 +130,17 @@ class TemporarilyUnavailable(XAgentError):
 
 # SDK-coined errors (server has no equivalent code).
 class XAgentTransportError(XAgentError):
-    """Network, DNS, TLS, or local timeout below the HTTP layer.
+    """A network failure below the HTTP layer, or a response body that
+    had already started but ended before reaching an outcome its
+    contract allows for.
 
-    Wraps any ``httpx.HTTPError``. ``http_status`` is None because no HTTP
-    response was received.
+    Most raises wrap an ``httpx.HTTPError`` (DNS, TLS, connection reset,
+    a local timeout below the wall-clock budget); ``http_status`` is
+    ``None`` because no HTTP response was received. ``TasksAPI.events()``
+    also raises this when the server closes a 200 response cleanly but
+    the last frame it delivered was not one of its closing frames --
+    httpx reports that as an ordinary end of iteration, not as an
+    ``HTTPError``, so the SDK detects and raises it itself.
     """
 
 
@@ -148,17 +155,31 @@ class MalformedResponse(XAgentError):
     not the problem -- the decoded payload was. The ``code`` is the
     SDK-coined string ``malformed_response``; the server never emits it,
     so it is absent from ``_CODE_MAP``.
+
+    ``TasksAPI.events()`` also raises it when the stream's 200 response
+    declares a media type other than ``text/event-stream``, or declares
+    a charset other than UTF-8 -- SSE bodies are UTF-8 by definition,
+    and a mislabeled charset would silently change the text this SDK
+    hands back.
+
+    ``TasksAPI.events()`` also raises it when the event-stream endpoint
+    answers with a status that is neither an error nor the 200 a stream
+    requires -- a redirect this client does not follow, or a 204 -- and
+    there it does carry that status, because there the status line is
+    the problem.
     """
 
 
 class TaskTimeout(XAgentError):
-    """``wait()`` / ``run()`` exceeded its local deadline waiting for a task
-    to reach a terminal state.
+    """A local wall-clock budget elapsed before the operation reached a
+    state it was allowed to return.
 
     Raised by ``TasksAPI.wait`` (and indirectly by ``TasksAPI.run``) when
     the wall-clock budget elapses with the task still in a non-terminal
-    state. ``http_status`` is ``None`` because no HTTP exchange surfaced
-    the failure -- the deadline is purely client-side.
+    state, and by ``TasksAPI.events()`` when its own ``timeout`` budget
+    elapses before the stream delivers a closing frame. ``http_status``
+    is ``None`` because no HTTP exchange surfaced the failure -- the
+    deadline is purely client-side.
     """
 
 

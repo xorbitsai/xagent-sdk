@@ -1,3 +1,4 @@
+from xagent_sdk._events import TaskEventStream
 from xagent_sdk._version import __version__
 from xagent_sdk.agent_client import AgentClient
 from xagent_sdk.errors import (
@@ -28,6 +29,8 @@ from xagent_sdk.types import (
     RunResult,
     Step,
     StepType,
+    StreamEvent,
+    StreamEventType,
     TaskInfo,
     TaskStatus,
     Template,
@@ -56,7 +59,10 @@ __all__ = [
     "RunResult",
     "Step",
     "StepType",
+    "StreamEvent",
+    "StreamEventType",
     "TaskBusy",
+    "TaskEventStream",
     "TaskInfo",
     "TaskNotFound",
     "TaskStatus",
