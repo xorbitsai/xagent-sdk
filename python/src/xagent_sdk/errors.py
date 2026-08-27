@@ -156,6 +156,12 @@ class MalformedResponse(XAgentError):
     SDK-coined string ``malformed_response``; the server never emits it,
     so it is absent from ``_CODE_MAP``.
 
+    ``TasksAPI.events()`` also raises it when the stream's 200 response
+    declares a media type other than ``text/event-stream``, or declares
+    a charset other than UTF-8 -- SSE bodies are UTF-8 by definition,
+    and a mislabeled charset would silently change the text this SDK
+    hands back.
+
     ``TasksAPI.events()`` also raises it when the event-stream endpoint
     answers with a status that is neither an error nor the 200 a stream
     requires -- a redirect this client does not follow, or a 204 -- and

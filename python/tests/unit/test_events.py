@@ -1074,6 +1074,66 @@ class TestHttpErrorMapping:
             events = list(stream)
         assert [e.event for e in events] == ["task.completed"]
 
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            pytest.param("text/event-stream", id="no_charset"),
+            pytest.param("text/event-stream; charset=utf-8", id="lowercase_charset"),
+            pytest.param("text/event-stream; charset=UTF-8", id="uppercase_charset"),
+            pytest.param('text/event-stream; charset="utf-8"', id="quoted_charset"),
+            pytest.param(
+                "text/event-stream;charset=utf8", id="no_space_short_spelling"
+            ),
+        ],
+    )
+    def test_a_utf8_charset_is_accepted(
+        self, make_client: Callable[..., AgentClient], content_type: str
+    ) -> None:
+        # This is also what the real server sends: the endpoint's own
+        # headers do not set a content-type, and Starlette fills in
+        # "; charset=utf-8" for any text/* media type by default.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": content_type},
+                stream=_sse.RawByteStream(
+                    [
+                        _sse.frame(
+                            "task.completed",
+                            {"status": "completed", "output": None, "error": None},
+                        ).encode()
+                    ]
+                ),
+            )
+
+        with make_client(handler) as c, c.tasks.events(1) as stream:
+            events = list(stream)
+        assert [e.event for e in events] == ["task.completed"]
+
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            pytest.param("text/event-stream; charset=iso-8859-1", id="latin1"),
+            pytest.param("text/event-stream; charset=us-ascii", id="ascii"),
+            pytest.param("text/event-stream; charset=utf-16", id="utf16"),
+            pytest.param("text/event-stream; charset=", id="empty_value"),
+        ],
+    )
+    def test_a_non_utf8_charset_is_rejected(
+        self, make_client: Callable[..., AgentClient], content_type: str
+    ) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": content_type},
+                stream=_sse.RawByteStream([b""]),
+            )
+
+        with make_client(handler) as c, pytest.raises(MalformedResponse) as excinfo:
+            c.tasks.events(1)
+        assert excinfo.value.http_status is None
+        assert content_type in excinfo.value.message
+
     def test_error_body_read_failure_wraps_and_releases_the_connection(
         self, make_client: Callable[..., AgentClient]
     ) -> None:

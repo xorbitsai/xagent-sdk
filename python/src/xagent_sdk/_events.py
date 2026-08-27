@@ -40,6 +40,7 @@ because a closing frame whose body never arrived carries empty
 
 from __future__ import annotations
 
+import codecs
 import contextlib
 import json
 import logging
@@ -808,6 +809,34 @@ class TaskEventStream:
             )
 
 
+def _is_utf8_charset(charset: str) -> bool:
+    """Whether a declared ``charset`` names UTF-8.
+
+    SSE bodies are UTF-8 by definition and this API hands the server's
+    text back unchanged, so a response declaring anything else has to be
+    refused rather than decoded: HTTPX would decode the body with the
+    declared codec and replace whatever failed, producing a successful
+    ``StreamEvent`` whose text is silently not what the server sent. An
+    absent charset makes no such claim and is accepted -- the media type
+    itself was already pinned above.
+
+    Compared through ``codecs.lookup`` rather than by string match, so
+    every registered spelling of the one acceptable codec (``utf-8``,
+    ``UTF-8``, ``utf8``, ``u8``) passes and nothing else does --
+    including ``us-ascii``, which would turn a byte the server sent as
+    text into a decode error. The value comes from
+    ``httpx.Response.charset_encoding``, the same header parse HTTPX
+    decodes with, so a declaration accepted here is one HTTPX also
+    decodes as UTF-8. A name no codec answers to is refused rather than
+    left to HTTPX's fallback, which would quietly decode it as UTF-8
+    anyway and hide the mislabeling.
+    """
+    try:
+        return codecs.lookup(charset).name == "utf-8"
+    except LookupError:
+        return False
+
+
 def open_task_event_stream(
     http: HTTPClient, task_id: int, *, timeout: float | None
 ) -> TaskEventStream:
@@ -882,6 +911,15 @@ def open_task_event_stream(
                 "malformed_response",
                 f"Expected content-type text/event-stream for the task "
                 f"event stream, got {content_type!r}",
+                http_status=None,
+            )
+
+        charset = resp.charset_encoding
+        if charset is not None and not _is_utf8_charset(charset):
+            raise MalformedResponse(
+                "malformed_response",
+                f"Expected a UTF-8 task event stream, got content-type "
+                f"{content_type!r}",
                 http_status=None,
             )
     except BaseException:
