@@ -2784,8 +2784,10 @@ class TestSharedFixtureParses:
 
         with make_client(handler) as c, c.tasks.events(task_id) as stream:
             events = list(stream)
-        assert str(task_id) in captured[0].url.path
-        assert [e.event for e in events] == [f["event"] for f in raw_frames]
+        assert captured[0].url.path == f"/v1/chat/tasks/{task_id}/events"
+        assert [(e.event, e.data) for e in events] == [
+            (f["event"], f["data"]) for f in raw_frames
+        ]
         assert stream.dropped_frame_count == 0
         assert stream.closed_by == "task.completed"
         step_events = [e for e in events if e.step is not None]
