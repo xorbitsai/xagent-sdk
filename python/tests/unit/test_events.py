@@ -120,6 +120,19 @@ class _LogRecorder:
         self.warnings.append((msg, args))
 
 
+class _RaisingLogger:
+    """Stand-in for ``_events.logger`` whose ``warning()`` itself fails.
+
+    Simulates a caller-installed logging handler that raises, so a test
+    can prove that failure is suppressed rather than replacing the
+    exception the caller is actually owed -- a diagnostic must never
+    take the place of the failure it was reporting.
+    """
+
+    def warning(self, *args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("logging handler is broken")
+
+
 class TestSSEParsing:
     """Line-level framing: multi-line data, comment lines, blank-line
     framing, EOF residue discard. The frame builders default to the
@@ -1212,6 +1225,31 @@ class TestHttpErrorMapping:
             "a slot in the client's pool"
         )
 
+    def test_open_time_cleanup_suppresses_a_failing_warning_call(
+        self,
+        make_client: Callable[..., AgentClient],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Same scenario as test_open_time_close_failure_is_reported, but
+        # the logging call that reports the close failure fails too: a
+        # broken logging handler must not replace the MalformedResponse
+        # the caller is owed.
+        monkeypatch.setattr(events_mod, "logger", _RaisingLogger())
+        body_stream = _sse.CloseRecordingStream(
+            [_sse.body(_sse.frame("task.status", {"status": "running"}))],
+            close_exc=RuntimeError("connection pool exploded"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, headers={"content-type": "text/html"}, stream=body_stream
+            )
+
+        with make_client(handler) as c, pytest.raises(MalformedResponse) as excinfo:
+            c.tasks.events(1)
+        assert excinfo.value.code == "malformed_response"
+        assert body_stream.close_count == 1
+
     def test_open_time_close_failure_keeps_the_body_read_error(
         self, make_client: Callable[..., AgentClient]
     ) -> None:
@@ -2159,6 +2197,39 @@ class TestLifecycle:
         # The caller's own ValueError is the reason this `with` block is
         # unwinding; a close() failure on the way out must not shadow
         # it with an unrelated httpx teardown error.
+        body_stream = _sse.CloseRecordingStream(
+            [_sse.body(_sse.frame("task.status", {"status": "running"}))],
+            close_exc=RuntimeError("connection pool exploded"),
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=body_stream,
+            )
+
+        def fail_mid_stream(c: AgentClient) -> None:
+            with c.tasks.events(1) as stream:
+                next(stream)
+                raise ValueError("business logic failed")
+
+        with (
+            make_client(handler) as c,
+            pytest.raises(ValueError, match="business logic failed"),
+        ):
+            fail_mid_stream(c)
+        assert body_stream.close_count == 1
+
+    def test_close_quietly_suppresses_a_failing_warning_call(
+        self,
+        make_client: Callable[..., AgentClient],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Same scenario as the test above, but the logging call that
+        # reports the close failure fails too: a broken logging handler
+        # must not replace the caller's ValueError either.
+        monkeypatch.setattr(events_mod, "logger", _RaisingLogger())
         body_stream = _sse.CloseRecordingStream(
             [_sse.body(_sse.frame("task.status", {"status": "running"}))],
             close_exc=RuntimeError("connection pool exploded"),

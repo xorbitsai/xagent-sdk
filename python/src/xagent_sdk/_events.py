@@ -698,6 +698,13 @@ class TaskEventStream:
         So the stream is flagged closed either way, and a later
         ``close()``/``__del__`` is a no-op rather than a re-entry into a
         context manager's ``__exit__`` that already raised.
+
+        ``_close_quietly()`` reports it on a best-effort basis: if the
+        logging call itself raises -- a custom handler that fails --
+        that failure is suppressed too, because a diagnostic must never
+        take the place of the exception the caller is owed. A caller
+        whose logging is broken loses this report; every other caller
+        keeps it.
         """
         if self._closed:
             return
@@ -718,13 +725,14 @@ class TaskEventStream:
         try:
             self.close()
         except Exception:
-            logger.warning(
-                "releasing the event stream for task %s failed; its "
-                "connection may still be holding a slot in the client's "
-                "pool",
-                self._task_id,
-                exc_info=True,
-            )
+            with contextlib.suppress(Exception):
+                logger.warning(
+                    "releasing the event stream for task %s failed; its "
+                    "connection may still be holding a slot in the client's "
+                    "pool",
+                    self._task_id,
+                    exc_info=True,
+                )
 
     # --- Internals ------------------------------------------------
 
@@ -933,13 +941,14 @@ def open_task_event_stream(
         try:
             connection.__exit__(None, None, None)
         except Exception:
-            logger.warning(
-                "releasing the event stream for task %s failed while "
-                "reporting an earlier open failure; its connection may "
-                "still be holding a slot in the client's pool",
-                task_id,
-                exc_info=True,
-            )
+            with contextlib.suppress(Exception):
+                logger.warning(
+                    "releasing the event stream for task %s failed while "
+                    "reporting an earlier open failure; its connection may "
+                    "still be holding a slot in the client's pool",
+                    task_id,
+                    exc_info=True,
+                )
         raise
 
     stream = TaskEventStream(
