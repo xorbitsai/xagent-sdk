@@ -2732,8 +2732,9 @@ class TestSharedFixtureParses:
     silently drift apart from each other.
     """
 
+    @pytest.mark.parametrize("sep", ["\n", "\r\n"], ids=["lf", "crlf"])
     def test_stream_fixture_parses(
-        self, make_client: Callable[..., AgentClient]
+        self, make_client: Callable[..., AgentClient], sep: str
     ) -> None:
         payload = stream_fixture("task_events_stream")
         raw_frames = payload["frames"]
@@ -2743,7 +2744,7 @@ class TestSharedFixtureParses:
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
             return _sse.stream_response(
-                *[_sse.frame(f["event"], f["data"]) for f in raw_frames]
+                *[_sse.frame(f["event"], f["data"], sep=sep) for f in raw_frames]
             )
 
         with make_client(handler) as c, c.tasks.events(task_id) as stream:
