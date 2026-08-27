@@ -13,15 +13,14 @@ _DEFAULT_CONNECT_TIMEOUT = 10.0
 _DEFAULT_MAX_CONNECTIONS = 10
 
 # Ceilings for the task event stream's timeout legs (``stream_lines``).
-# The caller (``_events.open_task_event_stream``) clamps ``connect``,
-# ``read`` and ``pool`` to its own wall-clock budget before passing
-# them, so these are the upper bounds it clamps against, not the values
-# that ship. ``write`` takes no budget and stays fixed here: this is a
-# GET with no body, so the write leg never actually blocks, and a
-# finite value only keeps httpx from leaving it as ``None``
-# ("wait forever"). ``connect``'s ceiling mirrors
-# _DEFAULT_CONNECT_TIMEOUT -- establishing the connection is the same
-# operation whether or not the request ends up streaming.
+# The caller (``_events.open_task_event_stream``) clamps every one of
+# them to its own wall-clock budget before passing them, so these are
+# the upper bounds it clamps against, not the values that ship. The
+# write leg is clamped like the rest: httpcore sends the request line
+# and headers on it, so a GET with no body can still block there.
+# ``connect``'s ceiling mirrors _DEFAULT_CONNECT_TIMEOUT -- establishing
+# the connection is the same operation whether or not the request ends
+# up streaming.
 _STREAM_CONNECT_TIMEOUT = 10.0
 _STREAM_WRITE_TIMEOUT = 10.0
 _STREAM_POOL_TIMEOUT = 10.0
@@ -89,6 +88,7 @@ class HTTPClient:
         *,
         connect_timeout: float,
         read_timeout: float,
+        write_timeout: float,
         pool_timeout: float,
     ) -> Iterator[tuple[httpx.Response, Iterator[str]]]:
         """Open a server-sent-events connection and yield the response
@@ -100,8 +100,9 @@ class HTTPClient:
         ordinary requests (see the ``_events`` module docstring).
         Overrides the client's default ``Accept: application/json`` for
         this one request, and overrides its timeout with the legs the
-        caller computed from its own wall-clock budget; only ``write``
-        stays fixed here, since a GET with no body never blocks on it.
+        caller computed from its own wall-clock budget -- every leg,
+        the write one included, because httpcore sends the request
+        headers on it.
 
         Unlike ``request()``, this does not catch ``httpx.HTTPError``:
         any failure while establishing the connection (DNS/TLS/connect
@@ -114,7 +115,7 @@ class HTTPClient:
         request_timeout = httpx.Timeout(
             connect=connect_timeout,
             read=read_timeout,
-            write=_STREAM_WRITE_TIMEOUT,
+            write=write_timeout,
             pool=pool_timeout,
         )
         with self._client.stream(

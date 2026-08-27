@@ -1202,14 +1202,22 @@ class TestRequestShape:
         assert req.headers["authorization"] == "Bearer xag_secret"
 
     @pytest.mark.parametrize(
-        ("timeout", "expected_read", "expected_connect_pool"),
-        [(None, 60.0, 10.0), (120.0, 60.0, 10.0), (5.0, 5.0, 5.0)],
+        ("timeout", "expected_read", "expected_write", "expected_connect_pool"),
+        [
+            (None, 60.0, 10.0, 10.0),
+            (120.0, 60.0, 10.0, 10.0),
+            # The only row where clamping actually narrows a ceiling:
+            # a timeout smaller than every leg's fixed ceiling brings
+            # all four down to it, write included.
+            (5.0, 5.0, 5.0, 5.0),
+        ],
     )
     def test_stream_request_timeout_override(
         self,
         make_client: Callable[..., AgentClient],
         timeout: float | None,
         expected_read: float,
+        expected_write: float,
         expected_connect_pool: float,
     ) -> None:
         captured: list[httpx.Request] = []
@@ -1234,7 +1242,7 @@ class TestRequestShape:
         assert request_timeout == {
             "connect": expected_connect_pool,
             "read": expected_read,
-            "write": 10.0,
+            "write": expected_write,
             "pool": expected_connect_pool,
         }
 

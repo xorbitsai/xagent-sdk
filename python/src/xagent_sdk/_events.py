@@ -55,6 +55,7 @@ from pydantic import ValidationError
 from xagent_sdk._http import (
     _STREAM_CONNECT_TIMEOUT,
     _STREAM_POOL_TIMEOUT,
+    _STREAM_WRITE_TIMEOUT,
     HTTPClient,
 )
 from xagent_sdk.errors import (
@@ -828,6 +829,7 @@ def open_task_event_stream(
         f"/v1/chat/tasks/{task_id}/events",
         connect_timeout=_clamped_leg(_STREAM_CONNECT_TIMEOUT, timeout),
         read_timeout=_clamped_leg(_STREAM_READ_TIMEOUT, timeout),
+        write_timeout=_clamped_leg(_STREAM_WRITE_TIMEOUT, timeout),
         pool_timeout=_clamped_leg(_STREAM_POOL_TIMEOUT, timeout),
     )
     try:
