@@ -302,9 +302,11 @@ class TasksAPI:
                 ``0`` is legal but not instantaneous: it still opens
                 the connection once (so a 401/404/429 still maps the
                 same way), and only raises ``TaskTimeout`` -- before
-                delivering any event -- once that finishes, which can
-                itself take up to roughly 10s (connect) + 60s (waiting
-                for the first byte) in the worst case.
+                delivering any event -- once that finishes. With no
+                budget to narrow them, each phase gets its own full
+                ceiling there, so the worst case is the same
+                one-after-another chain described below at each
+                phase's ceiling.
 
                 It is a soft budget, not a hard cap. Every phase that
                 can block is clamped to it individually -- connect, the
