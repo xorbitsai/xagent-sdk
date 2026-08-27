@@ -8,9 +8,16 @@ re-typing the v1 wire contract from scratch.
 ## `fixtures/v1/`
 
 Canonical request and response bodies of the xAgent v1 HTTP API, as
-plain JSON. Each file holds the **raw body** the server sends — no
-wrapping, no metadata, no comments. HTTP status codes and headers are
-implicit and documented below.
+plain JSON. HTTP status codes and headers are implicit and documented
+below.
+
+Most files hold the **raw body** the server sends — no wrapping, no
+metadata, no comments. A small number instead describe a protocol
+scenario: they carry metadata plus the material needed to construct
+that scenario's wire bytes, and each language's tests build the actual
+wire representation from that material rather than reading the file as
+a literal body. `task_events_stream.json` is one of these — see its
+row below.
 
 ### `fixtures/v1/responses/`
 

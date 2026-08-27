@@ -1,8 +1,13 @@
 """Loader for the canonical wire fixtures in ``shared/fixtures/v1/``.
 
-Each fixture file holds the raw JSON body the server emits. HTTP status
-codes and headers are implicit; see ``shared/README.md`` for the table
-mapping fixture name -> status code.
+Most fixture files hold the raw JSON body the server emits, loaded via
+``response()`` / ``error_envelope()``. A small number instead describe
+a protocol scenario -- metadata plus the material needed to build that
+scenario's wire bytes -- and are loaded via ``stream_fixture()``
+instead; see its docstring below and ``shared/README.md`` for which
+files fall into that category. HTTP status codes and headers are
+implicit; see ``shared/README.md`` for the table mapping fixture name
+-> status code.
 
 The loader resolves paths relative to the repository root, walking up
 from this file:
