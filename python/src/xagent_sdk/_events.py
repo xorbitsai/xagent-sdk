@@ -377,20 +377,21 @@ def _classify_timeout(
 ) -> TaskTimeout | XAgentTransportError:
     """Turn one ``httpx.TimeoutException`` into the right SDK exception.
 
-    Every leg that can block -- connect, read, pool -- is clamped to
-    the caller's own budget in ``open_task_event_stream()``, so any of
-    them can be the way that budget runs out and all of them classify
-    here. The same exception means two different things depending on
-    the remaining wall-clock budget: budget exhausted means the
-    caller's own ``timeout`` elapsed (``TaskTimeout``); budget still
-    open means one leg hit its own ceiling with room to spare -- a
-    connection that never came up, a pool slot that never freed, or a
-    connection that stayed silent for a full read window without even a
-    heartbeat -- which is a transport problem, not a deadline
-    (``XAgentTransportError``). Shared by the open-time path (still
-    waiting for response headers, or waiting for a slot) and every
-    mid-stream timeout, so the two do not classify differently by
-    accident.
+    Every leg that can block -- connect, read, write, pool -- is
+    clamped to the caller's own budget in ``open_task_event_stream()``,
+    so any of them can be the way that budget runs out and all of them
+    classify here. The same exception means two different things
+    depending on the remaining wall-clock budget: budget exhausted
+    means the caller's own ``timeout`` elapsed (``TaskTimeout``);
+    budget still open means one leg hit its own ceiling with room to
+    spare -- a connection that never came up, a pool slot that never
+    freed, or a connection that stayed silent for a full read window
+    without even a heartbeat -- which is a transport problem, not a
+    deadline (``XAgentTransportError``). Shared by the open-time path
+    (still waiting for response headers, or waiting for a slot) and
+    every mid-stream timeout, so the two do not classify differently by
+    accident. A read that times out inside the post-close drain does
+    not reach this function at all -- see ``_draining()``.
     """
     if deadline is not None and time.monotonic() >= deadline:
         return TaskTimeout(

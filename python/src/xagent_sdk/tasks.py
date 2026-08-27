@@ -292,12 +292,8 @@ class TasksAPI:
                 including the time spent opening the connection and the
                 time this call is idle between frames -- once you get an
                 event back, the clock keeps running while your code
-                holds onto it before asking for the next one. It stops
-                applying the moment a closing frame (``task.completed``,
-                ``task.input_required``, or ``stream.error``) has
-                arrived: the stream is then let to end on a clean EOF no
-                matter how much of the budget is left. Must be a finite,
-                non-negative number. It is a budget enforced at
+                holds onto it before asking for the next one. Must be a
+                finite, non-negative number. It is a budget enforced at
                 checkpoints, not a hard cap -- see the overrun note at
                 the end.
                 ``None`` (the default) sets no local budget -- the
@@ -308,24 +304,56 @@ class TasksAPI:
                 same way), and only raises ``TaskTimeout`` -- before
                 delivering any event -- once that finishes, which can
                 itself take up to roughly 10s (connect) + 60s (waiting
-                for the first byte) in the worst case. For a positive
-                ``timeout``, every phase that can block is clamped to
-                it: connect and the wait for a free connection get
-                ``min(timeout, 10)`` seconds, each read window gets
-                ``min(timeout, 60)``. So a budget spent stuck
-                connecting, stuck waiting for a connection, or stuck
-                waiting for the next byte raises ``TaskTimeout``. The
+                for the first byte) in the worst case.
+
+                It is a soft budget, not a hard cap. Every phase that
+                can block is clamped to it individually -- connect, the
+                wait for a free connection, and writing the request
+                each get ``min(timeout, 10)`` seconds, each read window
+                gets ``min(timeout, 60)`` -- but those phases run one
+                after another, so a call that is unlucky in several of
+                them in a row can outlast the number you passed. The
+                worst case runs the pool wait, then the connect, then
+                the request write, then each read window, and finally
+                one post-close drain window (below), one after
+                another. So a budget spent stuck connecting, stuck
+                waiting for a connection, stuck writing, or stuck
+                waiting for the next byte raises ``TaskTimeout``; the
                 reverse case -- a leg hitting its own ceiling while the
                 budget still has room -- is ``XAgentTransportError``.
                 ``AgentClient(timeout=...)`` has no effect here: this
                 call always overrides it with its own request-level
                 timeout. The budget is checked between reads, never
-                during one, so a positive ``timeout`` can overrun by up
-                to one read window -- ``min(timeout, 60)`` seconds --
-                before ``TaskTimeout`` is raised. The window cannot be
-                narrowed as the deadline approaches: the underlying
-                HTTP layer fixes the read timeout when the response
-                body starts being read.
+                during one, so a read already in flight when the
+                deadline passes runs to its own window's end first.
+                That window cannot be narrowed as the deadline
+                approaches: the underlying HTTP layer fixes the read
+                timeout when the response body starts being read.
+
+                Once a closing frame (``task.completed``,
+                ``task.input_required``, or ``stream.error``) has
+                arrived, this budget stops applying -- a task that
+                finished on the last second of it is owed a clean close
+                -- and hands over to a bounded post-close drain. The
+                drain reads out what is left of the response: the end
+                of the body, and, on an attach that could not take a
+                complete step snapshot, one trailing ``stream.error``
+                saying so. It accepts nothing else: a repeated closing
+                frame, a frame that does not decode, or one past the
+                size cap ends the stream and counts on
+                ``dropped_frame_count``. It also gets one read window
+                of its own, counted from the moment you ask for the
+                next event rather than from the moment the closing
+                frame reached you, so time you spend processing that
+                frame is not charged to it. Nothing in the drain raises
+                ``TaskTimeout``: an elapsed window and a read that
+                times out inside one both end the stream the way the
+                end of the body does, and heartbeats are skipped as
+                they are anywhere else. An ordinary frame after a
+                closing one is not part of the drain -- the server does
+                not produce that shape; it is still delivered, and the
+                stream is still reported as truncated when the body
+                ends.
 
         Returns:
             A ``TaskEventStream`` bound to this ``task_id``.
