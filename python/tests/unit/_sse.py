@@ -143,13 +143,16 @@ def frame(event: str, data: dict[str, Any] | str, *, sep: str = "\n") -> str:
     """One well-formed SSE frame: ``event:``, ``data:``, then a blank line.
 
     ``data`` is JSON-encoded unless already given as a literal string
-    (for building deliberately malformed bodies). ``sep`` is the line
-    terminator and defaults to the server's own: it emits ``\\n``
-    (``shared/README.md`` documents that wire form). ``\\r\\n`` is
-    equally legal SSE, and a test that wants that variant passes it
+    (for building deliberately malformed bodies), with
+    ``ensure_ascii=False`` -- matching the server's own serializer, so
+    non-ASCII text lands on the wire as raw UTF-8 bytes rather than
+    ``\\uXXXX`` escapes a test builder introduced on its own. ``sep`` is
+    the line terminator and defaults to the server's own: it emits
+    ``\\n`` (``shared/README.md`` documents that wire form). ``\\r\\n``
+    is equally legal SSE, and a test that wants that variant passes it
     explicitly.
     """
-    payload = data if isinstance(data, str) else json.dumps(data)
+    payload = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
     return f"event: {event}{sep}data: {payload}{sep}{sep}"
 
 

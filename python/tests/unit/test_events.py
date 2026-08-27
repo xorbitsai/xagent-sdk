@@ -256,10 +256,23 @@ class TestSSEParsing:
         # caller exactly as sent -- no mangling from the byte-level line
         # assembly this module does before json.loads ever sees it.
         text = "你好，世界 🎉"
+        wire = _sse.frame("message.delta", {"message_id": "m1", "text": text}).encode()
+        # The wire bytes are raw UTF-8, not \uXXXX escapes -- otherwise
+        # this would not be exercising anything an ASCII-only encoder
+        # did not already handle.
+        assert not wire.isascii()
+        # Split the emoji's 4-byte UTF-8 sequence after its second byte:
+        # httpx's line reader must not mangle a multi-byte character
+        # that straddles a chunk boundary.
+        emoji_index = wire.index("🎉".encode())
+        split_at = emoji_index + 2
+        chunk1, chunk2 = wire[:split_at], wire[split_at:]
 
         def handler(req: httpx.Request) -> httpx.Response:
-            return _sse.stream_response(
-                _sse.frame("message.delta", {"message_id": "m1", "text": text}),
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_sse.RawByteStream([chunk1, chunk2]),
             )
 
         with make_client(handler) as c, c.tasks.events(1) as stream:
