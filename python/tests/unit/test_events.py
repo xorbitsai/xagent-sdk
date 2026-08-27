@@ -256,7 +256,17 @@ class TestSSEParsing:
         # caller exactly as sent -- no mangling from the byte-level line
         # assembly this module does before json.loads ever sees it.
         text = "你好，世界 🎉"
-        wire = _sse.frame("message.delta", {"message_id": "m1", "text": text}).encode()
+        # This test opts in to a raw-UTF-8 wire body via
+        # ensure_ascii=False -- not frame()'s default, and not today's
+        # server wire (see _sse.frame()'s docstring) -- specifically to
+        # exercise the byte-level line assembly below against
+        # multi-byte characters, independent of whether the server
+        # ever actually emits unescaped UTF-8.
+        wire = _sse.frame(
+            "message.delta",
+            {"message_id": "m1", "text": text},
+            ensure_ascii=False,
+        ).encode()
         # The wire bytes are raw UTF-8, not \uXXXX escapes -- otherwise
         # this would not be exercising anything an ASCII-only encoder
         # did not already handle.

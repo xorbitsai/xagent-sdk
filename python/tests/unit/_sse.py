@@ -154,20 +154,41 @@ class ClockAdvancingStream(httpx.SyncByteStream):
             yield chunk
 
 
-def frame(event: str, data: dict[str, Any] | str, *, sep: str = "\n") -> str:
+def frame(
+    event: str,
+    data: dict[str, Any] | str,
+    *,
+    sep: str = "\n",
+    ensure_ascii: bool = True,
+) -> str:
     """One well-formed SSE frame: ``event:``, ``data:``, then a blank line.
 
     ``data`` is JSON-encoded unless already given as a literal string
-    (for building deliberately malformed bodies), with
-    ``ensure_ascii=False`` -- matching the server's own serializer, so
-    non-ASCII text lands on the wire as raw UTF-8 bytes rather than
-    ``\\uXXXX`` escapes a test builder introduced on its own. ``sep`` is
-    the line terminator and defaults to the server's own: it emits
-    ``\\n`` (``shared/README.md`` documents that wire form). ``\\r\\n``
-    is equally legal SSE, and a test that wants that variant passes it
-    explicitly.
+    (for building deliberately malformed bodies). ``ensure_ascii``
+    defaults to ``True`` -- ``json.dumps``'s own default, and today's
+    server wire: the v1 server's ``_sse_frame()`` also calls
+    ``json.dumps`` with its default ``ensure_ascii``, so non-ASCII text
+    is escaped as ``\\uXXXX`` rather than sent as raw UTF-8 bytes. A
+    test that needs to exercise a raw-UTF-8 wire body passes
+    ``ensure_ascii=False`` explicitly (see
+    ``test_non_ascii_payload_round_trips`` in ``test_events.py``).
+
+    This still does not reproduce the server byte-for-byte: the server
+    also calls ``json.dumps`` with ``separators=(",", ":")`` for a
+    compact body, while this helper keeps ``json.dumps``'s default
+    (space-separated) formatting. The SDK's SSE parser does not care
+    about that whitespace, so no test here depends on it -- but a test
+    that compares wire bytes literally against a server-captured
+    fixture would need to account for the difference.
+
+    ``sep`` is the line terminator and defaults to the server's own: it
+    emits ``\\n`` (``shared/README.md`` documents that wire form).
+    ``\\r\\n`` is equally legal SSE, and a test that wants that variant
+    passes it explicitly.
     """
-    payload = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
+    payload = (
+        data if isinstance(data, str) else json.dumps(data, ensure_ascii=ensure_ascii)
+    )
     return f"event: {event}{sep}data: {payload}{sep}{sep}"
 
 
