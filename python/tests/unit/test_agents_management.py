@@ -318,7 +318,7 @@ class TestAgentSkills:
     @pytest.mark.parametrize(
         ("skills", "expected_body"),
         [
-            pytest.param(["a", "a", "b"], {"skills": ["a", "a", "b"]}, id="duplicates"),
+            pytest.param(["b", "a", "b"], {"skills": ["b", "a", "b"]}, id="duplicates"),
             pytest.param([], {"skills": []}, id="empty"),
             pytest.param("abc", None, id="string"),
         ],
@@ -366,16 +366,43 @@ class TestAgentSkills:
             else:
                 assert c.agents.get_skills(7) == expected
 
+    def test_get_skills_returns_names_in_server_order(self) -> None:
+        fixture = response("agent_skills")
+        with _make_user(lambda req: httpx.Response(200, json=fixture)) as c:
+            assert c.agents.get_skills(7) == fixture["skills"]
+
+    @pytest.mark.parametrize("method", ["get_skills", "replace_skills"])
+    def test_agent_id_is_encoded_into_the_path(self, method: str) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            if method == "get_skills":
+                return httpx.Response(200, json=response("agent_skills"))
+            return httpx.Response(200, json=response("agent_skills_update"))
+
+        with _make_user(handler) as c:
+            if method == "get_skills":
+                c.agents.get_skills("7/../8")  # type: ignore[arg-type]
+            else:
+                c.agents.replace_skills("7/../8", [])  # type: ignore[arg-type]
+
+        assert len(captured) == 1
+        assert captured[0].url.raw_path == b"/v1/agents/7%2F..%2F8/skills"
+
     @pytest.mark.parametrize(
         "body",
         [
             pytest.param(response("agent_skills_update"), id="fixture"),
             pytest.param({"agent_id": 7, "skills": []}, id="missing-unresolved"),
+            pytest.param(
+                {"agent_id": 7, "unresolved_for_caller": []}, id="missing-skills"
+            ),
         ],
     )
     def test_replace_skills_parses_update(self, body: dict[str, Any]) -> None:
         with _make_user(lambda req: httpx.Response(200, json=body)) as c:
-            if "unresolved_for_caller" not in body:
+            if "unresolved_for_caller" not in body or "skills" not in body:
                 with pytest.raises(MalformedResponse):
                     c.agents.replace_skills(7, [])
                 return

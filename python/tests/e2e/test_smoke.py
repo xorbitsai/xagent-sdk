@@ -134,7 +134,8 @@ def test_agent_skills_roundtrip(user_client: UserClient) -> None:
     """Read an agent's skill list and write it back unchanged.
 
     ``E2E_AGENT_ID`` must name an agent that is visible to the personal
-    key's holder. The write changes nothing on the agent.
+    key's holder. The write changes nothing on the agent when the stored list
+    has no repeated name.
     """
     agent_id_env = os.environ.get("E2E_AGENT_ID")
     if not agent_id_env:

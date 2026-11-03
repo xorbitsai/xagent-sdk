@@ -15,6 +15,7 @@ caller plans to rotate later via ``rotate_key()``.
 
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from xagent_sdk._base import _json_body
 from xagent_sdk.errors import MalformedResponse
@@ -210,18 +211,23 @@ class AgentsAPI:
         way back.
 
         Args:
-            agent_id: An agent the key holder can see. The SDK does not check
-                it; the server rejects a value that is not a positive 32-bit
-                integer.
+            agent_id: An agent the key holder can see. Pass an ``int``: the SDK
+                does not check it, only percent-encodes it into the path. The
+                server answers a number outside the positive 32-bit range with
+                ``InvalidInput``.
 
         Raises:
             AgentNotFound: the key holder cannot see this agent.
             InvalidInput: ``agent_id`` is out of range (HTTP 422).
+            InternalError: a server without this route answers 404
+                (``http_status=404``), which is not ``AgentNotFound``.
             InvalidAPIKey: the key is not accepted by this endpoint.
             MalformedResponse: the response status is not 200, the body is not
                 JSON, or it is not an agent skill list object.
         """
-        resp = self._client._request("GET", f"/v1/agents/{agent_id}/skills")
+        resp = self._client._request(
+            "GET", f"/v1/agents/{quote(str(agent_id), safe='')}/skills"
+        )
         return _parse_agent_skills(_json_body(resp, "agent skill list"))
 
     def replace_skills(self, agent_id: int, skills: _StrList) -> AgentSkillsUpdate:
@@ -230,10 +236,11 @@ class AgentsAPI:
         ``skills`` becomes the agent's whole list, and ``[]`` clears it. Read
         the current list with ``get_skills()`` first and send it back with your
         change. There is no conflict detection: of two concurrent replacements
-        the later one wins. A repeated name is kept once, at its first
-        position. A list holds at most 100 names, so an agent that already has
-        more than 100 cannot be sent back with an edit; it can only be given a
-        shorter list.
+        the later one wins. Anyone who can see a team agent can replace its
+        list, and the new list applies to everyone using the agent. A repeated
+        name is kept once, at its first position. A list holds at most 100
+        names, so an agent that already has more than 100 cannot be sent back
+        with an edit; it can only be given a shorter list.
 
         A name that is not on the agent yet must be the name of a skill the key
         holder can see, or a valid personal skill name (1-100 ASCII letters,
@@ -257,6 +264,8 @@ class AgentsAPI:
                 sent as one name per character; raised before any request is
                 sent.
             AgentNotFound: the key holder cannot see this agent.
+            InternalError: a server without this route answers 404 or 405,
+                which is not ``AgentNotFound``.
             InvalidInput: a new name is neither visible nor valid (HTTP 400;
                 the message lists at most five), or the list has more than 100
                 names, a name is outside 1-1000 characters, or ``agent_id`` is
@@ -270,6 +279,8 @@ class AgentsAPI:
         if isinstance(skills, str):
             raise TypeError("skills must be a list of names, not a single string")
         resp = self._client._request(
-            "PUT", f"/v1/agents/{agent_id}/skills", json={"skills": list(skills)}
+            "PUT",
+            f"/v1/agents/{quote(str(agent_id), safe='')}/skills",
+            json={"skills": list(skills)},
         )
         return _parse_agent_skills_update(_json_body(resp, "agent skill update"))

@@ -1,4 +1,7 @@
-"""Tests for UserClient.skills (SkillsAPI).
+"""Tests for UserClient.skills (SkillsAPI) and the agent skill methods.
+
+The agent skill methods are ``UserClient.agents.get_skills()`` and
+``UserClient.agents.replace_skills()``.
 
 Each block below pins one invariant of the skill methods: how a name
 becomes a path, which names are refused before any request, how success
@@ -291,8 +294,9 @@ class TestParsing:
 # The error table names methods only; every method name is unique across the
 # namespaces in ``_CALLS``.
 _CALL_BY_METHOD: dict[str, _Call] = {m: call for (_, m), call in _CALLS.items()}
+assert len(_CALL_BY_METHOD) == len(_CALLS)
 
-# (method, status, fixture, expected class): every failure the skill
+# (method, status, fixture, expected class): the failures the skill
 # methods are documented to raise, through the shared error fixtures.
 _ERROR_CASES: list[tuple[str, int, str, type[XAgentError]]] = [
     ("get", 404, "skill_not_found", SkillNotFound),
