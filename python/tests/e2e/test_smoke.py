@@ -130,6 +130,22 @@ def test_personal_key_runs_visible_agent(user_client: UserClient) -> None:
     assert result.output is not None
 
 
+def test_agent_skills_roundtrip(user_client: UserClient) -> None:
+    """Read an agent's skill list and write it back unchanged.
+
+    ``E2E_AGENT_ID`` must name an agent that is visible to the personal
+    key's holder. The write changes nothing on the agent.
+    """
+    agent_id_env = os.environ.get("E2E_AGENT_ID")
+    if not agent_id_env:
+        pytest.skip("E2E_AGENT_ID not set; cannot exercise the agent skill list")
+    agent_id = int(agent_id_env)
+    before = user_client.agents.get_skills(agent_id)
+    result = user_client.agents.replace_skills(agent_id, before)
+    assert result.skills == before
+    assert result.unresolved_for_caller == []
+
+
 def test_e2e_full_flow(user_client: UserClient) -> None:
     """Pick a template, create an agent from it, run a single turn.
 
