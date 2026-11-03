@@ -148,10 +148,12 @@ class SkillsAPI:
         key holder can be changed; built-in and other people's skills
         cannot.
 
-        A name that is not a valid personal skill name (1-100 ASCII
-        letters, digits, ``_`` or ``-``) raises ``SkillNotFound`` without
-        the content being looked at. For a valid name, invalid ``skill_md``
-        raises ``InvalidInput`` (HTTP 400) before the server checks whether
+        An empty or oversized ``skill_md`` raises ``InvalidInput`` (HTTP
+        422) for any name, because the request is validated first. Otherwise,
+        a name that is not a valid personal skill name (1-100 ASCII letters,
+        digits, ``_`` or ``-``) raises ``SkillNotFound`` without the content
+        being parsed. For a valid name, invalid ``skill_md`` raises
+        ``InvalidInput`` (HTTP 400) before the server checks whether
         you own a skill by that name; a valid ``skill_md`` for a name you do
         not own raises ``SkillNotFound``.
 

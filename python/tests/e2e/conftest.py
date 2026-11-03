@@ -4,8 +4,9 @@ Two pairs of fixtures cover the two-client surface:
 
 - ``user_client`` / ``patient_user_client`` -- ``UserClient``
   authenticated with ``XAGENT_PERSONAL_KEY``. Use for personal-key
-  endpoints (``/v1/me``, ``/v1/templates*``, ``/v1/agents*``) and for
-  tasks on any agent the key holder can see (``user_client.tasks``).
+  endpoints (``/v1/me``, ``/v1/templates*``, ``/v1/agents*``,
+  ``/v1/skills*``) and for tasks on any agent the key holder can see
+  (``user_client.tasks``).
 
 - ``agent_client`` / ``patient_agent_client`` -- ``AgentClient``
   authenticated with ``XAGENT_API_KEY`` (an agent runtime key). Use
