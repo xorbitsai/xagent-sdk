@@ -107,6 +107,27 @@ def test_run_single_turn(agent_client: AgentClient) -> None:
     assert result.output is not None
 
 
+def test_personal_key_runs_visible_agent(user_client: UserClient) -> None:
+    """Single-turn run of an existing agent through a personal key.
+
+    ``E2E_AGENT_ID`` must name an agent that is visible to the personal
+    key's holder.
+    """
+    agent_id_env = os.environ.get("E2E_AGENT_ID")
+    if not agent_id_env:
+        pytest.skip("E2E_AGENT_ID not set; cannot exercise runtime path")
+    agent_id = int(agent_id_env)
+    result = user_client.tasks.run(
+        agent_id=agent_id,
+        message="Say hi in one word",
+        timeout=60.0,
+        poll_interval=2.0,
+    )
+    assert isinstance(result, RunResult)
+    assert result.status is TaskStatus.COMPLETED
+    assert result.output is not None
+
+
 def test_e2e_full_flow(user_client: UserClient) -> None:
     """Pick a template, create an agent from it, run a single turn.
 

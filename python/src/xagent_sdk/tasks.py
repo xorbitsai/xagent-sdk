@@ -37,15 +37,14 @@ _WAIT_RETURN_STATUSES = _TERMINAL_STATUSES | frozenset({TaskStatus.WAITING_FOR_U
 
 
 class TasksAPI:
-    """The ``client.tasks`` namespace.
+    """The ``client.tasks`` namespace, on both ``AgentClient`` and ``UserClient``.
 
     Six of these methods map one-to-one onto a v1 endpoint. Five of them
-    are thin wrappers: build a request body, hand it to
-    ``AgentClient._request`` for transport + error mapping, then parse
-    the success body into a frozen dataclass. ``events()`` is the
-    exception -- it holds a streaming response open instead of parsing
-    one body, so it does its own transport and error mapping (see its
-    docstring).
+    are thin wrappers: build a request body, hand it to the owning client's
+    ``_request`` for transport + error mapping, then parse the success body
+    into a frozen dataclass. ``events()`` is the exception -- it holds a
+    streaming response open instead of parsing one body, so it does its own
+    transport and error mapping (see its docstring).
 
     ``message`` arguments take a plain ``str`` rather than a structured
     object: the SDK only sends user-role messages (the v1 contract pins
@@ -58,6 +57,12 @@ class TasksAPI:
     ``wait()`` and ``run()`` add client-side polling on top of those
     endpoints; they raise ``TaskTimeout`` on deadline but propagate any
     other error from the underlying calls.
+
+    With an agent key (``AgentClient.tasks``), ``agent_id`` must be the
+    key's own agent. With a personal key (``UserClient.tasks``), ``agent_id``
+    may be any agent the key holder can see, and the task runs as the key
+    holder rather than as the agent's owner. Which tasks a personal key can
+    see, and when a task can be continued, is described on ``UserClient``.
     """
 
     def __init__(self, client: "_BaseClient") -> None:
@@ -198,8 +203,8 @@ class TasksAPI:
             TaskBusy: the task is currently ``RUNNING``, or another
                 caller's reply/turn is already claiming this task.
                 Retryable.
-            TaskNotFound: unknown ``task_id``, or this runtime key does
-                not own it.
+            TaskNotFound: unknown ``task_id``, or this key cannot see
+                it.
             InternalError: falls back here for any response code the
                 SDK does not recognize -- notably, calling ``reply()``
                 against a server old enough to have no ``/reply`` route
@@ -392,7 +397,7 @@ class TasksAPI:
                 waiting for the next byte raises ``TaskTimeout``; the
                 reverse case -- a leg hitting its own ceiling while the
                 budget still has room -- is ``XAgentTransportError``.
-                ``AgentClient(timeout=...)`` has no effect here: this
+                The client's ``timeout=`` setting has no effect here: this
                 call always overrides it with its own request-level
                 timeout. The budget is checked between reads, never
                 during one, so a read already in flight when the
@@ -432,8 +437,8 @@ class TasksAPI:
         Raises:
             ValueError: ``timeout`` is negative, ``NaN``, or infinite.
             InvalidAPIKey: the API key is missing, invalid, or revoked.
-            TaskNotFound: unknown ``task_id``, or this runtime key does
-                not own it.
+            TaskNotFound: unknown ``task_id``, or this key cannot see
+                it.
             RateLimited: this task already has 2 open streams, or this
                 key has 32 open streams across all of its tasks -- both
                 caps are enforced on the server's side. Back off before
@@ -472,7 +477,7 @@ class TasksAPI:
         both.
 
         Not thread-safe: a single stream must be iterated and closed
-        from the thread that opened it. The ``AgentClient`` that created
+        from the thread that opened it. The client that created
         it stays shareable across threads -- that guarantee is
         unaffected. The only exception is garbage collection releasing
         an abandoned stream's connection as a best-effort backstop,
