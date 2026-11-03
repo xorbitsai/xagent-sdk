@@ -7,8 +7,8 @@ from templates, and trigger them — all in a handful of lines.
 > **Status**: 0.5.0 — early access. Optional
 > `xagent_sdk.cloud.WorkspaceClient` (hosted workspace surface) selects a
 > hosted region. **Breaking change vs 0.1.0**: the SDK
-> exposes two clients (``UserClient`` for management, ``AgentClient`` for
-> runtime) instead of a single class, and `/v1/me` returns a user
+> exposes two clients (``UserClient`` for a personal key, ``AgentClient`` for
+> an agent key) instead of a single class, and `/v1/me` returns a user
 > principal instead of an agent identity. See
 > [Migration from 0.1.0](#migration-from-010) below.
 

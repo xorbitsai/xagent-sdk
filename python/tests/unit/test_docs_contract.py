@@ -10,6 +10,9 @@ waiting task with ``InteractionResponseRequired``. Each location below
 must mention ``reply()`` and must no longer contain its old
 append()-only phrasing; fixing only a subset (e.g. only ``wait()``) is
 exactly the half-done drift this test exists to catch.
+
+This file also pins the personal-key descriptions: the frozen texts must match
+word for word, and the superseded phrasings must not reappear.
 """
 
 import inspect

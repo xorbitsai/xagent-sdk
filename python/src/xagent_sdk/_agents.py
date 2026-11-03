@@ -60,8 +60,7 @@ class AgentsAPI:
     def list(self) -> list[AgentSummary]:
         """``GET /v1/agents`` -- list the agents the key holder can see.
 
-        Returns slim summaries (id + name + optional status) for the key
-        holder's own agents plus agents shared with their team. The backend
+        Returns slim summaries (id + name + optional status). The backend
         sends a bare JSON array; a non-list body returns an empty list.
         Standard error mapping applies (``InvalidAPIKey``, etc.).
         """

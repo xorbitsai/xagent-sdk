@@ -1,4 +1,6 @@
-"""Tests for UserClient construction, env-var fallback, and the me() probe."""
+"""Tests for UserClient construction, env-var fallback, the me() probe, and the
+tasks namespace.
+"""
 
 from collections.abc import Callable
 from typing import Any
