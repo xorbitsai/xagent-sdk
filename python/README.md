@@ -336,7 +336,7 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `TemplateNotFound` | 404 | `template_not_found` |
 | `SkillNotFound` | 404 | `skill_not_found` -- raised by `skills.get()`, `skills.update()` and `skills.delete()` |
 | `TaskBusy` | 409 | `task_busy` |
-| `SkillAlreadyExists` | 409 | `skill_already_exists` -- raised by `skills.create()` |
+| `SkillAlreadyExists` | 409 | `skill_already_exists` -- raised by `skills.create()` / `skills.upload()` |
 | `InteractionResponseRequired` | 409 | `interaction_response_required` -- raised by `append()` on a `WAITING_FOR_USER` task; use `reply()` instead |
 | `NoPendingInteraction` | 409 | `no_pending_interaction` -- raised by `reply()` when the task is not `WAITING_FOR_USER` |
 | `InteractionNotResumable` | 409 | `interaction_not_resumable` -- raised by `reply()` when the task's execution state could not be restored; do not retry |
@@ -358,7 +358,7 @@ SDK-coined codes:
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.update()` can be retried safely after it |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it |
 | `TaskTimeout` | `wait()` / `run()` deadline elapsed, or `events()`'s own `timeout` budget -- which covers every read the stream still owes, including time spent between frames, and hands over to a bounded post-close drain once a closing frame has arrived, which ends the stream cleanly rather than raising -- ran out first |
 
 The SDK does **not** retry automatically. Wrap calls with your own
@@ -448,6 +448,28 @@ different content raises `SkillAlreadyExists`. `skills.get()` also finds
 skills you do not own, such as built-in ones, and reports where they come
 from in `source`.
 
+To create a skill from a file instead, pass its bytes to `upload()`. Only
+`.zip` and `.md` files are accepted, and the file name decides which:
+
+```python
+from pathlib import Path
+
+from xagent_sdk import UserClient
+
+with UserClient() as user:
+    uploaded = user.skills.upload(
+        filename="my-skill.zip",
+        content=Path("my-skill.zip").read_bytes(),
+        name="my-skill",
+    )
+    print(uploaded.name, uploaded.source)  # my-skill personal
+```
+
+Repeating the same upload returns 200 again. The same name with different
+content, or a name that was created with `create()`, raises
+`SkillAlreadyExists`. The server's default limit is 50 MiB; a deployment may
+set a lower limit, which surfaces as `InvalidInput` with `http_status=413`.
+
 ## API reference
 
 All methods are synchronous.
@@ -472,6 +494,7 @@ which agents and tasks a personal key can reach.
 | `user.skills.list()` | `list[SkillSummary]` | GET `/v1/skills`; your own skills first, in server order; a body that is not an array of skills raises `MalformedResponse` (never `[]`) |
 | `user.skills.get(name)` | `SkillDetail` | GET `/v1/skills/{name}`; includes `skill_md` and `files`; 404 → `SkillNotFound`; `""`, `"."`, `".."` or a name containing `/` raises `ValueError` before any request |
 | `user.skills.create(*, name, skill_md)` | `SkillSummary` | POST `/v1/skills`; the same name with the same content returns 200 again, so a retry is safe; any other clash → `SkillAlreadyExists`; bad name or content → `InvalidInput` |
+| `user.skills.upload(*, filename, content, name=None)` | `SkillSummary` | POST `/v1/skills/upload`; `.zip` or `.md`, chosen by `filename`; `content` is `bytes`; the same name with the same content returns 200 again, any other clash → `SkillAlreadyExists`; server default 50 MiB; a deployment may set a lower limit, which surfaces as `InvalidInput` with `http_status=413`; an empty `filename` raises `ValueError` before any request |
 | `user.skills.update(name, *, skill_md)` | `SkillSummary` | PUT `/v1/skills/{name}`; replaces the whole SKILL.md of one of your own skills (anything else → `SkillNotFound`); bad content → `InvalidInput`; same `ValueError` rule as `get` |
 | `user.skills.delete(name)` | `None` | DELETE `/v1/skills/{name}`; returns once the server confirms; deleting again → `SkillNotFound`; same `ValueError` rule as `get` |
 | `user.close()` / `with ... as user` | — | release the connection pool |
@@ -569,7 +592,7 @@ The minted runtime key is an ordinary agent key — drive it with
 UserClient(
     personal_key=None,       # or env XAGENT_PERSONAL_KEY
     base_url=None,           # or env XAGENT_BASE_URL
-    timeout=30.0,            # per-request HTTP timeout (seconds)
+    timeout=30.0,            # max seconds for any single wait (connect is fixed at 10); not a deadline for the whole request
     max_connections=10,      # httpx connection pool size
     user_agent=None,         # override the default "xagent-sdk-python/..."
     transport=None,          # custom httpx.BaseTransport (proxy / TLS / tests)

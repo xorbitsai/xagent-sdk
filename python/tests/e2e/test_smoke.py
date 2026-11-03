@@ -176,7 +176,7 @@ def test_e2e_full_flow(user_client: UserClient) -> None:
 
 
 def test_personal_skill_lifecycle(user_client: UserClient) -> None:
-    """Create, read, replace and delete one personal skill.
+    """Create, read, replace, delete and then upload one personal skill.
 
     The skill is named after the process id so concurrent runs do not
     collide, and it is deleted in ``finally`` even when an assertion in
@@ -208,6 +208,19 @@ def test_personal_skill_lifecycle(user_client: UserClient) -> None:
         assert user_client.skills.delete(name) is None
         with pytest.raises(SkillNotFound):
             user_client.skills.get(name)
+
+        content = skill_md("uploaded").encode()
+        uploaded = user_client.skills.upload(
+            filename=f"{name}.md", content=content, name=name
+        )
+        assert uploaded.name == name
+        assert uploaded.source == "personal"
+        assert "uploaded version" in user_client.skills.get(name).skill_md
+        # Repeating the same upload is a replay, not a conflict.
+        assert (
+            user_client.skills.upload(filename=f"{name}.md", content=content, name=name)
+            == uploaded
+        )
     finally:
         with contextlib.suppress(SkillNotFound):
             user_client.skills.delete(name)
