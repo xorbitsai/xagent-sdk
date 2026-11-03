@@ -2,6 +2,7 @@
 
 import json
 import time
+import types
 from collections.abc import Callable
 
 import httpx
@@ -925,6 +926,8 @@ class TestRun:
         assert elapsed < timeout + create_delay / 2
 
 
+_HTTPX_VERSION = tuple(int(part) for part in httpx.__version__.split(".")[:2])
+
 _PROMPT_CONTEXT_CALLS: dict[str, Callable[..., object]] = {
     "create": lambda c, **kw: c.tasks.create(agent_id=7, message="hi", **kw),
     "append": lambda c, **kw: c.tasks.append(10, agent_id=7, message="hi", **kw),
@@ -978,6 +981,10 @@ class TestPromptContext:
                 value, sort_keys=True
             )
 
+    @pytest.mark.skipif(
+        _HTTPX_VERSION < (0, 28),
+        reason="httpx before 0.28 encodes nan/inf instead of refusing them",
+    )
     @pytest.mark.parametrize("method", ["create", "append"])
     @pytest.mark.parametrize("value", [float("nan"), float("inf")], ids=["nan", "inf"])
     def test_prompt_context_non_finite_value_fails_before_sending(
@@ -995,6 +1002,19 @@ class TestPromptContext:
 
         assert captured == []
 
+    @pytest.mark.parametrize("method", ["create", "append"])
+    def test_prompt_context_accepts_a_read_only_mapping(
+        self, make_client: Callable[..., AgentClient], method: str
+    ) -> None:
+        captured: list[httpx.Request] = []
+        with make_client(_prompt_context_handler(captured)) as c:
+            _PROMPT_CONTEXT_CALLS[method](
+                c, prompt_context=types.MappingProxyType({"k": "v"})
+            )
+
+        assert len(captured) == 1
+        assert json.loads(captured[0].content)["prompt_context"] == {"k": "v"}
+
     def test_reply_does_not_take_prompt_context(
         self, make_client: Callable[..., AgentClient]
     ) -> None:
@@ -1004,7 +1024,10 @@ class TestPromptContext:
             captured.append(req)
             return httpx.Response(202, json=response("reply_task"))
 
-        with make_client(handler) as c, pytest.raises(TypeError):
+        with (
+            make_client(handler) as c,
+            pytest.raises(TypeError, match="prompt_context"),
+        ):
             c.tasks.reply(  # type: ignore[call-arg]
                 10, agent_id=7, message="hi", prompt_context={}
             )

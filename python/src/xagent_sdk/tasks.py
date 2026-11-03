@@ -105,7 +105,10 @@ class TasksAPI:
         of the value. Anything it rejects raises ``InvalidInput`` (HTTP 422) with
         the reason in ``message``, which is free text to show as it is, not to
         parse. A ``nan`` or ``inf`` value raises ``ValueError`` before any
-        request is sent. A server that predates this field ignores it silently.
+        request is sent with httpx 0.28 or later; older httpx versions send it
+        and the server answers ``InvalidInput``. A value JSON cannot encode,
+        such as a ``date``, raises ``TypeError`` before any request is sent. A
+        server that predates this field ignores it silently.
 
         How the server treats the values depends on the key. With an agent key
         they count as signed by your backend, and the agent's declared fields do
@@ -114,7 +117,8 @@ class TasksAPI:
         (its ``prompt_context_fields``) and be no longer than the declared
         length, otherwise the whole request is rejected, nothing is stored, and
         ``message`` names the rejected fields. This SDK can neither set nor read
-        an agent's declared fields.
+        an agent's declared fields. Declare them on the agent in the web agent
+        builder.
         """
         body: dict[str, Any] = {
             "agent_id": agent_id,

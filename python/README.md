@@ -505,9 +505,13 @@ they count as unsigned, with the same trust as user input: every field
 must be one the agent declares and be no longer than the declared
 length, otherwise the whole request raises `InvalidInput` (422) and
 `message` names the rejected fields. This SDK can neither set nor read
-an agent's declared fields. The server checks keys, value types and
-size; a `nan` or `inf` value raises `ValueError` before the request is
-sent. A server that predates this field ignores it silently.
+an agent's declared fields. Declare them on the agent in the web agent
+builder. The server checks keys, value types and size. A `nan` or `inf`
+value raises `ValueError` before any request is sent with httpx 0.28 or
+later; older httpx versions send it and the server answers
+`InvalidInput`. A value JSON cannot encode, such as a `date`, raises
+`TypeError` before any request is sent. A server that predates this
+field ignores it silently.
 
 ### `WorkspaceClient` — hosted workspace surface (`xagent_sdk.cloud`)
 
