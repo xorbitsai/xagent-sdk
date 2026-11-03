@@ -29,6 +29,8 @@ row below.
 | `agents_list.json` | `GET /v1/agents` | Bare JSON array; each entry keys its id under `id` (SDKs surface it as `agent_id`); covers `active`, `draft`, `paused` status values |
 | `agents_create.json` | `POST /v1/agents` or `POST /v1/agents/from-template` | Nested `{agent: {id, name, ...}, api_key: {full_key, key_prefix, created_at}}`; the `api_key` block is present only when `generate_runtime_key=True` |
 | `rotate_key.json` | `POST /v1/agents/{id}/api-key` | Rotation result with one-time `full_key` and public-safe `key_prefix` |
+| `agent_skills.json` | `GET /v1/agents/{id}/skills` (200) | `{agent_id, skills}`: the agent's skill names, in order |
+| `agent_skills_update.json` | `PUT /v1/agents/{id}/skills` (200) | The same plus `unresolved_for_caller`: names this request added that the key holder cannot see |
 | `skills_list.json` | `GET /v1/skills` (200) | Bare JSON array, no id rename; one entry for each `source` value (`personal`, `builtin`, `team`, `external`), personal skills first |
 | `skill_detail.json` | `GET /v1/skills/{name}` (200) | Single object: the summary fields plus the complete `skill_md` text and the sorted `files` list |
 | `skill_write.json` | `POST /v1/skills` or `PUT /v1/skills/{name}` (200) | Skill summary (`name / description / when_to_use / tags / source`) with `source=personal`; a repeat of the same create also answers 200 |

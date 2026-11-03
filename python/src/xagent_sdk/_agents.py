@@ -2,7 +2,8 @@
 
 Provides agent lifecycle management for the personal-key authenticated
 caller: list the user's agents, create new ones (structured or from a
-template), and rotate the runtime API key on an existing agent.
+template), rotate the runtime API key on an existing agent, and read or
+replace an agent's skill list.
 
 ``create()`` and ``create_from_template()`` default to
 ``generate_runtime_key=True`` to match the backend default; the returned
@@ -15,18 +16,27 @@ caller plans to rotate later via ``rotate_key()``.
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from xagent_sdk._base import _json_body
 from xagent_sdk.errors import MalformedResponse
 from xagent_sdk.types import (
     AgentCreateResult,
+    AgentSkillsUpdate,
     AgentSummary,
     RotateKeyResult,
     _parse_agent_create,
     _parse_agent_list,
+    _parse_agent_skills,
+    _parse_agent_skills_update,
     _parse_rotate_key,
 )
 
 if TYPE_CHECKING:
     from xagent_sdk.user_client import UserClient
+
+# ``AgentsAPI.list()`` shadows the ``list`` builtin inside the class body, so
+# a ``list[...]`` annotation on a later method cannot resolve to the builtin
+# type. Reference it through a module-scope alias instead.
+_StrList = list[str]
 
 
 def _require_runtime_key(
@@ -188,3 +198,78 @@ class AgentsAPI:
         """
         resp = self._client._request("POST", f"/v1/agents/{agent_id}/api-key")
         return _parse_rotate_key(resp.json())
+
+    def get_skills(self, agent_id: int) -> _StrList:
+        """``GET /v1/agents/{agent_id}/skills`` -- read an agent's skill names.
+
+        Returns the names in the agent's order. An empty list means the server
+        answered that the agent has none. Parsing is strict because the result
+        is usually edited and written back with ``replace_skills()``: a body
+        that is not the expected object raises ``MalformedResponse`` and is
+        never read as an empty list, which would clear the agent's list on the
+        way back.
+
+        Args:
+            agent_id: An agent the key holder can see. The SDK does not check
+                it; the server rejects a value that is not a positive 32-bit
+                integer.
+
+        Raises:
+            AgentNotFound: the key holder cannot see this agent.
+            InvalidInput: ``agent_id`` is out of range (HTTP 422).
+            InvalidAPIKey: the key is not accepted by this endpoint.
+            MalformedResponse: the response status is not 200, the body is not
+                JSON, or it is not an agent skill list object.
+        """
+        resp = self._client._request("GET", f"/v1/agents/{agent_id}/skills")
+        return _parse_agent_skills(_json_body(resp, "agent skill list"))
+
+    def replace_skills(self, agent_id: int, skills: _StrList) -> AgentSkillsUpdate:
+        """``PUT /v1/agents/{agent_id}/skills`` -- replace an agent's skill names.
+
+        ``skills`` becomes the agent's whole list, and ``[]`` clears it. Read
+        the current list with ``get_skills()`` first and send it back with your
+        change. There is no conflict detection: of two concurrent replacements
+        the later one wins. A repeated name is kept once, at its first
+        position. A list holds at most 100 names, so an agent that already has
+        more than 100 cannot be sent back with an edit; it can only be given a
+        shorter list.
+
+        A name that is not on the agent yet must be the name of a skill the key
+        holder can see, or a valid personal skill name (1-100 ASCII letters,
+        digits, ``_`` or ``-``). Names already on the agent are kept as they
+        are. ``unresolved_for_caller`` on the result lists the names this call
+        added that the key holder cannot see. They are stored anyway, because a
+        task loads the skills of the user who runs it, and that user may have a
+        skill with this name.
+
+        New tasks use the new list at once. An existing task keeps using the
+        previous list while its cached agent runtime is alive: the cache is
+        released after 120 seconds idle, or after 1800 seconds for a task that
+        is paused or waiting for the user, and each server process has its own
+        cache. If the agent is the manager or an enabled worker of a workforce
+        and its list now differs, other than in order, from the list it had
+        when an ongoing workforce conversation started, that conversation is
+        rejected with ``workforce_config_changed`` on its next turn.
+
+        Raises:
+            TypeError: ``skills`` is a single string, which would otherwise be
+                sent as one name per character; raised before any request is
+                sent.
+            AgentNotFound: the key holder cannot see this agent.
+            InvalidInput: a new name is neither visible nor valid (HTTP 400;
+                the message lists at most five), or the list has more than 100
+                names, a name is outside 1-1000 characters, or ``agent_id`` is
+                out of range (HTTP 422).
+            InvalidAPIKey: the key is not accepted by this endpoint.
+            MalformedResponse: the response status is not 200, the body is not
+                JSON, or it is not an agent skill update object. The replacement
+                may already have been applied; call ``get_skills()`` to check
+                what the server stored.
+        """
+        if isinstance(skills, str):
+            raise TypeError("skills must be a list of names, not a single string")
+        resp = self._client._request(
+            "PUT", f"/v1/agents/{agent_id}/skills", json={"skills": list(skills)}
+        )
+        return _parse_agent_skills_update(_json_body(resp, "agent skill update"))

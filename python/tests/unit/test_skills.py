@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from xagent_sdk import (
+    AgentNotFound,
     InvalidAPIKey,
     InvalidInput,
     MalformedResponse,
@@ -55,6 +56,10 @@ _CALLS: dict[tuple[str, str], _Call] = {
     ),
     ("skills", "update"): lambda u: u.skills.update("my-skill", skill_md=_SKILL_MD),
     ("skills", "delete"): lambda u: u.skills.delete("my-skill"),
+    ("agents", "get_skills"): lambda u: u.agents.get_skills(7),
+    ("agents", "replace_skills"): lambda u: u.agents.replace_skills(
+        7, ["weekly-report"]
+    ),
 }
 _OK_FIXTURES: dict[tuple[str, str], str] = {
     ("skills", "list"): "skills_list",
@@ -62,6 +67,8 @@ _OK_FIXTURES: dict[tuple[str, str], str] = {
     ("skills", "create"): "skill_write",
     ("skills", "update"): "skill_write",
     ("skills", "delete"): "skill_delete",
+    ("agents", "get_skills"): "agent_skills",
+    ("agents", "replace_skills"): "agent_skills_update",
 }
 
 # HTTP method and raw request path of every new method, for the canonical
@@ -72,13 +79,17 @@ _ROUTES: dict[tuple[str, str], tuple[str, bytes]] = {
     ("skills", "create"): ("POST", b"/v1/skills"),
     ("skills", "update"): ("PUT", b"/v1/skills/my-skill"),
     ("skills", "delete"): ("DELETE", b"/v1/skills/my-skill"),
+    ("agents", "get_skills"): ("GET", b"/v1/agents/7/skills"),
+    ("agents", "replace_skills"): ("PUT", b"/v1/agents/7/skills"),
 }
-_EXPECTED_BODIES: dict[tuple[str, str], dict[str, str] | None] = {
+_EXPECTED_BODIES: dict[tuple[str, str], dict[str, Any] | None] = {
     ("skills", "list"): None,
     ("skills", "get"): None,
     ("skills", "create"): {"name": "my-skill", "skill_md": _SKILL_MD},
     ("skills", "update"): {"skill_md": _SKILL_MD},
     ("skills", "delete"): None,
+    ("agents", "get_skills"): None,
+    ("agents", "replace_skills"): {"skills": ["weekly-report"]},
 }
 
 # Methods that take a skill name, called with an arbitrary name.
@@ -277,6 +288,10 @@ class TestParsing:
                     c.skills.delete("x")
 
 
+# The error table names methods only; every method name is unique across the
+# namespaces in ``_CALLS``.
+_CALL_BY_METHOD: dict[str, _Call] = {m: call for (_, m), call in _CALLS.items()}
+
 # (method, status, fixture, expected class): every failure the skill
 # methods are documented to raise, through the shared error fixtures.
 _ERROR_CASES: list[tuple[str, int, str, type[XAgentError]]] = [
@@ -287,6 +302,9 @@ _ERROR_CASES: list[tuple[str, int, str, type[XAgentError]]] = [
     ("create", 422, "validation_422", InvalidInput),
     ("update", 400, "validation_422", InvalidInput),
     ("list", 401, "invalid_api_key", InvalidAPIKey),
+    ("get_skills", 404, "agent_not_found", AgentNotFound),
+    ("replace_skills", 400, "validation_422", InvalidInput),
+    ("replace_skills", 422, "validation_422", InvalidInput),
 ]
 
 
@@ -309,7 +327,7 @@ class TestErrorMapping:
             _make_user(lambda req: httpx.Response(status, json=body)) as c,
             pytest.raises(XAgentError) as exc,
         ):
-            _CALLS[("skills", method)](c)
+            _CALL_BY_METHOD[method](c)
         assert isinstance(exc.value, expected)
         assert exc.value.http_status == status
 

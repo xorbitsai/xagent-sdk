@@ -1,6 +1,7 @@
 """Tests for UserClient.agents (AgentsAPI)."""
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from xagent_sdk import (
     AgentCreateResult,
     AgentNotFound,
+    AgentSkillsUpdate,
     AgentSummary,
     InvalidInput,
     MalformedResponse,
@@ -310,3 +312,77 @@ class TestRotateKey:
 
         with _make_user(h) as c, pytest.raises(AgentNotFound):
             c.agents.rotate_key(99999)
+
+
+class TestAgentSkills:
+    @pytest.mark.parametrize(
+        ("skills", "expected_body"),
+        [
+            pytest.param(["a", "a", "b"], {"skills": ["a", "a", "b"]}, id="duplicates"),
+            pytest.param([], {"skills": []}, id="empty"),
+            pytest.param("abc", None, id="string"),
+        ],
+    )
+    def test_replace_skills_input_shapes(
+        self, skills: Any, expected_body: dict[str, Any] | None
+    ) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(200, json=response("agent_skills_update"))
+
+        with _make_user(handler) as c:
+            if expected_body is None:
+                with pytest.raises(TypeError, match="not a single string"):
+                    c.agents.replace_skills(7, skills)
+                assert captured == []
+            else:
+                c.agents.replace_skills(7, skills)
+                assert len(captured) == 1
+                assert json.loads(captured[0].content) == expected_body
+
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            pytest.param({}, None, id="empty-object"),
+            pytest.param({"agent_id": 7}, None, id="skills-missing"),
+            pytest.param({"agent_id": 7, "skills": None}, None, id="skills-null"),
+            pytest.param({"agent_id": 7, "skills": "a"}, None, id="skills-string"),
+            pytest.param({"agent_id": 7, "skills": [1]}, None, id="skills-not-strings"),
+            pytest.param({"skills": []}, None, id="agent-id-missing"),
+            pytest.param([], None, id="array"),
+            pytest.param({"agent_id": 7, "skills": []}, [], id="real-empty"),
+        ],
+    )
+    def test_get_skills_malformed_bodies(self, body: Any, expected: Any) -> None:
+        # A body of the wrong shape must never read as "the agent has no
+        # skills": the list is usually edited and written straight back.
+        with _make_user(lambda req: httpx.Response(200, json=body)) as c:
+            if expected is None:
+                with pytest.raises(MalformedResponse) as exc:
+                    c.agents.get_skills(7)
+                assert exc.value.http_status is None
+            else:
+                assert c.agents.get_skills(7) == expected
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(response("agent_skills_update"), id="fixture"),
+            pytest.param({"agent_id": 7, "skills": []}, id="missing-unresolved"),
+        ],
+    )
+    def test_replace_skills_parses_update(self, body: dict[str, Any]) -> None:
+        with _make_user(lambda req: httpx.Response(200, json=body)) as c:
+            if "unresolved_for_caller" not in body:
+                with pytest.raises(MalformedResponse):
+                    c.agents.replace_skills(7, [])
+                return
+            result = c.agents.replace_skills(7, ["weekly-report"])
+        fixture = response("agent_skills_update")
+        assert result == AgentSkillsUpdate(**fixture)
+        assert result.agent_id == fixture["agent_id"]
+        assert result.skills == fixture["skills"]
+        assert result.unresolved_for_caller == fixture["unresolved_for_caller"]
+        assert result.unresolved_for_caller
