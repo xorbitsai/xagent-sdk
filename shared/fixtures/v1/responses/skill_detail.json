@@ -1,0 +1,9 @@
+{
+  "name": "weekly-report",
+  "description": "Drafts the weekly status report from the team's notes.",
+  "when_to_use": "When the user asks for a weekly report or status update.",
+  "tags": ["reporting", "writing"],
+  "source": "personal",
+  "skill_md": "---\nname: weekly-report\ndescription: Drafts the weekly status report from the team's notes.\nwhen_to_use: When the user asks for a weekly report or status update.\ntags: [reporting, writing]\n---\n\n# Weekly report\n\n1. Collect the notes the user points to.\n2. Group them under Done, In progress and Blocked.\n3. Keep each item to one line.\n",
+  "files": ["SKILL.md", "templates/report.md"]
+}

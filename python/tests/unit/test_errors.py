@@ -7,6 +7,9 @@ fixture-name to exception-class mapping live as parametrize data here,
 because they are language-agnostic facts about the wire contract.
 """
 
+import json
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -19,13 +22,15 @@ from xagent_sdk import (
     InvalidInput,
     NoPendingInteraction,
     RateLimited,
+    SkillAlreadyExists,
+    SkillNotFound,
     TaskBusy,
     TaskNotFound,
     TemplateNotFound,
     TemporarilyUnavailable,
     XAgentError,
 )
-from xagent_sdk.errors import from_response
+from xagent_sdk.errors import _CODE_MAP, from_response
 
 from ._fixtures import error_envelope
 
@@ -56,6 +61,8 @@ class TestFromResponseStableCodes:
             (404, "agent_not_found", AgentNotFound),
             (404, "task_not_found", TaskNotFound),
             (404, "template_not_found", TemplateNotFound),
+            (404, "skill_not_found", SkillNotFound),
+            (409, "skill_already_exists", SkillAlreadyExists),
             (409, "task_busy", TaskBusy),
             (422, "validation_422", InvalidInput),
             (429, "rate_limited", RateLimited),
@@ -83,6 +90,19 @@ class TestFromResponseStableCodes:
         expected_code = "invalid_input" if name == "validation_422" else name
         assert err.code == expected_code
         assert err.http_status == status
+
+
+class TestCodeMapFixtures:
+    def test_code_map_matches_error_fixtures(self) -> None:
+        # Every error fixture's code has a mapping and every mapping has a
+        # fixture, so adding one without the other turns this red.
+        errors_dir = Path(__file__).resolve().parents[3] / ("shared/fixtures/v1/errors")
+        fixture_codes = {
+            json.loads(path.read_text(encoding="utf-8"))["error"]["code"]
+            for path in errors_dir.glob("*.json")
+        }
+        assert fixture_codes == set(_CODE_MAP)
+        assert len(_CODE_MAP) == 14
 
 
 class TestFromResponseFallback:

@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "skill_already_exists",
+    "message": "A skill with this name already exists."
+  }
+}

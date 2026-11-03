@@ -25,12 +25,12 @@ attributes:
 
 import os
 from types import TracebackType
-from typing import ClassVar, Self
+from typing import Any, ClassVar, Self
 
 import httpx
 
 from xagent_sdk._http import HTTPClient
-from xagent_sdk.errors import from_response
+from xagent_sdk.errors import MalformedResponse, from_response
 
 
 def _resolve(
@@ -52,6 +52,33 @@ def _resolve(
     if env is not None:
         return env
     return default
+
+
+def _json_body(resp: httpx.Response, what: str) -> Any:
+    """Decode the body of a successful call, or raise ``MalformedResponse``.
+
+    Every endpoint that uses this answers success with HTTP 200 only. This
+    client does not follow redirects, and ``_request`` lets every status
+    below 400 through, so a 3xx or a 204 reaches here; like the task event
+    stream (``_events.py``), it is reported with its status, because there
+    the status line is the problem. A 200 whose body is not JSON (for
+    example an HTML page from a proxy) is a protocol failure, reported
+    without a status. Older methods still call ``resp.json()`` directly.
+    """
+    if resp.status_code != 200:
+        raise MalformedResponse(
+            "malformed_response",
+            f"expected HTTP 200 for {what}, got {resp.status_code}",
+            http_status=resp.status_code,
+        )
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise MalformedResponse(
+            "malformed_response",
+            f"{what} response body is not JSON",
+            http_status=None,
+        ) from exc
 
 
 class _BaseClient:
