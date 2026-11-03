@@ -167,8 +167,12 @@ class SkillsAPI:
           ``create()`` instead of by an upload.
 
         The server's default limit is 50 MiB, for the upload and for its
-        unpacked contents; a deployment may set a lower limit. Over the limit
-        raises ``InvalidInput`` with ``http_status=413``.
+        unpacked contents. A lower limit set on the server raises
+        ``InvalidInput`` with ``http_status=413``; a lower limit set on a
+        proxy in front of it surfaces as the proxy's own error page, which is
+        ``InternalError`` with ``http_status=413``. The SKILL.md text, in a
+        ``.md`` upload or inside a ``.zip``, has a further limit of 200000
+        characters; over it raises ``InvalidInput`` with ``http_status=400``.
 
         Timeouts: the client's ``timeout`` bounds each single wait -- a
         connection that stops accepting bytes, or the server's processing

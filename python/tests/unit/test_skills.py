@@ -496,6 +496,32 @@ class TestUpload:
         assert type(exc.value) is expected
         assert exc.value.http_status == expected_status
 
+    def test_upload_sends_the_file_in_small_chunks(self) -> None:
+        # ``httpx.MockTransport`` reads the whole body before calling its
+        # handler, so the chunks are observed from a bare transport that
+        # iterates the request stream itself.
+        content = b"skill-body-bytes" * (200 * 1024 // 16)
+        chunk_sizes: list[int] = []
+        body = bytearray()
+
+        class _Recorder(httpx.BaseTransport):
+            def handle_request(self, request: httpx.Request) -> httpx.Response:
+                for chunk in request.stream:  # type: ignore[union-attr]
+                    chunk_sizes.append(len(chunk))
+                    body.extend(chunk)
+                return httpx.Response(200, json=response("skill_write"))
+
+        with UserClient(
+            personal_key="xag_personal_p_s",
+            base_url="https://test.example",
+            transport=_Recorder(),
+        ) as c:
+            c.skills.upload(filename="big.zip", content=content)
+
+        assert len(content) == 200 * 1024
+        assert max(chunk_sizes) <= 65536
+        assert content in bytes(body)
+
     def test_upload_empty_filename_rejected_locally(self) -> None:
         calls: list[httpx.Request] = []
 

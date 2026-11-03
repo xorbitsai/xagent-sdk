@@ -99,11 +99,17 @@ class TestHTTPClientRequest:
         c.close()
 
     @pytest.mark.parametrize(
-        "kwargs",
-        [{"files": {"file": ("a.md", b"x")}}, {"data": {"name": "x"}}],
-        ids=["files", "data"],
+        ("json_body", "kwargs"),
+        [
+            ({"a": 1}, {"files": {"file": ("a.md", b"x")}}),
+            ({"a": 1}, {"data": {"name": "x"}}),
+            ({}, {"files": {"file": ("a.md", b"x")}}),
+        ],
+        ids=["files", "data", "empty-json-with-files"],
     )
-    def test_request_rejects_json_with_multipart(self, kwargs: dict[str, Any]) -> None:
+    def test_request_rejects_json_with_multipart(
+        self, json_body: dict[str, Any], kwargs: dict[str, Any]
+    ) -> None:
         calls: list[httpx.Request] = []
 
         def handler(req: httpx.Request) -> httpx.Response:
@@ -116,7 +122,7 @@ class TestHTTPClientRequest:
             transport=httpx.MockTransport(handler),
         )
         with pytest.raises(ValueError, match="cannot be sent together"):
-            c.request("POST", "/x", json={"a": 1}, **kwargs)
+            c.request("POST", "/x", json=json_body, **kwargs)
         assert calls == []
         c.close()
 
