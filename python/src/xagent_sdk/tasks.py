@@ -1,4 +1,5 @@
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from xagent_sdk._events import TaskEventStream, open_task_event_stream
@@ -76,6 +77,7 @@ class TasksAPI:
         metadata: dict[str, Any] | None = None,
         dispatch_class: Literal["interactive", "batch"] | None = None,
         priority: int | None = None,
+        prompt_context: Mapping[str, str | int | float | bool] | None = None,
     ) -> CreateTaskResult:
         """``POST /v1/chat/tasks`` -- start a new task with the first user
         message. The server returns 202 with ``status='pending'`` when
@@ -94,6 +96,25 @@ class TasksAPI:
         setting -- read ``CreateTaskResult.dispatch_class`` to see the
         class the start command was given. A server that predates these
         fields ignores them silently and reports ``dispatch_class=None``.
+
+        ``prompt_context`` is reference data the server stores on the task and
+        shows the agent on every turn, as data rather than as instructions. It
+        is sent only when not ``None``; ``{}`` is sent as given and leaves
+        nothing stored. The SDK does not check its keys, value types or size:
+        the server owns those rules and measures the size on its own rendering
+        of the value. Anything it rejects raises ``InvalidInput`` (HTTP 422) with
+        the reason in ``message``, which is free text to show as it is, not to
+        parse. A ``nan`` or ``inf`` value raises ``ValueError`` before any
+        request is sent. A server that predates this field ignores it silently.
+
+        How the server treats the values depends on the key. With an agent key
+        they count as signed by your backend, and the agent's declared fields do
+        not limit them. With a personal key they count as unsigned, with the
+        same trust as user input: every field must be one the agent declares
+        (its ``prompt_context_fields``) and be no longer than the declared
+        length, otherwise the whole request is rejected, nothing is stored, and
+        ``message`` names the rejected fields. This SDK can neither set nor read
+        an agent's declared fields.
         """
         body: dict[str, Any] = {
             "agent_id": agent_id,
@@ -105,6 +126,8 @@ class TasksAPI:
             body["dispatch_class"] = dispatch_class
         if priority is not None:
             body["priority"] = priority
+        if prompt_context is not None:
+            body["prompt_context"] = dict(prompt_context)
         resp = self._client._request("POST", "/v1/chat/tasks", json=body)
         return _parse_create_task(resp.json())
 
@@ -115,6 +138,7 @@ class TasksAPI:
         agent_id: int,
         message: str,
         metadata: dict[str, Any] | None = None,
+        prompt_context: Mapping[str, str | int | float | bool] | None = None,
     ) -> AppendResult:
         """``POST /v1/chat/tasks/{task_id}/messages`` -- append the next
         user turn to an existing task. Server returns 202 with
@@ -124,6 +148,11 @@ class TasksAPI:
         ``InteractionResponseRequired`` if the task is currently
         ``WAITING_FOR_USER`` -- answer its pending question with
         ``reply()`` instead.
+
+        ``prompt_context`` follows the rules described on ``create()``. Here
+        ``None`` (the default) sends nothing and the task keeps what it has
+        stored; an object replaces the stored value for this and later turns;
+        ``{}`` clears it, so later turns carry none.
         """
         body: dict[str, Any] = {
             "agent_id": agent_id,
@@ -131,6 +160,8 @@ class TasksAPI:
         }
         if metadata is not None:
             body["metadata"] = metadata
+        if prompt_context is not None:
+            body["prompt_context"] = dict(prompt_context)
         resp = self._client._request(
             "POST", f"/v1/chat/tasks/{task_id}/messages", json=body
         )
@@ -564,6 +595,7 @@ class TasksAPI:
         metadata: dict[str, Any] | None = None,
         dispatch_class: Literal["interactive", "batch"] | None = None,
         priority: int | None = None,
+        prompt_context: Mapping[str, str | int | float | bool] | None = None,
     ) -> RunResult:
         """Single-turn convenience: ``create()`` + ``wait()`` + ``steps()``.
 
@@ -573,8 +605,8 @@ class TasksAPI:
             info    = client.tasks.wait(created.task_id, timeout=...)
             steps   = client.tasks.steps(created.task_id)
 
-        ``metadata``, ``dispatch_class`` and ``priority`` are passed to
-        ``create()`` unchanged; see its docstring.
+        ``metadata``, ``dispatch_class``, ``priority`` and ``prompt_context``
+        are passed to ``create()`` unchanged; see its docstring.
 
         ``timeout`` is the wall-clock budget for ``create`` + ``wait``
         combined: the time spent in ``create()`` is subtracted from the
@@ -607,6 +639,7 @@ class TasksAPI:
             metadata=metadata,
             dispatch_class=dispatch_class,
             priority=priority,
+            prompt_context=prompt_context,
         )
         remaining = max(0.0, timeout - (time.monotonic() - start))
         info = self.wait(
