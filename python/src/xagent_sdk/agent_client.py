@@ -33,6 +33,9 @@ class AgentClient(_BaseClient):
     The ``transport`` parameter accepts any ``httpx.BaseTransport``,
     letting advanced users plug in custom retry, proxy, or TLS
     configuration; ``httpx.MockTransport`` also works for tests.
+
+    A personal key holder runs the same task endpoints through
+    ``UserClient.tasks``.
     """
 
     def __init__(
