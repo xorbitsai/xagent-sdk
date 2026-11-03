@@ -29,6 +29,10 @@ row below.
 | `agents_list.json` | `GET /v1/agents` | Bare JSON array; each entry keys its id under `id` (SDKs surface it as `agent_id`); covers `active`, `draft`, `paused` status values |
 | `agents_create.json` | `POST /v1/agents` or `POST /v1/agents/from-template` | Nested `{agent: {id, name, ...}, api_key: {full_key, key_prefix, created_at}}`; the `api_key` block is present only when `generate_runtime_key=True` |
 | `rotate_key.json` | `POST /v1/agents/{id}/api-key` | Rotation result with one-time `full_key` and public-safe `key_prefix` |
+| `skills_list.json` | `GET /v1/skills` (200) | Bare JSON array, no id rename; one entry for each `source` value (`personal`, `builtin`, `team`, `external`), personal skills first |
+| `skill_detail.json` | `GET /v1/skills/{name}` (200) | Single object: the summary fields plus the complete `skill_md` text and the sorted `files` list |
+| `skill_write.json` | `POST /v1/skills` or `PUT /v1/skills/{name}` (200) | Skill summary (`name / description / when_to_use / tags / source`) with `source=personal`; a repeat of the same create also answers 200 |
+| `skill_delete.json` | `DELETE /v1/skills/{name}` (200) | `{"name": ...}` confirmation |
 | `create_task.json` | `POST /v1/chat/tasks` (202) | Older-server shape: initial `status=pending`, no `dispatch_class` |
 | `create_task_dispatch_class.json` | `POST /v1/chat/tasks` (202) | Current queued-server shape: `status=pending`, carries `run_id`, `state_version`, `control_state` and `dispatch_class` |
 | `append_task.json` | `POST /v1/chat/tasks/{id}/messages` (202) | `status=running`, carries `accepted_at` (not `created_at`) |
@@ -58,6 +62,8 @@ Stable backend codes using the V1 envelope shape:
 | `no_pending_interaction.json` | 409 | V1 envelope (raised by `reply()` when the task is not `WAITING_FOR_USER`) |
 | `interaction_not_resumable.json` | 409 | V1 envelope (raised by `reply()` when the task's execution state could not be restored; do not retry) |
 | `temporarily_unavailable.json` | 503 | V1 envelope (raised by `reply()` on a transient read failure; safe to retry) |
+| `skill_not_found.json` | 404 | V1 envelope (raised by `UserClient.skills.get()`, `update()` and `delete()`) |
+| `skill_already_exists.json` | 409 | V1 envelope (raised by `UserClient.skills.create()` when the name is taken by a different write) |
 
 ## Usage from a language client
 

@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "skill_not_found",
+    "message": "Skill not found."
+  }
+}

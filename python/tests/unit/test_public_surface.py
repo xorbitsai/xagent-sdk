@@ -22,6 +22,8 @@ EXPECTED_SURFACE: set[str] = {
     "AgentSummary",
     "AgentCreateResult",
     "RotateKeyResult",
+    "SkillSummary",
+    "SkillDetail",
     # Runtime dataclasses
     "CreateTaskResult",
     "AppendResult",
@@ -50,6 +52,8 @@ EXPECTED_SURFACE: set[str] = {
     "InternalError",
     "InvalidInput",
     "TemplateNotFound",
+    "SkillNotFound",
+    "SkillAlreadyExists",
     "MalformedResponse",
     "XAgentTransportError",
     "TaskTimeout",

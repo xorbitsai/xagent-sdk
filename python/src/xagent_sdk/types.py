@@ -154,6 +154,41 @@ class RotateKeyResult:
 
 
 @dataclass(frozen=True)
+class SkillSummary:
+    """``GET /v1/skills`` list entry and the body of every skill write.
+
+    ``source`` says where the skill comes from. Today the server sends
+    ``"personal"`` (the key holder's own skill), ``"builtin"``, ``"team"``
+    or ``"external"``, but it may add values later, so the field is a plain
+    ``str`` and any value is passed through unchanged.
+    """
+
+    name: str
+    description: str
+    when_to_use: str
+    tags: list[str]
+    source: str
+
+
+@dataclass(frozen=True)
+class SkillDetail:
+    """``GET /v1/skills/{name}`` payload.
+
+    The fields of ``SkillSummary`` plus ``skill_md`` (the complete
+    SKILL.md text) and ``files`` (the relative paths of the skill's files,
+    sorted by the server).
+    """
+
+    name: str
+    description: str
+    when_to_use: str
+    tags: list[str]
+    source: str
+    skill_md: str
+    files: list[str]
+
+
+@dataclass(frozen=True)
 class CreateTaskResult:
     """``POST /v1/chat/tasks`` 202 payload.
 
@@ -387,6 +422,19 @@ _STEP_LIST_ADAPTER = TypeAdapter(list[Step])
 _STEP_ADAPTER: TypeAdapter[Step] = TypeAdapter(Step)
 
 
+@dataclass(frozen=True)
+class _SkillDeleted:
+    """``DELETE /v1/skills/{name}`` body; only used to check its shape."""
+
+    name: str
+
+
+_SKILL_SUMMARY_ADAPTER = TypeAdapter(SkillSummary)
+_SKILL_LIST_ADAPTER = TypeAdapter(list[SkillSummary])
+_SKILL_DETAIL_ADAPTER = TypeAdapter(SkillDetail)
+_SKILL_DELETED_ADAPTER = TypeAdapter(_SkillDeleted)
+
+
 def _require_mapping(data: Any, what: str) -> dict[str, Any]:
     """Return ``data`` if it is a dict, else raise ``MalformedResponse``.
 
@@ -409,14 +457,15 @@ T = TypeVar("T")
 
 
 def _validate_write(adapter: TypeAdapter[T], data: Any, what: str) -> T:
-    """Validate a write endpoint's 202 body, or raise ``MalformedResponse``.
+    """Validate a write endpoint's success body, or raise ``MalformedResponse``.
 
     The server has already accepted the write when this runs, so a body
     that does not validate must surface as the SDK's documented
-    ``MalformedResponse`` rather than a raw pydantic ``ValidationError``;
-    callers must not resend the write blindly: a retried ``create()``
-    starts a second task, and a retried ``append()``/``reply()`` can send
-    the message twice.
+    ``MalformedResponse`` rather than a raw pydantic ``ValidationError``.
+    Whether resending is safe depends on the endpoint: a retried task
+    ``create()`` starts a second task and a retried ``append()``/``reply()``
+    can send the message twice, while the skill writes are idempotent
+    replays and safe to resend.
     """
     try:
         return adapter.validate_python(_require_mapping(data, what))
@@ -428,6 +477,27 @@ def _validate_write(adapter: TypeAdapter[T], data: Any, what: str) -> T:
             "malformed_response",
             f"{what} response did not match the expected shape ({fields}); "
             "the server accepted the request",
+            http_status=None,
+        ) from exc
+
+
+def _validate_read(adapter: TypeAdapter[T], data: Any, what: str) -> T:
+    """Validate a read endpoint's body, or raise ``MalformedResponse``.
+
+    A body that does not validate surfaces as the SDK's documented
+    ``MalformedResponse`` rather than a raw pydantic ``ValidationError``.
+    Nothing was written, so unlike ``_validate_write`` the message does not
+    claim that the server accepted anything.
+    """
+    try:
+        return adapter.validate_python(data)
+    except ValidationError as exc:
+        fields = ", ".join(
+            ".".join(str(p) for p in err["loc"]) or "<root>" for err in exc.errors()
+        )
+        raise MalformedResponse(
+            "malformed_response",
+            f"{what} response did not match the expected shape ({fields})",
             http_status=None,
         ) from exc
 
@@ -562,3 +632,40 @@ def _parse_steps(data: Any) -> list[Step]:
     if not isinstance(data, dict):
         return []
     return _STEP_LIST_ADAPTER.validate_python(data.get("steps", []))
+
+
+def _parse_skill_list(data: Any) -> list[SkillSummary]:
+    """Parse the bare array returned by ``GET /v1/skills``.
+
+    Unlike the template and agent list parsers, this one is strict: a body
+    that is not an array, or any entry that does not match, raises
+    ``MalformedResponse``. An empty list is a real answer ("no skills"),
+    and a proxy's error page must not be reported as one.
+    """
+    if not isinstance(data, list):
+        raise MalformedResponse(
+            "malformed_response",
+            f"expected a JSON array for skill list, got {type(data).__name__}",
+            http_status=None,
+        )
+    return _validate_read(_SKILL_LIST_ADAPTER, data, "skill list")
+
+
+def _parse_skill_detail(data: Any) -> SkillDetail:
+    return _validate_read(
+        _SKILL_DETAIL_ADAPTER, _require_mapping(data, "skill detail"), "skill detail"
+    )
+
+
+def _parse_skill_write(data: Any, what: str) -> SkillSummary:
+    return _validate_write(_SKILL_SUMMARY_ADAPTER, data, what)
+
+
+def _parse_skill_delete(data: Any) -> None:
+    """Check that a delete answered with ``{"name": str}``.
+
+    The body carries nothing the caller needs, but a 200 that is not the
+    server's delete confirmation (for example a proxy's HTML page) must not
+    be reported as a completed delete.
+    """
+    _validate_write(_SKILL_DELETED_ADAPTER, data, "skill deletion")

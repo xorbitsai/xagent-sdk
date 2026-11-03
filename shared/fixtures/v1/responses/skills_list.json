@@ -1,0 +1,30 @@
+[
+  {
+    "name": "weekly-report",
+    "description": "Drafts the weekly status report from the team's notes.",
+    "when_to_use": "When the user asks for a weekly report or status update.",
+    "tags": ["reporting", "writing"],
+    "source": "personal"
+  },
+  {
+    "name": "pdf",
+    "description": "Reads and summarizes PDF documents.",
+    "when_to_use": "When the task involves a PDF file.",
+    "tags": ["documents"],
+    "source": "builtin"
+  },
+  {
+    "name": "pdf.tools",
+    "description": "Command-line helpers for splitting and merging PDF files.",
+    "when_to_use": "When a PDF has to be split or merged before it is read.",
+    "tags": [],
+    "source": "external"
+  },
+  {
+    "name": "release-notes",
+    "description": "Turns a changelog into user-facing release notes.",
+    "when_to_use": "When preparing release notes for a product update.",
+    "tags": ["writing"],
+    "source": "team"
+  }
+]

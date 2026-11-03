@@ -30,7 +30,7 @@ Set credentials via environment (recommended) or pass them to the
 constructors:
 
 ```bash
-# personal key — for UserClient (identity, templates, agents, and tasks on any agent you can see)
+# personal key — for UserClient (identity, templates, agents, skills, and tasks on any agent you can see)
 export XAGENT_PERSONAL_KEY="xag_personal_..."
 
 # runtime key — for AgentClient (chat tasks against a specific agent)
@@ -114,10 +114,11 @@ Persist it to a secret manager before discarding the
   ``UserPrincipal``.
 - **Personal key**: ``xag_personal_<prefix>_<secret>`` — the user's
   long-lived credential, held by ``UserClient``. Authorizes ``/v1/me``,
-  ``/v1/templates*``, ``/v1/agents*`` and the ``/v1/chat/tasks*`` task
-  endpoints (``user.tasks``). A task started this way runs as you, not
-  as the agent's owner, and every personal key of yours sees the tasks
-  any of them created, until the task's agent is deleted.
+  ``/v1/templates*``, ``/v1/agents*``, ``/v1/skills*`` and the
+  ``/v1/chat/tasks*`` task endpoints (``user.tasks``). A task started
+  this way runs as you, not as the agent's owner, and every personal key
+  of yours sees the tasks any of them created, until the task's agent is
+  deleted.
 - **Agent**: a server-side template instance (system prompt + tools +
   model config). Created via ``UserClient.agents.create()`` or
   ``UserClient.agents.create_from_template()``.
@@ -333,21 +334,31 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `AgentNotFound` | 404 | `agent_not_found` |
 | `TaskNotFound` | 404 | `task_not_found` |
 | `TemplateNotFound` | 404 | `template_not_found` |
+| `SkillNotFound` | 404 | `skill_not_found` -- raised by `skills.get()`, `skills.update()` and `skills.delete()` |
 | `TaskBusy` | 409 | `task_busy` |
+| `SkillAlreadyExists` | 409 | `skill_already_exists` -- raised by `skills.create()` |
 | `InteractionResponseRequired` | 409 | `interaction_response_required` -- raised by `append()` on a `WAITING_FOR_USER` task; use `reply()` instead |
 | `NoPendingInteraction` | 409 | `no_pending_interaction` -- raised by `reply()` when the task is not `WAITING_FOR_USER` |
 | `InteractionNotResumable` | 409 | `interaction_not_resumable` -- raised by `reply()` when the task's execution state could not be restored; do not retry |
-| `InvalidInput` | 422 | `invalid_input` |
+| `InvalidInput` | 400 / 413 / 422 | `invalid_input` |
 | `RateLimited` | 429 | `rate_limited` |
 | `InternalError` | 500 | `internal_error` |
 | `TemporarilyUnavailable` | 503 | `temporarily_unavailable` -- raised by `reply()` on a transient read failure; safe to retry |
+
+A 404 without the V1 error envelope (the framework's own
+`{"detail": "Not Found"}`) surfaces as `InternalError` with
+`http_status=404` and the raw body as `message`. Names that cannot
+address a skill are rejected locally with `ValueError` before any
+request, so this 404 means the server has no such route -- typically a
+server older than this SDK. It is distinguishable from `SkillNotFound`
+by exception type.
 
 SDK-coined codes:
 
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.update()` can be retried safely after it |
 | `TaskTimeout` | `wait()` / `run()` deadline elapsed, or `events()`'s own `timeout` budget -- which covers every read the stream still owes, including time spent between frames, and hands over to a bounded post-close drain once a closing frame has arrived, which ends the stream cleanly rather than raising -- ran out first |
 
 The SDK does **not** retry automatically. Wrap calls with your own
@@ -387,6 +398,56 @@ with UserClient() as user:                    # reads XAGENT_PERSONAL_KEY / XAGE
     print(result.output)
 ```
 
+### 10. Manage your skills
+
+A skill is a SKILL.md document that tells an agent how to do one kind of
+work. `user.skills` manages your own personal skills; the server checks
+the name and the SKILL.md content.
+
+```python
+from xagent_sdk import SkillNotFound, UserClient
+
+SKILL_MD = """\
+---
+name: weekly-report
+description: Drafts the weekly status report from the team's notes.
+when_to_use: When the user asks for a weekly report or status update.
+---
+
+# Weekly report
+
+Group the notes under Done, In progress and Blocked.
+"""
+
+with UserClient() as user:
+    created = user.skills.create(name="weekly-report", skill_md=SKILL_MD)
+    print(created.name, created.source)  # weekly-report personal
+
+    detail = user.skills.get("weekly-report")
+    print(detail.description)
+    print(detail.files)  # relative paths, e.g. ['SKILL.md']
+
+    # update() replaces the whole SKILL.md.
+    user.skills.update(
+        "weekly-report", skill_md=SKILL_MD + "\nKeep each item to one line.\n"
+    )
+
+    for skill in user.skills.list():  # your own skills come first
+        print(skill.name, skill.source)
+
+    user.skills.delete("weekly-report")  # returns None
+    try:
+        user.skills.delete("weekly-report")
+    except SkillNotFound:
+        print("already gone")
+```
+
+Calling `create()` again with the same name and the same content returns
+200 again, so it is safe to retry after a timeout; the same name with
+different content raises `SkillAlreadyExists`. `skills.get()` also finds
+skills you do not own, such as built-in ones, and reports where they come
+from in `source`.
+
 ## API reference
 
 All methods are synchronous.
@@ -394,7 +455,7 @@ All methods are synchronous.
 ### `UserClient` — personal key surface
 
 Constructed with a personal key; talks to `/v1/me`, `/v1/templates*`,
-`/v1/agents*` and `/v1/chat/tasks*`. See the `UserClient` docstring for
+`/v1/agents*`, `/v1/skills*` and `/v1/chat/tasks*`. See the `UserClient` docstring for
 which agents and tasks a personal key can reach.
 
 | Method | Returns | Notes |
@@ -408,6 +469,11 @@ which agents and tasks a personal key can reach.
 | `user.agents.create_from_template(template_id, *, overrides=None, generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/agents/from-template`; 404 → `TemplateNotFound` |
 | `user.agents.rotate_key(agent_id)` | `RotateKeyResult` | POST `/v1/agents/{agent_id}/api-key`; revokes the previous runtime key atomically |
 | `user.tasks.create / append / reply / get / steps / events / wait / run` | as in the `AgentClient` table | Any agent you can see (`user.agents.list()`); the task runs as you, not as the agent's owner. Every personal key of yours sees the tasks any of them created, until the task's agent is deleted. An older server answers `InvalidAPIKey` (401) here. |
+| `user.skills.list()` | `list[SkillSummary]` | GET `/v1/skills`; your own skills first, in server order; a body that is not an array of skills raises `MalformedResponse` (never `[]`) |
+| `user.skills.get(name)` | `SkillDetail` | GET `/v1/skills/{name}`; includes `skill_md` and `files`; 404 → `SkillNotFound`; `""`, `"."`, `".."` or a name containing `/` raises `ValueError` before any request |
+| `user.skills.create(*, name, skill_md)` | `SkillSummary` | POST `/v1/skills`; the same name with the same content returns 200 again, so a retry is safe; any other clash → `SkillAlreadyExists`; bad name or content → `InvalidInput` |
+| `user.skills.update(name, *, skill_md)` | `SkillSummary` | PUT `/v1/skills/{name}`; replaces the whole SKILL.md of one of your own skills (anything else → `SkillNotFound`); bad content → `InvalidInput`; same `ValueError` rule as `get` |
+| `user.skills.delete(name)` | `None` | DELETE `/v1/skills/{name}`; returns once the server confirms; deleting again → `SkillNotFound`; same `ValueError` rule as `get` |
 | `user.close()` / `with ... as user` | — | release the connection pool |
 
 ### `AgentClient` — runtime surface

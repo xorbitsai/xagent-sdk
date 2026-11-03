@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from xagent_sdk import UserClient
+from xagent_sdk.errors import _CODE_MAP
 from xagent_sdk.tasks import TasksAPI
 
 
@@ -189,8 +190,8 @@ _USER_CLIENT_DOC = """Synchronous client for everything a personal key can do.
 Authenticates with a **personal key** (``xag_personal_<prefix>_<secret>``)
 issued by the xAgent web UI to an individual user. A personal key
 authorizes ``/v1/me`` (``me()``), ``/v1/templates*`` (``templates``),
-``/v1/agents*`` (``agents``) and the ``/v1/chat/tasks*`` task endpoints
-(``tasks``).
+``/v1/agents*`` (``agents``), ``/v1/skills*`` (``skills``) and the
+``/v1/chat/tasks*`` task endpoints (``tasks``).
 
 ``tasks`` starts tasks on any agent the key holder can see: the agents
 ``agents.list()`` returns. Whether the agent is published does not
@@ -268,15 +269,16 @@ see, and when a task can be continued, is described on ``UserClient``."""
 _README_PERSONAL_KEY_CONCEPT = """\
 - **Personal key**: ``xag_personal_<prefix>_<secret>`` — the user's
   long-lived credential, held by ``UserClient``. Authorizes ``/v1/me``,
-  ``/v1/templates*``, ``/v1/agents*`` and the ``/v1/chat/tasks*`` task
-  endpoints (``user.tasks``). A task started this way runs as you, not
-  as the agent's owner, and every personal key of yours sees the tasks
-  any of them created, until the task's agent is deleted."""
+  ``/v1/templates*``, ``/v1/agents*``, ``/v1/skills*`` and the
+  ``/v1/chat/tasks*`` task endpoints (``user.tasks``). A task started
+  this way runs as you, not as the agent's owner, and every personal key
+  of yours sees the tasks any of them created, until the task's agent is
+  deleted."""
 
 _README_USER_CLIENT_INTRO = """### `UserClient` — personal key surface
 
 Constructed with a personal key; talks to `/v1/me`, `/v1/templates*`,
-`/v1/agents*` and `/v1/chat/tasks*`. See the `UserClient` docstring for
+`/v1/agents*`, `/v1/skills*` and `/v1/chat/tasks*`. See the `UserClient` docstring for
 which agents and tasks a personal key can reach."""
 
 _README_USER_TASKS_ROW = (
@@ -394,3 +396,17 @@ class TestNoStalePersonalKeyGuidance:
     @pytest.mark.parametrize(("path", "phrase"), _KEPT_AGENT_KEY_PHRASES)
     def test_agent_key_statement_kept(self, path: str, phrase: str) -> None:
         assert _normalize(phrase) in _normalize(_read(path))
+
+
+class TestServerErrorTable:
+    """The README's server-mapped error table must list exactly the
+    (exception, code) pairs the SDK maps, so a new code cannot be added to
+    ``_CODE_MAP`` without documenting it, or documented without a mapping.
+    """
+
+    def test_readme_error_table_matches_code_map(self) -> None:
+        text = _read("python/README.md")
+        table = text.split("Server-mapped codes:")[1].split("SDK-coined codes:")[0]
+        documented = set(re.findall(r"(?m)^\| `(\w+)` \| [^|]+ \| `(\w+)`", table))
+        mapped = {(cls.__name__, code) for code, cls in _CODE_MAP.items()}
+        assert documented == mapped

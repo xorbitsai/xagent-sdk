@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "skill_already_exists",
+    "message": "A personal skill named 'weekly-report' already exists."
+  }
+}

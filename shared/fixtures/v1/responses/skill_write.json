@@ -1,0 +1,7 @@
+{
+  "name": "weekly-report",
+  "description": "Drafts the weekly status report from the team's notes.",
+  "when_to_use": "When the user asks for a weekly report or status update.",
+  "tags": ["reporting", "writing"],
+  "source": "personal"
+}

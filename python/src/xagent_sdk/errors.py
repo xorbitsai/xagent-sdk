@@ -61,9 +61,12 @@ class InternalError(XAgentError):
 
 
 class InvalidInput(XAgentError):
-    """HTTP 422, code ``invalid_input``.
+    """HTTP 400, 413 or 422, code ``invalid_input``.
 
     Current ``/v1/*`` endpoints return this through the V1 envelope.
+    The skill endpoints (``UserClient.skills``) use 400 for invalid
+    SKILL.md content and 413 for a request over a size limit; request
+    validation uses 422. ``http_status`` keeps the status the server sent.
     The SDK also accepts FastAPI's legacy ``{"detail": [...]}`` validation
     shape as a compatibility fallback.
     """
@@ -77,6 +80,25 @@ class TemplateNotFound(XAgentError):
     given an unknown ``template_id``. Distinct from ``AgentNotFound``
     because the SaaS UI path treats template-picker mismatch differently
     from agent-lookup mismatch.
+    """
+
+
+class SkillNotFound(XAgentError):
+    """HTTP 404, code ``skill_not_found``.
+
+    Raised by ``UserClient.skills.get/update/delete``: no skill the key holder can
+    see has this name (``get``), or the name is not one of the holder's own
+    personal skills (``update`` / ``delete``).
+    """
+
+
+class SkillAlreadyExists(XAgentError):
+    """HTTP 409, code ``skill_already_exists``.
+
+    Raised by ``UserClient.skills.create``: the holder already has a
+    personal skill with this name and this request is not a repeat of the write
+    that created it (a repeat through a different creation method, such as an
+    upload, also counts as a conflict).
     """
 
 
@@ -173,6 +195,16 @@ class MalformedResponse(XAgentError):
     requires -- a redirect this client does not follow, or a 204 -- and
     there it does carry that status, because there the status line is
     the problem.
+
+    The skill methods (``UserClient.skills.list/get/create/update/delete``)
+    also raise it when the response status is not 200 (a redirect this
+    client does not follow, or a 204), when a 200 body is not JSON, or when
+    the JSON does not have the expected shape. Only the status case carries
+    the status on ``http_status``. ``skills.list()`` never folds a wrong-shaped
+    body into an empty list. ``skills.create()`` and ``skills.update()`` are
+    idempotent, so retrying one after this error is safe; a retried
+    ``skills.delete()`` raises ``SkillNotFound`` if the first call went
+    through.
     """
 
 
@@ -202,6 +234,8 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "no_pending_interaction": NoPendingInteraction,
     "interaction_not_resumable": InteractionNotResumable,
     "temporarily_unavailable": TemporarilyUnavailable,
+    "skill_not_found": SkillNotFound,
+    "skill_already_exists": SkillAlreadyExists,
 }
 
 
