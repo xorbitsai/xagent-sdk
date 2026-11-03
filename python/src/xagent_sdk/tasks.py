@@ -17,7 +17,7 @@ from xagent_sdk.types import (
 )
 
 if TYPE_CHECKING:
-    from xagent_sdk.agent_client import AgentClient
+    from xagent_sdk._base import _BaseClient
 
 
 # Mirrors the backend's terminal set (``v1/tasks.py``): only COMPLETED and
@@ -60,7 +60,7 @@ class TasksAPI:
     other error from the underlying calls.
     """
 
-    def __init__(self, client: "AgentClient") -> None:
+    def __init__(self, client: "_BaseClient") -> None:
         self._client = client
 
     def create(

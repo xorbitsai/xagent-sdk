@@ -1,9 +1,13 @@
 """Tests for UserClient construction, env-var fallback, and the me() probe."""
 
+from collections.abc import Callable
+from typing import Any
+
 import httpx
 import pytest
 
-from xagent_sdk import InvalidAPIKey, UserClient, UserPrincipal
+from xagent_sdk import AgentClient, InvalidAPIKey, UserClient, UserPrincipal
+from xagent_sdk.tasks import TasksAPI
 
 from ._fixtures import error_envelope, response
 
@@ -138,3 +142,64 @@ class TestLifecycle:
         with c:
             pass
         assert c._http._client.is_closed is True
+
+
+# One row per plain request/response ``TasksAPI`` method; ``events`` (SSE)
+# and ``wait`` / ``run`` (polling loops) are exercised by their own tests.
+_TASK_CALLS: dict[str, tuple[Callable[[Any], object], int, str]] = {
+    "create": (lambda c: c.tasks.create(agent_id=7, message="hi"), 202, "create_task"),
+    "append": (
+        lambda c: c.tasks.append(10, agent_id=7, message="next"),
+        202,
+        "append_task",
+    ),
+    "reply": (
+        lambda c: c.tasks.reply(10, agent_id=7, message="answer"),
+        202,
+        "reply_task",
+    ),
+    "get": (lambda c: c.tasks.get(10), 200, "task_info_completed"),
+    "steps": (lambda c: c.tasks.steps(10), 200, "steps_full"),
+}
+
+
+def test_task_call_table_covers_every_plain_tasks_method() -> None:
+    public = {
+        n
+        for n in vars(TasksAPI)
+        if not n.startswith("_") and callable(getattr(TasksAPI, n))
+    }
+    assert public - {"events", "wait", "run"} == set(_TASK_CALLS)
+    assert len(_TASK_CALLS) == 5
+
+
+@pytest.mark.parametrize("method", list(_TASK_CALLS))
+def test_user_client_tasks_send_personal_key(method: str) -> None:
+    call, status, fixture = _TASK_CALLS[method]
+    seen: dict[str, httpx.Request] = {}
+
+    def make_handler(label: str) -> Callable[[httpx.Request], httpx.Response]:
+        def handler(req: httpx.Request) -> httpx.Response:
+            seen[label] = req
+            return httpx.Response(status, json=response(fixture))
+
+        return handler
+
+    with UserClient(
+        personal_key="xag_personal_p_s",
+        base_url="https://test.example",
+        transport=httpx.MockTransport(make_handler("user")),
+    ) as user:
+        call(user)
+    with AgentClient(
+        api_key="xag_a_s",
+        base_url="https://test.example",
+        transport=httpx.MockTransport(make_handler("agent")),
+    ) as agent:
+        call(agent)
+
+    assert seen["user"].method == seen["agent"].method
+    assert seen["user"].url.path == seen["agent"].url.path
+    assert seen["user"].headers["Authorization"] == "Bearer xag_personal_p_s"
+    assert seen["agent"].headers["Authorization"] == "Bearer xag_a_s"
+    assert seen["user"].content == seen["agent"].content

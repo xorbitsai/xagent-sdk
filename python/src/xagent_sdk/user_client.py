@@ -3,6 +3,7 @@ import httpx
 from xagent_sdk._agents import AgentsAPI
 from xagent_sdk._base import _BaseClient
 from xagent_sdk._templates import TemplatesAPI
+from xagent_sdk.tasks import TasksAPI
 from xagent_sdk.types import UserPrincipal, _parse_user_principal
 
 
@@ -59,6 +60,7 @@ class UserClient(_BaseClient):
         )
         self.templates = TemplatesAPI(self)
         self.agents = AgentsAPI(self)
+        self.tasks = TasksAPI(self)
 
     def me(self) -> UserPrincipal:
         """``GET /v1/me`` -- identity probe for the personal key.
