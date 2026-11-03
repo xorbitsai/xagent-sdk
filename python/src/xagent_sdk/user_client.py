@@ -14,8 +14,8 @@ class UserClient(_BaseClient):
     Authenticates with a **personal key** (``xag_personal_<prefix>_<secret>``)
     issued by the xAgent web UI to an individual user. A personal key
     authorizes ``/v1/me`` (``me()``), ``/v1/templates*`` (``templates``),
-    ``/v1/agents*`` (``agents``) and the ``/v1/chat/tasks*`` task endpoints
-    (``tasks``).
+    ``/v1/agents*`` (``agents``), ``/v1/skills*`` (``skills``) and the
+    ``/v1/chat/tasks*`` task endpoints (``tasks``).
 
     ``tasks`` starts tasks on any agent the key holder can see: the agents
     ``agents.list()`` returns. Whether the agent is published does not

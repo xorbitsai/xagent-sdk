@@ -30,7 +30,7 @@ Set credentials via environment (recommended) or pass them to the
 constructors:
 
 ```bash
-# personal key — for UserClient (identity, templates, agents, and tasks on any agent you can see)
+# personal key — for UserClient (identity, templates, agents, skills, and tasks on any agent you can see)
 export XAGENT_PERSONAL_KEY="xag_personal_..."
 
 # runtime key — for AgentClient (chat tasks against a specific agent)
@@ -114,10 +114,11 @@ Persist it to a secret manager before discarding the
   ``UserPrincipal``.
 - **Personal key**: ``xag_personal_<prefix>_<secret>`` — the user's
   long-lived credential, held by ``UserClient``. Authorizes ``/v1/me``,
-  ``/v1/templates*``, ``/v1/agents*`` and the ``/v1/chat/tasks*`` task
-  endpoints (``user.tasks``). A task started this way runs as you, not
-  as the agent's owner, and every personal key of yours sees the tasks
-  any of them created, until the task's agent is deleted.
+  ``/v1/templates*``, ``/v1/agents*``, ``/v1/skills*`` and the
+  ``/v1/chat/tasks*`` task endpoints (``user.tasks``). A task started
+  this way runs as you, not as the agent's owner, and every personal key
+  of yours sees the tasks any of them created, until the task's agent is
+  deleted.
 - **Agent**: a server-side template instance (system prompt + tools +
   model config). Created via ``UserClient.agents.create()`` or
   ``UserClient.agents.create_from_template()``.
@@ -454,7 +455,7 @@ All methods are synchronous.
 ### `UserClient` — personal key surface
 
 Constructed with a personal key; talks to `/v1/me`, `/v1/templates*`,
-`/v1/agents*` and `/v1/chat/tasks*`. See the `UserClient` docstring for
+`/v1/agents*`, `/v1/skills*` and `/v1/chat/tasks*`. See the `UserClient` docstring for
 which agents and tasks a personal key can reach.
 
 | Method | Returns | Notes |
