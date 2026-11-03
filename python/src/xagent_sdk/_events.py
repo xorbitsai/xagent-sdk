@@ -1,4 +1,4 @@
-"""Server-sent-events consumption for ``AgentClient.tasks.events()``.
+"""Server-sent-events consumption for ``client.tasks.events()``.
 
 The wire format is the v1 task event stream (``GET
 /v1/chat/tasks/{task_id}/events``, ``Content-Type: text/event-stream``):
@@ -404,7 +404,7 @@ def _classify_timeout(
 
 
 class TaskEventStream:
-    """Iterator + context manager returned by ``AgentClient.tasks.events()``.
+    """Iterator + context manager returned by ``client.tasks.events()``.
 
     See ``TasksAPI.events()`` for the full contract (event shapes,
     closing frames, timeout semantics, reconnection guidance). This
@@ -413,7 +413,7 @@ class TaskEventStream:
     ``StreamEvent``, and track how the stream ended.
 
     Not thread-safe: a single stream must be iterated and closed from
-    the thread that opened it. The ``AgentClient`` that created it may
+    the thread that opened it. The client that created it may
     still be shared across threads (its own guarantee is unaffected).
 
     The one exception is the ``__del__`` safety net: garbage collection

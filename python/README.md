@@ -7,8 +7,8 @@ from templates, and trigger them — all in a handful of lines.
 > **Status**: 0.5.0 — early access. Optional
 > `xagent_sdk.cloud.WorkspaceClient` (hosted workspace surface) selects a
 > hosted region. **Breaking change vs 0.1.0**: the SDK
-> exposes two clients (``UserClient`` for management, ``AgentClient`` for
-> runtime) instead of a single class, and `/v1/me` returns a user
+> exposes two clients (``UserClient`` for a personal key, ``AgentClient`` for
+> an agent key) instead of a single class, and `/v1/me` returns a user
 > principal instead of an agent identity. See
 > [Migration from 0.1.0](#migration-from-010) below.
 
@@ -30,7 +30,7 @@ Set credentials via environment (recommended) or pass them to the
 constructors:
 
 ```bash
-# personal key — for UserClient (templates, agents, identity)
+# personal key — for UserClient (identity, templates, agents, and tasks on any agent you can see)
 export XAGENT_PERSONAL_KEY="xag_personal_..."
 
 # runtime key — for AgentClient (chat tasks against a specific agent)
@@ -113,9 +113,11 @@ Persist it to a secret manager before discarding the
   inside their workspace. ``UserClient.me()`` returns this user as a
   ``UserPrincipal``.
 - **Personal key**: ``xag_personal_<prefix>_<secret>`` — the user's
-  long-lived management credential. Authorizes ``/v1/me``,
-  ``/v1/templates*``, and ``/v1/agents*`` and is held by
-  ``UserClient``.
+  long-lived credential, held by ``UserClient``. Authorizes ``/v1/me``,
+  ``/v1/templates*``, ``/v1/agents*`` and the ``/v1/chat/tasks*`` task
+  endpoints (``user.tasks``). A task started this way runs as you, not
+  as the agent's owner, and every personal key of yours sees the tasks
+  any of them created, until the task's agent is deleted.
 - **Agent**: a server-side template instance (system prompt + tools +
   model config). Created via ``UserClient.agents.create()`` or
   ``UserClient.agents.create_from_template()``.
@@ -372,14 +374,28 @@ This is the minimal shape only -- reconnecting after a dropped
 connection and reconciling against `steps()` is its own recipe, covered
 in a later change.
 
+### 9. Run any agent you can see with a personal key
+
+```python
+from xagent_sdk import UserClient
+
+with UserClient() as user:                    # reads XAGENT_PERSONAL_KEY / XAGENT_BASE_URL
+    agents = user.agents.list()
+    if not agents:
+        raise SystemExit("no agent visible to this key")
+    result = user.tasks.run(agent_id=agents[0].agent_id, message="Say hi")
+    print(result.output)
+```
+
 ## API reference
 
 All methods are synchronous.
 
-### `UserClient` — management surface
+### `UserClient` — personal key surface
 
-Constructed with a personal key; talks to `/v1/me`,
-`/v1/templates*`, and `/v1/agents*`.
+Constructed with a personal key; talks to `/v1/me`, `/v1/templates*`,
+`/v1/agents*` and `/v1/chat/tasks*`. See the `UserClient` docstring for
+which agents and tasks a personal key can reach.
 
 | Method | Returns | Notes |
 |---|---|---|
@@ -391,6 +407,7 @@ Constructed with a personal key; talks to `/v1/me`,
 | `user.agents.create(*, name, instructions, generate_runtime_key=True, metadata=None)` | `AgentCreateResult` | POST `/v1/agents`; `runtime_full_key` is one-time |
 | `user.agents.create_from_template(template_id, *, overrides=None, generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/agents/from-template`; 404 → `TemplateNotFound` |
 | `user.agents.rotate_key(agent_id)` | `RotateKeyResult` | POST `/v1/agents/{agent_id}/api-key`; revokes the previous runtime key atomically |
+| `user.tasks.create / append / reply / get / steps / events / wait / run` | as in the `AgentClient` table | Any agent you can see (`user.agents.list()`); the task runs as you, not as the agent's owner. Every personal key of yours sees the tasks any of them created, until the task's agent is deleted. An older server answers `InvalidAPIKey` (401) here. |
 | `user.close()` / `with ... as user` | — | release the connection pool |
 
 ### `AgentClient` — runtime surface
