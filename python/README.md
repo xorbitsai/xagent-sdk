@@ -484,15 +484,30 @@ only.
 | Method | Returns | Notes |
 |---|---|---|
 | `AgentClient(api_key, base_url, ...)` | `AgentClient` | env-var fallback: `XAGENT_API_KEY` / `XAGENT_BASE_URL` |
-| `agent.tasks.create(*, agent_id, message, metadata=None, dispatch_class=None, priority=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` when the server queues the task for its dispatcher or `'running'` when it runs the task in-process; `dispatch_class` (`'interactive'`/`'batch'`) and `priority` (-10..10) apply to the new task only, the server validates them (422 → `InvalidInput`) and an older server ignores them; the result's `dispatch_class` shows the class the server gave the start command (`None` if not dispatched through a queue or on an older server) |
-| `agent.tasks.append(task_id, *, agent_id, message, metadata=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='pending'` (queued) or `'running'` (in-process); raises `TaskBusy` if the prior turn is still queued or running, `InteractionResponseRequired` if `WAITING_FOR_USER` |
+| `agent.tasks.create(*, agent_id, message, metadata=None, dispatch_class=None, priority=None, prompt_context=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` when the server queues the task for its dispatcher or `'running'` when it runs the task in-process; `dispatch_class` (`'interactive'`/`'batch'`) and `priority` (-10..10) apply to the new task only, the server validates them (422 → `InvalidInput`) and an older server ignores them; the result's `dispatch_class` shows the class the server gave the start command (`None` if not dispatched through a queue or on an older server) |
+| `agent.tasks.append(task_id, *, agent_id, message, metadata=None, prompt_context=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='pending'` (queued) or `'running'` (in-process); raises `TaskBusy` if the prior turn is still queued or running, `InteractionResponseRequired` if `WAITING_FOR_USER` |
 | `agent.tasks.reply(task_id, *, agent_id, message)` | `AppendResult` | POST `/v1/chat/tasks/{id}/reply`; answers a `WAITING_FOR_USER` task's pending question and resumes its server-side run (no `run_id` field on the response to check); not idempotent |
 | `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER` |
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
 | `agent.tasks.events(task_id, *, timeout=None)` | `TaskEventStream` | GET `/v1/chat/tasks/{id}/events` (SSE); iterate decoded `StreamEvent` frames as the task runs; `closed_by` tells how the stream ended |
 | `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline |
-| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None)` | `RunResult` | `create` + `wait` + `steps` |
+| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None)` | `RunResult` | `create` + `wait` + `steps` |
 | `agent.close()` / `with ... as agent` | — | release the connection pool |
+
+**Prompt context**: `create()`, `append()` and `run()` take
+`prompt_context`, reference data the server stores on the task and shows
+the agent on every turn. `None` (the default) sends nothing, so
+`append()` keeps what the task already has. An object replaces it, and
+`{}` clears it on `append()` (on `create()` it stores nothing). With an
+agent key the values count as signed by your backend, and the agent's
+declared fields do not limit them. With a personal key (`user.tasks`)
+they count as unsigned, with the same trust as user input: every field
+must be one the agent declares and be no longer than the declared
+length, otherwise the whole request raises `InvalidInput` (422) and
+`message` names the rejected fields. This SDK can neither set nor read
+an agent's declared fields. The server checks keys, value types and
+size; a `nan` or `inf` value raises `ValueError` before the request is
+sent. A server that predates this field ignores it silently.
 
 ### `WorkspaceClient` — hosted workspace surface (`xagent_sdk.cloud`)
 
