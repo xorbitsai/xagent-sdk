@@ -126,8 +126,8 @@ class TestReads:
         assert [s.source for s in summaries] == [
             "personal",
             "builtin",
-            "team",
             "external",
+            "team",
         ]
         assert got == SkillDetail(**detail)
         assert got.files == ["SKILL.md", "templates/report.md"]
@@ -201,6 +201,28 @@ class TestParsing:
                 with pytest.raises(MalformedResponse, match=message_part) as exc:
                     c.skills.list()
                 assert exc.value.http_status is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [{}, [], {"name": "a"}],
+        ids=["empty-object", "array", "missing-fields"],
+    )
+    def test_skill_detail_malformed_bodies(self, body: Any) -> None:
+        with (
+            _make_user(lambda req: httpx.Response(200, json=body)) as c,
+            pytest.raises(MalformedResponse) as exc,
+        ):
+            c.skills.get("my-skill")
+        assert exc.value.http_status is None
+
+    def test_skill_detail_accepts_unknown_source(self) -> None:
+        body = copy.deepcopy(response("skill_detail"))
+        body["source"] = "marketplace"
+
+        with _make_user(lambda req: httpx.Response(200, json=body)) as c:
+            got = c.skills.get("my-skill")
+
+        assert got.source == "marketplace"
 
     def test_skill_source_accepts_unknown_value(self) -> None:
         # ``source`` is a plain string: a value the server starts sending
@@ -292,7 +314,7 @@ class TestErrorMapping:
         assert exc.value.http_status == status
 
 
-_AGENT_METHODS_BEFORE_SKILLS = frozenset(
+_LEGACY_AGENT_METHODS = frozenset(
     {"list", "create", "create_from_template", "rotate_key"}
 )
 
@@ -310,7 +332,7 @@ class TestRoutes:
             n for n in vars(SkillsAPI) if not n.startswith("_")
         }
         assert {n for n in vars(AgentsAPI) if not n.startswith("_")} == (
-            _AGENT_METHODS_BEFORE_SKILLS | {m for (ns, m) in _ROUTES if ns == "agents"}
+            _LEGACY_AGENT_METHODS | {m for (ns, m) in _ROUTES if ns == "agents"}
         )
 
         captured: list[httpx.Request] = []

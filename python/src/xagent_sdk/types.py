@@ -457,7 +457,7 @@ T = TypeVar("T")
 
 
 def _validate_write(adapter: TypeAdapter[T], data: Any, what: str) -> T:
-    """Validate a write endpoint's 202 body, or raise ``MalformedResponse``.
+    """Validate a write endpoint's success body, or raise ``MalformedResponse``.
 
     The server has already accepted the write when this runs, so a body
     that does not validate must surface as the SDK's documented
