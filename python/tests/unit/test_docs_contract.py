@@ -15,6 +15,8 @@ exactly the half-done drift this test exists to catch.
 import re
 from pathlib import Path
 
+from xagent_sdk.errors import _CODE_MAP
+
 
 def _repo_root() -> Path:
     # tests/unit/test_docs_contract.py -> parents[3] == repo root
@@ -173,3 +175,17 @@ class TestStreamingErrorTable:
                 assert "neither an error nor 200" in stripped
                 found = True
         assert found
+
+
+class TestServerErrorTable:
+    """The README's server-mapped error table must list exactly the
+    (exception, code) pairs the SDK maps, so a new code cannot be added to
+    ``_CODE_MAP`` without documenting it, or documented without a mapping.
+    """
+
+    def test_readme_error_table_matches_code_map(self) -> None:
+        text = _read("python/README.md")
+        table = text.split("Server-mapped codes:")[1].split("SDK-coined codes:")[0]
+        documented = set(re.findall(r"(?m)^\| `(\w+)` \| [^|]+ \| `(\w+)`", table))
+        mapped = {(cls.__name__, code) for code, cls in _CODE_MAP.items()}
+        assert documented == mapped

@@ -17,6 +17,7 @@ the id is absent. ``E2E_AGENT_NAME`` (default ``e2e_smoke_<pid>``)
 controls the new agent's display name.
 """
 
+import contextlib
 import os
 import time
 
@@ -25,6 +26,7 @@ import pytest
 from xagent_sdk import (
     AgentClient,
     RunResult,
+    SkillNotFound,
     TaskStatus,
     UserClient,
     UserPrincipal,
@@ -150,3 +152,41 @@ def test_e2e_full_flow(user_client: UserClient) -> None:
     assert isinstance(result, RunResult)
     assert result.status is TaskStatus.COMPLETED
     assert result.output is not None
+
+
+def test_personal_skill_lifecycle(user_client: UserClient) -> None:
+    """Create, read, replace and delete one personal skill.
+
+    The skill is named after the process id so concurrent runs do not
+    collide, and it is deleted in ``finally`` even when an assertion in
+    the middle fails.
+    """
+    name = f"e2e-skill-{os.getpid()}"
+
+    def skill_md(version: str) -> str:
+        return (
+            f"---\nname: {name}\ndescription: e2e smoke skill ({version})\n---\n\n"
+            f"# {name}\n\nThis is the {version} version.\n"
+        )
+
+    try:
+        created = user_client.skills.create(name=name, skill_md=skill_md("first"))
+        assert created.name == name
+        assert created.source == "personal"
+
+        detail = user_client.skills.get(name)
+        assert detail.name == name
+        assert detail.source == "personal"
+        assert "first version" in detail.skill_md
+
+        updated = user_client.skills.update(name, skill_md=skill_md("second"))
+        assert updated.name == name
+        assert "second version" in user_client.skills.get(name).skill_md
+        assert name in [s.name for s in user_client.skills.list()]
+
+        assert user_client.skills.delete(name) is None
+        with pytest.raises(SkillNotFound):
+            user_client.skills.get(name)
+    finally:
+        with contextlib.suppress(SkillNotFound):
+            user_client.skills.delete(name)
