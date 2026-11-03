@@ -1,5 +1,7 @@
 """Tests for the HTTPClient transport wrapper."""
 
+from typing import Any
+
 import httpx
 import pytest
 
@@ -94,6 +96,28 @@ class TestHTTPClientRequest:
         assert excinfo.value.code == "transport_error"
         assert "dns dead" in excinfo.value.message
         assert isinstance(excinfo.value.__cause__, httpx.ConnectError)
+        c.close()
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"files": {"file": ("a.md", b"x")}}, {"data": {"name": "x"}}],
+        ids=["files", "data"],
+    )
+    def test_request_rejects_json_with_multipart(self, kwargs: dict[str, Any]) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            calls.append(req)
+            return httpx.Response(200, json={"ok": True})
+
+        c = HTTPClient(
+            base_url="https://x",
+            api_key="y",
+            transport=httpx.MockTransport(handler),
+        )
+        with pytest.raises(ValueError, match="cannot be sent together"):
+            c.request("POST", "/x", json={"a": 1}, **kwargs)
+        assert calls == []
         c.close()
 
 

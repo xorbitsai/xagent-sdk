@@ -2,7 +2,8 @@
 
 A skill is a SKILL.md document that tells an agent how to do one kind of
 work. This namespace lets the personal-key holder list the skills they
-can see and create, read, replace and delete their own personal skills.
+can see and create, upload, read, replace and delete their own personal
+skills.
 
 This module is internal -- consumers reach it via ``user_client.skills``
 -- so the class is exported via the user client and not re-exported from
@@ -48,8 +49,8 @@ class SkillsAPI:
     """The ``user_client.skills`` namespace.
 
     ``list()`` and ``get()`` read the skills the key holder can see;
-    ``create()``, ``update()`` and ``delete()`` manage the holder's own
-    personal skills.
+    ``create()``, ``upload()``, ``update()`` and ``delete()`` manage the
+    holder's own personal skills.
 
     A 404 without the V1 error envelope (the framework's own
     ``{"detail": "Not Found"}``) surfaces as ``InternalError`` with
@@ -138,6 +139,72 @@ class SkillsAPI:
             "POST", "/v1/skills", json={"name": name, "skill_md": skill_md}
         )
         return _parse_skill_write(_json_body(resp, "skill creation"), "skill creation")
+
+    def upload(
+        self, *, filename: str, content: bytes, name: str | None = None
+    ) -> SkillSummary:
+        """``POST /v1/skills/upload`` -- create a personal skill from a file.
+
+        ``filename`` decides how ``content`` is read: only ``.zip`` (a skill
+        bundle) and ``.md`` (a single SKILL.md) are accepted, in any letter
+        case. ``content`` must be ``bytes``; read the file yourself, for
+        example ``Path("my-skill.zip").read_bytes()``.
+
+        A ``name`` you give is used as it is, or refused with ``InvalidInput``
+        (HTTP 400); it is never rewritten. ``None`` sends no ``name`` field
+        and ``""`` is sent as given; the server treats both as absent and
+        derives the name from the ZIP root directory, then the ``name`` in the
+        SKILL.md frontmatter, then ``filename``.
+
+        Repeating an upload is handled like repeating ``create()``:
+
+        - the same name with the same content returns 200 again (an
+          idempotent replay, nothing is written twice);
+        - a 200 means the name now holds exactly this content, not that this
+          particular request created it;
+        - the same name with different content raises ``SkillAlreadyExists``;
+        - so does the same content when the skill was originally created by
+          ``create()`` instead of by an upload.
+
+        The server's default limit is 50 MiB, for the upload and for its
+        unpacked contents; a deployment may set a lower limit. Over the limit
+        raises ``InvalidInput`` with ``http_status=413``.
+
+        Timeouts: the client's ``timeout`` bounds each single wait -- a
+        connection that stops accepting bytes, or the server's processing
+        after the last byte is sent -- not the whole upload, so a slow but
+        steady link does not time out. A timeout after the body was sent
+        surfaces as ``XAgentTransportError`` and does not tell you whether the
+        skill was written; repeating the same upload with an explicit ``name``
+        is safe.
+
+        Raises:
+            ValueError: ``filename`` is empty; raised before any request is
+                sent.
+            SkillAlreadyExists: see above. The SDK never turns this into a
+                success.
+            InvalidInput: the upload is not acceptable: an unsupported
+                ``filename`` extension, an unreadable or invalid bundle, or an
+                invalid ``name`` (``http_status=400``), or over the size limit
+                (``http_status=413``).
+            InternalError: a response without the V1 error envelope, such as
+                a multipart body the server could not parse
+                (``http_status=400``) or a proxy's own error page.
+            XAgentTransportError: the request failed below the HTTP layer.
+            InvalidAPIKey: the key is not accepted by the skill endpoints.
+            MalformedResponse: the response status is not 200, the body is
+                not JSON, or it is not a skill summary object. The write may
+                already have been applied; repeating the call is safe.
+        """
+        if not filename:
+            raise ValueError("filename must be a non-empty string")
+        resp = self._client._request(
+            "POST",
+            "/v1/skills/upload",
+            files={"file": (filename, content)},
+            data={"name": name} if name is not None else None,
+        )
+        return _parse_skill_write(_json_body(resp, "skill upload"), "skill upload")
 
     def update(self, name: str, *, skill_md: str) -> SkillSummary:
         """``PUT /v1/skills/{name}`` -- replace a personal skill's SKILL.md.

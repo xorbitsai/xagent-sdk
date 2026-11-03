@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from types import TracebackType
 from typing import Any, Self
@@ -72,9 +72,14 @@ class HTTPClient:
         path: str,
         *,
         json: dict[str, Any] | None = None,
+        files: Mapping[str, tuple[str, bytes]] | None = None,
+        data: Mapping[str, str] | None = None,
     ) -> httpx.Response:
+        if json is not None and (files is not None or data is not None):
+            # httpx silently drops ``json`` when ``files`` is given.
+            raise ValueError("json and multipart fields cannot be sent together")
         try:
-            return self._client.request(method, path, json=json)
+            return self._client.request(method, path, json=json, files=files, data=data)
         except httpx.HTTPError as exc:
             raise XAgentTransportError(
                 "transport_error", str(exc), http_status=None
