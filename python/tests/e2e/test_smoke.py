@@ -18,14 +18,18 @@ controls the new agent's display name.
 """
 
 import contextlib
+import io
 import os
 import time
+import zipfile
+from pathlib import Path
 
 import pytest
 
 from xagent_sdk import (
     AgentClient,
     RunResult,
+    SkillAlreadyExists,
     SkillNotFound,
     TaskStatus,
     UserClient,
@@ -176,7 +180,7 @@ def test_e2e_full_flow(user_client: UserClient) -> None:
 
 
 def test_personal_skill_lifecycle(user_client: UserClient) -> None:
-    """Create, read, replace and delete one personal skill.
+    """Create, read, replace, delete and then upload one personal skill.
 
     The skill is named after the process id so concurrent runs do not
     collide, and it is deleted in ``finally`` even when an assertion in
@@ -208,6 +212,79 @@ def test_personal_skill_lifecycle(user_client: UserClient) -> None:
         assert user_client.skills.delete(name) is None
         with pytest.raises(SkillNotFound):
             user_client.skills.get(name)
+
+        content = skill_md("uploaded").encode()
+        uploaded = user_client.skills.upload(
+            filename=f"{name}.md", content=content, name=name
+        )
+        assert uploaded.name == name
+        assert uploaded.source == "personal"
+        assert "uploaded version" in user_client.skills.get(name).skill_md
+        # Repeating the same upload is a replay, not a conflict.
+        assert (
+            user_client.skills.upload(filename=f"{name}.md", content=content, name=name)
+            == uploaded
+        )
     finally:
         with contextlib.suppress(SkillNotFound):
             user_client.skills.delete(name)
+
+
+def test_personal_skill_upload_without_name_and_conflict(
+    user_client: UserClient,
+) -> None:
+    """Upload without a ``name``, then hit the ``create()``/``upload()`` clash.
+
+    The root directory of an in-memory ZIP names the skill, ahead of the name
+    in its SKILL.md. A ``.md`` file with no name in its frontmatter is named
+    after the last part of ``filename``. A name that ``create()`` holds refuses
+    an upload, with the same content or different content, and keeps what it
+    holds. All three skills are deleted in ``finally`` even when an assertion
+    in the middle fails.
+    """
+    pid = os.getpid()
+    zip_name = f"e2e-zip-{pid}"
+    md_name = f"e2e-md-{pid}"
+    created_name = f"e2e-created-{pid}"
+
+    def skill_md(name: str, version: str) -> str:
+        return (
+            f"---\nname: {name}\ndescription: e2e upload ({version})\n---\n\n"
+            f"# {name}\n\nThis is the {version} version.\n"
+        )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(f"{zip_name}/SKILL.md", skill_md(f"e2e-inner-{pid}", "zipped"))
+
+    try:
+        uploaded = user_client.skills.upload(
+            filename=Path("bundles") / "bundle.zip", content=buffer.getvalue()
+        )
+        assert uploaded.name == zip_name
+        assert uploaded.source == "personal"
+        detail = user_client.skills.get(zip_name)
+        assert detail.files == ["SKILL.md"]
+        assert "zipped version" in detail.skill_md
+
+        from_md = user_client.skills.upload(
+            filename=f"clients\\acme\\{md_name}.md",
+            content=b"---\ndescription: e2e upload without a name\n---\n\n# Body\n",
+        )
+        assert from_md.name == md_name
+
+        original = skill_md(created_name, "created")
+        user_client.skills.create(name=created_name, skill_md=original)
+        for clashing in (original, skill_md(created_name, "clashing")):
+            with pytest.raises(SkillAlreadyExists) as exc:
+                user_client.skills.upload(
+                    filename=f"{created_name}.md",
+                    content=clashing.encode(),
+                    name=created_name,
+                )
+            assert exc.value.http_status == 409
+        assert user_client.skills.get(created_name).skill_md == original
+    finally:
+        for name in (zip_name, md_name, created_name):
+            with contextlib.suppress(SkillNotFound):
+                user_client.skills.delete(name)

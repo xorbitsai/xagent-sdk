@@ -24,6 +24,7 @@ attributes:
 """
 
 import os
+from collections.abc import Mapping
 from types import TracebackType
 from typing import Any, ClassVar, Self
 
@@ -147,19 +148,23 @@ class _BaseClient:
         path: str,
         *,
         json: dict[str, object] | None = None,
+        files: Mapping[str, tuple[str, bytes]] | None = None,
+        data: Mapping[str, str] | None = None,
     ) -> httpx.Response:
         """Send a request and map any 4xx/5xx response to an XAgentError.
 
         Protected by package convention: called by API namespace classes
-        within ``xagent_sdk`` (TasksAPI, TemplatesAPI, AgentsAPI) but not
+        within ``xagent_sdk`` (TasksAPI, TemplatesAPI, AgentsAPI, SkillsAPI) but not
         part of the user-facing API.
+
+        Multipart uploads pass ``files``/``data`` instead of ``json``.
 
         Transport-level failures are already wrapped in
         ``XAgentTransportError`` by ``HTTPClient.request``; this helper
         only adds the V1-envelope-to-exception mapping for HTTP error
         responses that do have a body.
         """
-        resp = self._http.request(method, path, json=json)
+        resp = self._http.request(method, path, json=json, files=files, data=data)
         if resp.is_error:
             raise from_response(resp)
         return resp
