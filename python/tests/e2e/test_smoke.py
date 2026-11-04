@@ -6,7 +6,8 @@ the whole file. Run explicitly with::
     XAGENT_BASE_URL=... XAGENT_PERSONAL_KEY=... XAGENT_API_KEY=... \\
         uv run pytest -m e2e
 
-Set ``E2E_AGENT_ID`` to pick the agent id used by runtime-only tests;
+Set ``E2E_AGENT_ID`` to pick the agent id used by the tests that run an
+existing agent and by the test that writes its skill list back unchanged;
 those tests skip when it is unset, because ``AgentClient`` exposes no
 self-identity probe (discover agent ids via ``UserClient.agents.list()``
 on the personal-key path).
@@ -134,18 +135,40 @@ def test_personal_key_runs_visible_agent(user_client: UserClient) -> None:
     assert result.output is not None
 
 
+# Request limits of ``PUT /v1/agents/{agent_id}/skills``. Other ways of saving
+# an agent do not apply them, so a stored list can be outside them.
+_PUT_SKILLS_MAX_NAMES = 100
+_PUT_SKILLS_MAX_NAME_LENGTH = 1000
+
+
 def test_agent_skills_roundtrip(user_client: UserClient) -> None:
     """Read an agent's skill list and write it back unchanged.
 
     ``E2E_AGENT_ID`` must name an agent that is visible to the personal
-    key's holder. The write changes nothing on the agent when the stored list
-    has no repeated name.
+    key's holder. Everyone who uses the agent gets the list that is written,
+    so the test skips before writing unless sending the stored list back
+    leaves it as it is: no name is repeated (the server would keep one copy),
+    and the list has at most 100 names, each 1-1000 characters long (the
+    server refuses anything else). The endpoint has no conflict detection, so
+    a change made by someone else between the read and the write is lost.
     """
     agent_id_env = os.environ.get("E2E_AGENT_ID")
     if not agent_id_env:
         pytest.skip("E2E_AGENT_ID not set; cannot exercise the agent skill list")
     agent_id = int(agent_id_env)
     before = user_client.agents.get_skills(agent_id)
+    if len(set(before)) != len(before):
+        pytest.skip("the agent's skill list repeats a name; the server keeps one copy")
+    if len(before) > _PUT_SKILLS_MAX_NAMES:
+        pytest.skip(
+            f"the agent's skill list has {len(before)} names; "
+            f"the server takes at most {_PUT_SKILLS_MAX_NAMES}"
+        )
+    if any(not 1 <= len(name) <= _PUT_SKILLS_MAX_NAME_LENGTH for name in before):
+        pytest.skip(
+            "the agent's skill list has a name outside 1-"
+            f"{_PUT_SKILLS_MAX_NAME_LENGTH} characters; the server refuses it"
+        )
     result = user_client.agents.replace_skills(agent_id, before)
     assert result.skills == before
     assert result.unresolved_for_caller == []
