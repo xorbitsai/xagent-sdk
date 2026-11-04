@@ -488,8 +488,9 @@ def _validate_write(adapter: TypeAdapter[T], data: Any, what: str) -> T:
     ``MalformedResponse`` rather than a raw pydantic ``ValidationError``.
     Whether resending is safe depends on the endpoint: a retried task
     ``create()`` starts a second task and a retried ``append()``/``reply()``
-    can send the message twice, while ``skills.create()`` and
-    ``skills.update()`` are idempotent replays and safe to resend.
+    can send the message twice, while ``skills.create()``,
+    ``skills.upload()`` and ``skills.update()`` are idempotent replays and
+    safe to resend.
     ``agents.replace_skills()`` is not: resending can lose the unresolved
     names the first call reported, so call ``agents.get_skills()`` first.
     """
