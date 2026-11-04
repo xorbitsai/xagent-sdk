@@ -95,10 +95,10 @@ class SkillNotFound(XAgentError):
 class SkillAlreadyExists(XAgentError):
     """HTTP 409, code ``skill_already_exists``.
 
-    Raised by ``UserClient.skills.create``: the holder already has a
-    personal skill with this name and this request is not a repeat of the write
-    that created it (a repeat through a different creation method, such as an
-    upload, also counts as a conflict).
+    Raised by ``UserClient.skills.create`` / ``upload``: the holder already has
+    a personal skill with this name and this request is not a repeat of the
+    write that created it (a repeat through the other creation method also
+    counts as a conflict).
     """
 
 
@@ -196,15 +196,15 @@ class MalformedResponse(XAgentError):
     there it does carry that status, because there the status line is
     the problem.
 
-    The skill methods (``UserClient.skills.list/get/create/update/delete``)
+    The skill methods (``UserClient.skills.list/get/create/upload/update/delete``)
     also raise it when the response status is not 200 (a redirect this
     client does not follow, or a 204), when a 200 body is not JSON, or when
     the JSON does not have the expected shape. Only the status case carries
     the status on ``http_status``. ``skills.list()`` never folds a wrong-shaped
-    body into an empty list. ``skills.create()`` and ``skills.update()`` are
-    idempotent, so retrying one after this error is safe; a retried
-    ``skills.delete()`` raises ``SkillNotFound`` if the first call went
-    through.
+    body into an empty list. ``skills.create()``, ``skills.upload()`` and
+    ``skills.update()`` are idempotent, so retrying one after this error is
+    safe; a retried ``skills.delete()`` raises ``SkillNotFound`` if the first
+    call went through.
 
     ``UserClient.agents.get_skills()`` and ``replace_skills()`` raise it in the
     same three cases. ``get_skills()`` never folds a wrong-shaped body into an

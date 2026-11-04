@@ -13,6 +13,9 @@ same JSON other language clients will use.
 import copy
 import json
 from collections.abc import Callable
+from email.parser import BytesParser
+from email.policy import default
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -20,6 +23,7 @@ import pytest
 
 from xagent_sdk import (
     AgentNotFound,
+    InternalError,
     InvalidAPIKey,
     InvalidInput,
     MalformedResponse,
@@ -29,6 +33,7 @@ from xagent_sdk import (
     SkillSummary,
     UserClient,
     XAgentError,
+    XAgentTransportError,
 )
 from xagent_sdk._agents import AgentsAPI
 from xagent_sdk._skills import SkillsAPI
@@ -59,6 +64,9 @@ _CALLS: dict[tuple[str, str], _Call] = {
     ),
     ("skills", "update"): lambda u: u.skills.update("my-skill", skill_md=_SKILL_MD),
     ("skills", "delete"): lambda u: u.skills.delete("my-skill"),
+    ("skills", "upload"): lambda u: u.skills.upload(
+        filename="my-skill.md", content=_SKILL_MD.encode(), name="my-skill"
+    ),
     ("agents", "get_skills"): lambda u: u.agents.get_skills(7),
     ("agents", "replace_skills"): lambda u: u.agents.replace_skills(
         7, ["weekly-report"]
@@ -70,6 +78,7 @@ _OK_FIXTURES: dict[tuple[str, str], str] = {
     ("skills", "create"): "skill_write",
     ("skills", "update"): "skill_write",
     ("skills", "delete"): "skill_delete",
+    ("skills", "upload"): "skill_write",
     ("agents", "get_skills"): "agent_skills",
     ("agents", "replace_skills"): "agent_skills_update",
 }
@@ -82,15 +91,21 @@ _ROUTES: dict[tuple[str, str], tuple[str, bytes]] = {
     ("skills", "create"): ("POST", b"/v1/skills"),
     ("skills", "update"): ("PUT", b"/v1/skills/my-skill"),
     ("skills", "delete"): ("DELETE", b"/v1/skills/my-skill"),
+    ("skills", "upload"): ("POST", b"/v1/skills/upload"),
     ("agents", "get_skills"): ("GET", b"/v1/agents/7/skills"),
     ("agents", "replace_skills"): ("PUT", b"/v1/agents/7/skills"),
 }
+# ``upload`` sends multipart, not JSON, so its row holds this marker instead of
+# an expected JSON body. ``test_upload_multipart_shape`` pins its fields, so the
+# route test only checks the content type.
+_MULTIPART_BODY: Any = object()
 _EXPECTED_BODIES: dict[tuple[str, str], dict[str, Any] | None] = {
     ("skills", "list"): None,
     ("skills", "get"): None,
     ("skills", "create"): {"name": "my-skill", "skill_md": _SKILL_MD},
     ("skills", "update"): {"skill_md": _SKILL_MD},
     ("skills", "delete"): None,
+    ("skills", "upload"): _MULTIPART_BODY,
     ("agents", "get_skills"): None,
     ("agents", "replace_skills"): {"skills": ["weekly-report"]},
 }
@@ -250,7 +265,7 @@ class TestParsing:
         assert parsed == [SkillSummary(**item) for item in body]
         assert parsed[0].source == "marketplace"
 
-    @pytest.mark.parametrize("method", ["create", "update"])
+    @pytest.mark.parametrize("method", ["create", "update", "upload"])
     @pytest.mark.parametrize(
         ("body", "valid"),
         [(response("skill_write"), True), ({}, False), ([], False)],
@@ -306,6 +321,8 @@ _ERROR_CASES: list[tuple[str, int, str, type[XAgentError]]] = [
     ("create", 422, "validation_422", InvalidInput),
     ("update", 400, "validation_422", InvalidInput),
     ("list", 401, "invalid_api_key", InvalidAPIKey),
+    ("upload", 409, "skill_already_exists", SkillAlreadyExists),
+    ("upload", 413, "validation_422", InvalidInput),
     ("get_skills", 404, "agent_not_found", AgentNotFound),
     ("replace_skills", 400, "validation_422", InvalidInput),
     ("replace_skills", 422, "validation_422", InvalidInput),
@@ -371,7 +388,10 @@ class TestRoutes:
         assert captured[0].method == http_method
         assert captured[0].url.raw_path == raw_path
         expected_body = _EXPECTED_BODIES[(namespace, method)]
-        if expected_body is None:
+        if expected_body is _MULTIPART_BODY:
+            content_type = captured[0].headers["content-type"]
+            assert content_type.startswith("multipart/form-data; boundary=")
+        elif expected_body is None:
             assert captured[0].content == b""
         else:
             assert json.loads(captured[0].content) == expected_body
@@ -406,3 +426,166 @@ class TestUnexpectedSuccessResponses:
         ):
             _CALLS[(namespace, method)](c)
         assert exc.value.http_status == expected_status
+
+
+def _multipart_parts(req: httpx.Request) -> dict[str, tuple[str | None, bytes]]:
+    """Decode a multipart request into ``{field: (filename, value)}``."""
+    raw = (
+        b"Content-Type: "
+        + req.headers["content-type"].encode()
+        + b"\r\n\r\n"
+        + req.content
+    )
+    message = BytesParser(policy=default).parsebytes(raw)
+    return {
+        part.get_param("name", header="content-disposition"): (
+            part.get_filename(),
+            part.get_payload(decode=True),
+        )
+        for part in message.iter_parts()
+    }
+
+
+_ZIP_BYTES = b"PK\x03\x04\xff\x00abc\r\n--x"
+
+
+def _raise_connect_error(req: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("dns dead")
+
+
+class TestUpload:
+    @pytest.mark.parametrize(
+        ("name", "expected_name"),
+        [(None, None), ("", (None, b"")), ("x", (None, b"x"))],
+        ids=["none", "empty", "given"],
+    )
+    def test_upload_multipart_shape(
+        self, name: str | None, expected_name: tuple[None, bytes] | None
+    ) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(200, json=response("skill_write"))
+
+        with _make_user(handler) as c:
+            c.skills.upload(filename="my-skill.zip", content=_ZIP_BYTES, name=name)
+
+        assert len(captured) == 1
+        content_type = captured[0].headers["content-type"]
+        assert content_type.startswith("multipart/form-data; boundary=")
+        parts = _multipart_parts(captured[0])
+        assert parts["file"] == ("my-skill.zip", _ZIP_BYTES)
+        if expected_name is None:
+            assert "name" not in parts
+        else:
+            assert parts["name"] == expected_name
+
+    @pytest.mark.parametrize(
+        ("handler", "expected", "expected_status"),
+        [
+            (_raise_connect_error, XAgentTransportError, None),
+            (
+                lambda req: httpx.Response(
+                    413,
+                    json={
+                        "error": {
+                            "code": "invalid_input",
+                            "message": "Upload exceeds 50 MiB limit.",
+                        }
+                    },
+                ),
+                InvalidInput,
+                413,
+            ),
+            (
+                lambda req: httpx.Response(400, json={"detail": "x"}),
+                InternalError,
+                400,
+            ),
+        ],
+        ids=["connect-error", "413-envelope", "400-no-envelope"],
+    )
+    def test_upload_failure_paths(
+        self,
+        handler: _Handler,
+        expected: type[XAgentError],
+        expected_status: int | None,
+    ) -> None:
+        with (
+            _make_user(handler) as c,
+            pytest.raises(XAgentError) as exc,
+        ):
+            c.skills.upload(filename="my-skill.zip", content=_ZIP_BYTES)
+        assert type(exc.value) is expected
+        assert exc.value.http_status == expected_status
+
+    def test_upload_sends_the_file_in_small_chunks(self) -> None:
+        # ``httpx.MockTransport`` reads the whole body before calling its
+        # handler, so the chunks are observed from a bare transport that
+        # iterates the request stream itself.
+        content = b"skill-body-bytes" * (200 * 1024 // 16)
+        chunk_sizes: list[int] = []
+        body = bytearray()
+
+        class _Recorder(httpx.BaseTransport):
+            def handle_request(self, request: httpx.Request) -> httpx.Response:
+                for chunk in request.stream:  # type: ignore[union-attr]
+                    chunk_sizes.append(len(chunk))
+                    body.extend(chunk)
+                return httpx.Response(200, json=response("skill_write"))
+
+        with UserClient(
+            personal_key="xag_personal_p_s",
+            base_url="https://test.example",
+            transport=_Recorder(),
+        ) as c:
+            c.skills.upload(filename="big.zip", content=content)
+
+        assert len(content) == 200 * 1024
+        assert max(chunk_sizes) <= 65536
+        assert content in bytes(body)
+
+    @pytest.mark.parametrize(
+        ("filename", "sent"),
+        [
+            (Path("/home/u/clients/acme/x.zip"), "x.zip"),
+            ("/home/u/clients/acme/x.zip", "x.zip"),
+            ("clients\\acme\\x.md", "x.md"),
+            ("C:\\Users\\u\\x.zip", "x.zip"),
+        ],
+        ids=["path-object", "posix-full-path", "windows-relative", "windows-absolute"],
+    )
+    def test_upload_sends_only_the_last_path_part(
+        self, filename: str | Path, sent: str
+    ) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(200, json=response("skill_write"))
+
+        with _make_user(handler) as c:
+            c.skills.upload(filename=filename, content=_ZIP_BYTES)
+
+        assert len(captured) == 1
+        assert _multipart_parts(captured[0])["file"] == (sent, _ZIP_BYTES)
+
+    @pytest.mark.parametrize(
+        "filename", ["", "dir/"], ids=["empty", "trailing-separator"]
+    )
+    def test_upload_filename_without_last_part_rejected_locally(
+        self, filename: str
+    ) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            calls.append(req)
+            return httpx.Response(200, json=response("skill_write"))
+
+        with (
+            _make_user(handler) as c,
+            pytest.raises(ValueError, match="filename must be a non-empty string"),
+        ):
+            c.skills.upload(filename=filename, content=_ZIP_BYTES)
+        assert calls == []

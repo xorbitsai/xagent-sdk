@@ -2,6 +2,7 @@
 
 import json
 import time
+import types
 from collections.abc import Callable
 
 import httpx
@@ -923,3 +924,112 @@ class TestRun:
         # New (correct) behavior: elapsed ≈ timeout ≈ 0.2s
         # Assert < timeout + create_delay/2 so we strictly distinguish.
         assert elapsed < timeout + create_delay / 2
+
+
+_HTTPX_VERSION = tuple(int(part) for part in httpx.__version__.split(".")[:2])
+
+_PROMPT_CONTEXT_CALLS: dict[str, Callable[..., object]] = {
+    "create": lambda c, **kw: c.tasks.create(agent_id=7, message="hi", **kw),
+    "append": lambda c, **kw: c.tasks.append(10, agent_id=7, message="hi", **kw),
+    "run": lambda c, **kw: c.tasks.run(
+        agent_id=7, message="hi", poll_interval=0.0, **kw
+    ),
+}
+
+
+def _prompt_context_handler(
+    captured: list[httpx.Request],
+) -> Callable[[httpx.Request], httpx.Response]:
+    """Answer the calls above from the shared fixtures, keeping every POST."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST":
+            captured.append(req)
+            name = "create_task" if req.url.path == "/v1/chat/tasks" else "append_task"
+            return httpx.Response(202, json=response(name))
+        if req.url.path.endswith("/steps"):
+            return httpx.Response(200, json=response("steps_full"))
+        return httpx.Response(200, json=response("task_info_completed"))
+
+    return handler
+
+
+class TestPromptContext:
+    @pytest.mark.parametrize("method", ["create", "append", "run"])
+    @pytest.mark.parametrize(
+        "value",
+        [None, {}, {"k": "v", "n": 1, "b": True}],
+        ids=["none", "empty", "values"],
+    )
+    def test_prompt_context_wire_shape(
+        self,
+        make_client: Callable[..., AgentClient],
+        method: str,
+        value: dict[str, object] | None,
+    ) -> None:
+        captured: list[httpx.Request] = []
+        with make_client(_prompt_context_handler(captured)) as c:
+            _PROMPT_CONTEXT_CALLS[method](c, prompt_context=value)
+
+        assert len(captured) == 1
+        body = json.loads(captured[0].content)
+        if value is None:
+            assert "prompt_context" not in body
+        else:
+            # Compared as text: ``True == 1`` would hide a changed value type.
+            assert json.dumps(body["prompt_context"], sort_keys=True) == json.dumps(
+                value, sort_keys=True
+            )
+
+    @pytest.mark.skipif(
+        _HTTPX_VERSION < (0, 28),
+        reason="httpx before 0.28 encodes nan/inf instead of refusing them",
+    )
+    @pytest.mark.parametrize("method", ["create", "append"])
+    @pytest.mark.parametrize("value", [float("nan"), float("inf")], ids=["nan", "inf"])
+    def test_prompt_context_non_finite_value_fails_before_sending(
+        self,
+        make_client: Callable[..., AgentClient],
+        method: str,
+        value: float,
+    ) -> None:
+        captured: list[httpx.Request] = []
+        with (
+            make_client(_prompt_context_handler(captured)) as c,
+            pytest.raises(ValueError, match="not JSON compliant"),
+        ):
+            _PROMPT_CONTEXT_CALLS[method](c, prompt_context={"k": value})
+
+        assert captured == []
+
+    @pytest.mark.parametrize("method", ["create", "append"])
+    def test_prompt_context_accepts_a_read_only_mapping(
+        self, make_client: Callable[..., AgentClient], method: str
+    ) -> None:
+        captured: list[httpx.Request] = []
+        with make_client(_prompt_context_handler(captured)) as c:
+            _PROMPT_CONTEXT_CALLS[method](
+                c, prompt_context=types.MappingProxyType({"k": "v"})
+            )
+
+        assert len(captured) == 1
+        assert json.loads(captured[0].content)["prompt_context"] == {"k": "v"}
+
+    def test_reply_does_not_take_prompt_context(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(202, json=response("reply_task"))
+
+        with (
+            make_client(handler) as c,
+            pytest.raises(TypeError, match="prompt_context"),
+        ):
+            c.tasks.reply(  # type: ignore[call-arg]
+                10, agent_id=7, message="hi", prompt_context={}
+            )
+
+        assert captured == []

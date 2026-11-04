@@ -2,13 +2,15 @@
 
 A skill is a SKILL.md document that tells an agent how to do one kind of
 work. This namespace lets the personal-key holder list the skills they
-can see and create, read, replace and delete their own personal skills.
+can see and create, upload, read, replace and delete their own personal
+skills.
 
 This module is internal -- consumers reach it via ``user_client.skills``
 -- so the class is exported via the user client and not re-exported from
 ``xagent_sdk.__init__``.
 """
 
+import os
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -48,8 +50,8 @@ class SkillsAPI:
     """The ``user_client.skills`` namespace.
 
     ``list()`` and ``get()`` read the skills the key holder can see;
-    ``create()``, ``update()`` and ``delete()`` manage the holder's own
-    personal skills.
+    ``create()``, ``upload()``, ``update()`` and ``delete()`` manage the
+    holder's own personal skills.
 
     A 404 without the V1 error envelope (the framework's own
     ``{"detail": "Not Found"}``) surfaces as ``InternalError`` with
@@ -138,6 +140,88 @@ class SkillsAPI:
             "POST", "/v1/skills", json={"name": name, "skill_md": skill_md}
         )
         return _parse_skill_write(_json_body(resp, "skill creation"), "skill creation")
+
+    def upload(
+        self,
+        *,
+        filename: str | os.PathLike[str],
+        content: bytes,
+        name: str | None = None,
+    ) -> SkillSummary:
+        """``POST /v1/skills/upload`` -- create a personal skill from a file.
+
+        ``filename`` decides how ``content`` is read: only ``.zip`` (a skill
+        bundle) and ``.md`` (a single SKILL.md) are accepted, in any letter
+        case. It can be a plain name, a path string or a path object. Only its
+        last part is sent, and both forward slashes and backslashes separate
+        the parts on every platform, so your directories do not reach the
+        server. ``content`` must be ``bytes``; read the file yourself, for
+        example ``Path("my-skill.zip").read_bytes()``.
+
+        A ``name`` you give is used as it is, or refused with ``InvalidInput``
+        (HTTP 400); it is never rewritten. ``None`` sends no ``name`` field
+        and ``""`` is sent as given; the server treats both as absent and
+        derives the name from the ZIP root directory, then the ``name`` in the
+        SKILL.md frontmatter, then the last part of ``filename``.
+
+        Repeating an upload is handled like repeating ``create()``:
+
+        - the same name with the same content returns 200 again (an
+          idempotent replay, nothing is written twice);
+        - a 200 means the name now holds exactly this content, not that this
+          particular request created it;
+        - the same name with different content raises ``SkillAlreadyExists``;
+        - so does the same content when the skill was originally created by
+          ``create()`` instead of by an upload.
+
+        The server accepts at most 50 MiB, for the upload and for its unpacked
+        contents (a deployment can lower this); over the limit raises
+        ``InvalidInput`` with ``http_status=413``. A lower limit set on a
+        proxy in front of it surfaces as the proxy's own error page, which is
+        ``InternalError`` with ``http_status=413``. The SKILL.md text, in a
+        ``.md`` upload or inside a ``.zip``, has a further limit of 200000
+        characters; over it raises ``InvalidInput`` with ``http_status=400``.
+
+        Timeouts: the client's ``timeout`` bounds each single wait -- a
+        connection that stops accepting bytes, or the server's processing
+        after the last byte is sent -- not the whole upload, so a slow but
+        steady link does not time out. A timeout after the body was sent
+        surfaces as ``XAgentTransportError`` and does not tell you whether the
+        skill was written; repeating the same upload with an explicit ``name``
+        is safe.
+
+        Raises:
+            ValueError: ``filename`` has no last part, because it is empty or
+                ends in a separator (``"dir/"``); raised before any request is
+                sent.
+            SkillAlreadyExists: see above. The SDK never turns this into a
+                success.
+            InvalidInput: the upload is not acceptable: an unsupported
+                ``filename`` extension, an unreadable or invalid bundle, or an
+                invalid ``name`` (``http_status=400``), or over the size limit
+                (``http_status=413``).
+            InternalError: a response without the V1 error envelope, such as
+                a multipart body the server could not parse
+                (``http_status=400``) or a proxy's own error page.
+            XAgentTransportError: the request failed below the HTTP layer.
+            InvalidAPIKey: the key is not accepted by the skill endpoints.
+            MalformedResponse: the response status is not 200, the body is
+                not JSON, or it is not a skill summary object. The write may
+                already have been applied; repeating the call is safe.
+        """
+        # Everything before the last separator is the caller's local layout.
+        # Neither stdlib helper fits: ``os.path.basename`` only knows the local
+        # separator, and ``ntpath.basename`` returns "" for ``//tmp/x.md``.
+        base_name = os.fspath(filename).replace("\\", "/").rsplit("/", 1)[-1]
+        if not base_name:
+            raise ValueError("filename must be a non-empty string")
+        resp = self._client._request(
+            "POST",
+            "/v1/skills/upload",
+            files={"file": (base_name, content)},
+            data={"name": name} if name is not None else None,
+        )
+        return _parse_skill_write(_json_body(resp, "skill upload"), "skill upload")
 
     def update(self, name: str, *, skill_md: str) -> SkillSummary:
         """``PUT /v1/skills/{name}`` -- replace a personal skill's SKILL.md.
