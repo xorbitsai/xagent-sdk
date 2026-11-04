@@ -10,6 +10,7 @@ This module is internal -- consumers reach it via ``user_client.skills``
 ``xagent_sdk.__init__``.
 """
 
+import os
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -141,20 +142,27 @@ class SkillsAPI:
         return _parse_skill_write(_json_body(resp, "skill creation"), "skill creation")
 
     def upload(
-        self, *, filename: str, content: bytes, name: str | None = None
+        self,
+        *,
+        filename: str | os.PathLike[str],
+        content: bytes,
+        name: str | None = None,
     ) -> SkillSummary:
         """``POST /v1/skills/upload`` -- create a personal skill from a file.
 
         ``filename`` decides how ``content`` is read: only ``.zip`` (a skill
         bundle) and ``.md`` (a single SKILL.md) are accepted, in any letter
-        case. ``content`` must be ``bytes``; read the file yourself, for
+        case. It can be a plain name, a path string or a path object. Only its
+        last part is sent, and both forward slashes and backslashes separate
+        the parts on every platform, so your directories do not reach the
+        server. ``content`` must be ``bytes``; read the file yourself, for
         example ``Path("my-skill.zip").read_bytes()``.
 
         A ``name`` you give is used as it is, or refused with ``InvalidInput``
         (HTTP 400); it is never rewritten. ``None`` sends no ``name`` field
         and ``""`` is sent as given; the server treats both as absent and
         derives the name from the ZIP root directory, then the ``name`` in the
-        SKILL.md frontmatter, then ``filename``.
+        SKILL.md frontmatter, then the last part of ``filename``.
 
         Repeating an upload is handled like repeating ``create()``:
 
@@ -166,9 +174,9 @@ class SkillsAPI:
         - so does the same content when the skill was originally created by
           ``create()`` instead of by an upload.
 
-        The server's default limit is 50 MiB, for the upload and for its
-        unpacked contents. A lower limit set on the server raises
-        ``InvalidInput`` with ``http_status=413``; a lower limit set on a
+        The server accepts at most 50 MiB, for the upload and for its unpacked
+        contents (a deployment can lower this); over the limit raises
+        ``InvalidInput`` with ``http_status=413``. A lower limit set on a
         proxy in front of it surfaces as the proxy's own error page, which is
         ``InternalError`` with ``http_status=413``. The SKILL.md text, in a
         ``.md`` upload or inside a ``.zip``, has a further limit of 200000
@@ -183,7 +191,8 @@ class SkillsAPI:
         is safe.
 
         Raises:
-            ValueError: ``filename`` is empty; raised before any request is
+            ValueError: ``filename`` has no last part, because it is empty or
+                ends in a separator (``"dir/"``); raised before any request is
                 sent.
             SkillAlreadyExists: see above. The SDK never turns this into a
                 success.
@@ -200,12 +209,16 @@ class SkillsAPI:
                 not JSON, or it is not a skill summary object. The write may
                 already have been applied; repeating the call is safe.
         """
-        if not filename:
+        # Everything before the last separator is the caller's local layout.
+        # Neither stdlib helper fits: ``os.path.basename`` only knows the local
+        # separator, and ``ntpath.basename`` returns "" for ``//tmp/x.md``.
+        base_name = os.fspath(filename).replace("\\", "/").rsplit("/", 1)[-1]
+        if not base_name:
             raise ValueError("filename must be a non-empty string")
         resp = self._client._request(
             "POST",
             "/v1/skills/upload",
-            files={"file": (filename, content)},
+            files={"file": (base_name, content)},
             data={"name": name} if name is not None else None,
         )
         return _parse_skill_write(_json_body(resp, "skill upload"), "skill upload")

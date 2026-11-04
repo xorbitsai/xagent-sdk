@@ -12,6 +12,7 @@ import json
 from collections.abc import Callable
 from email.parser import BytesParser
 from email.policy import default
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -82,9 +83,10 @@ _ROUTES: dict[tuple[str, str], tuple[str, bytes]] = {
     ("skills", "delete"): ("DELETE", b"/v1/skills/my-skill"),
     ("skills", "upload"): ("POST", b"/v1/skills/upload"),
 }
-# ``upload`` sends multipart, not JSON; ``test_upload_multipart_shape`` pins
-# its fields, so the route test only checks the content type.
-_MULTIPART_BODY: dict[str, Any] = {}
+# ``upload`` sends multipart, not JSON, so its row holds this marker instead of
+# an expected JSON body. ``test_upload_multipart_shape`` pins its fields, so the
+# route test only checks the content type.
+_MULTIPART_BODY: Any = object()
 _EXPECTED_BODIES: dict[tuple[str, str], dict[str, Any] | None] = {
     ("skills", "list"): None,
     ("skills", "get"): None,
@@ -522,7 +524,37 @@ class TestUpload:
         assert max(chunk_sizes) <= 65536
         assert content in bytes(body)
 
-    def test_upload_empty_filename_rejected_locally(self) -> None:
+    @pytest.mark.parametrize(
+        ("filename", "sent"),
+        [
+            (Path("/home/u/clients/acme/x.zip"), "x.zip"),
+            ("/home/u/clients/acme/x.zip", "x.zip"),
+            ("clients\\acme\\x.md", "x.md"),
+            ("C:\\Users\\u\\x.zip", "x.zip"),
+        ],
+        ids=["path-object", "posix-full-path", "windows-relative", "windows-absolute"],
+    )
+    def test_upload_sends_only_the_last_path_part(
+        self, filename: str | Path, sent: str
+    ) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(200, json=response("skill_write"))
+
+        with _make_user(handler) as c:
+            c.skills.upload(filename=filename, content=_ZIP_BYTES)
+
+        assert len(captured) == 1
+        assert _multipart_parts(captured[0])["file"] == (sent, _ZIP_BYTES)
+
+    @pytest.mark.parametrize(
+        "filename", ["", "dir/"], ids=["empty", "trailing-separator"]
+    )
+    def test_upload_filename_without_last_part_rejected_locally(
+        self, filename: str
+    ) -> None:
         calls: list[httpx.Request] = []
 
         def handler(req: httpx.Request) -> httpx.Response:
@@ -533,5 +565,5 @@ class TestUpload:
             _make_user(handler) as c,
             pytest.raises(ValueError, match="filename must be a non-empty string"),
         ):
-            c.skills.upload(filename="", content=_ZIP_BYTES)
+            c.skills.upload(filename=filename, content=_ZIP_BYTES)
         assert calls == []

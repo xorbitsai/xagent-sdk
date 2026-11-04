@@ -465,14 +465,20 @@ with UserClient() as user:
     print(uploaded.name, uploaded.source)  # my-skill personal
 ```
 
+`filename` can also be a full path or a `Path`. Only its last part is sent, and
+both `/` and `\` separate the parts on every platform, so your directories do
+not reach the server. A `filename` with no last part (empty, or ending in a
+separator such as `dir/`) raises `ValueError` before any request.
+
 Repeating the same upload returns 200 again. The same name with different
 content, or a name that was created with `create()`, raises
-`SkillAlreadyExists`. The server's default limit is 50 MiB. A lower limit set
-on the server raises `InvalidInput` with `http_status=413`; a lower limit set
-on a proxy in front of it surfaces as the proxy's own error page, which is
-`InternalError` with `http_status=413`. The SKILL.md text, in a `.md` upload or
-inside a `.zip`, has a further limit of 200000 characters; over it raises
-`InvalidInput` with `http_status=400`.
+`SkillAlreadyExists`. The server accepts at most 50 MiB, for the upload and for
+its unpacked contents (a deployment can lower this); over the limit raises
+`InvalidInput` with `http_status=413`. A lower limit set on a proxy in front of
+it surfaces as the proxy's own error page, which is `InternalError` with
+`http_status=413`. The SKILL.md text, in a `.md` upload or inside a `.zip`, has
+a further limit of 200000 characters; over it raises `InvalidInput` with
+`http_status=400`.
 
 ## API reference
 
@@ -498,7 +504,7 @@ which agents and tasks a personal key can reach.
 | `user.skills.list()` | `list[SkillSummary]` | GET `/v1/skills`; your own skills first, in server order; a body that is not an array of skills raises `MalformedResponse` (never `[]`) |
 | `user.skills.get(name)` | `SkillDetail` | GET `/v1/skills/{name}`; includes `skill_md` and `files`; 404 → `SkillNotFound`; `""`, `"."`, `".."` or a name containing `/` raises `ValueError` before any request |
 | `user.skills.create(*, name, skill_md)` | `SkillSummary` | POST `/v1/skills`; the same name with the same content returns 200 again, so a retry is safe; any other clash → `SkillAlreadyExists`; bad name or content → `InvalidInput` |
-| `user.skills.upload(*, filename, content, name=None)` | `SkillSummary` | POST `/v1/skills/upload`; `.zip` or `.md`, chosen by `filename`; `content` is `bytes`; the same name with the same content returns 200 again, any other clash → `SkillAlreadyExists`; server default 50 MiB, and a lower deployment limit surfaces as HTTP 413 (see the upload section); an empty `filename` raises `ValueError` before any request |
+| `user.skills.upload(*, filename, content, name=None)` | `SkillSummary` | POST `/v1/skills/upload`; `.zip` or `.md`, chosen by `filename`, which can be a path or a `Path` (only its last part is sent); `content` is `bytes`; the same name with the same content returns 200 again, any other clash → `SkillAlreadyExists`; over the size limit → HTTP 413 (see the upload section); a `filename` with no last part raises `ValueError` before any request |
 | `user.skills.update(name, *, skill_md)` | `SkillSummary` | PUT `/v1/skills/{name}`; replaces the whole SKILL.md of one of your own skills (anything else → `SkillNotFound`); bad content → `InvalidInput`; same `ValueError` rule as `get` |
 | `user.skills.delete(name)` | `None` | DELETE `/v1/skills/{name}`; returns once the server confirms; deleting again → `SkillNotFound`; same `ValueError` rule as `get` |
 | `user.close()` / `with ... as user` | — | release the connection pool |
