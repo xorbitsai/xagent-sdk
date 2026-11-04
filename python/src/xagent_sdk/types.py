@@ -154,6 +154,20 @@ class RotateKeyResult:
 
 
 @dataclass(frozen=True)
+class AgentSkillsUpdate:
+    """``PUT /v1/agents/{agent_id}/skills`` payload.
+
+    ``skills`` is the list the server stored, with a repeated name kept once
+    at its first position. ``unresolved_for_caller`` lists the names this
+    request added that the key holder cannot see; they are stored anyway.
+    """
+
+    agent_id: int
+    skills: list[str]
+    unresolved_for_caller: list[str]
+
+
+@dataclass(frozen=True)
 class SkillSummary:
     """``GET /v1/skills`` list entry and the body of every skill write.
 
@@ -429,10 +443,20 @@ class _SkillDeleted:
     name: str
 
 
+@dataclass(frozen=True)
+class _AgentSkills:
+    """``GET /v1/agents/{agent_id}/skills`` body; only ``skills`` reaches the caller."""
+
+    agent_id: int
+    skills: list[str]
+
+
 _SKILL_SUMMARY_ADAPTER = TypeAdapter(SkillSummary)
 _SKILL_LIST_ADAPTER = TypeAdapter(list[SkillSummary])
 _SKILL_DETAIL_ADAPTER = TypeAdapter(SkillDetail)
 _SKILL_DELETED_ADAPTER = TypeAdapter(_SkillDeleted)
+_AGENT_SKILLS_ADAPTER = TypeAdapter(_AgentSkills)
+_AGENT_SKILLS_UPDATE_ADAPTER = TypeAdapter(AgentSkillsUpdate)
 
 
 def _require_mapping(data: Any, what: str) -> dict[str, Any]:
@@ -464,8 +488,11 @@ def _validate_write(adapter: TypeAdapter[T], data: Any, what: str) -> T:
     ``MalformedResponse`` rather than a raw pydantic ``ValidationError``.
     Whether resending is safe depends on the endpoint: a retried task
     ``create()`` starts a second task and a retried ``append()``/``reply()``
-    can send the message twice, while the skill writes are idempotent
-    replays and safe to resend.
+    can send the message twice, while ``skills.create()``,
+    ``skills.upload()`` and ``skills.update()`` are idempotent replays and
+    safe to resend.
+    ``agents.replace_skills()`` is not: resending can lose the unresolved
+    names the first call reported, so call ``agents.get_skills()`` first.
     """
     try:
         return adapter.validate_python(_require_mapping(data, what))
@@ -669,3 +696,20 @@ def _parse_skill_delete(data: Any) -> None:
     be reported as a completed delete.
     """
     _validate_write(_SKILL_DELETED_ADAPTER, data, "skill deletion")
+
+
+def _parse_agent_skills(data: Any) -> list[str]:
+    """Parse ``GET /v1/agents/{agent_id}/skills`` strictly.
+
+    The result is usually edited and written back, so a body of the wrong
+    shape must raise rather than read as an empty list.
+    """
+    return _validate_read(
+        _AGENT_SKILLS_ADAPTER,
+        _require_mapping(data, "agent skill list"),
+        "agent skill list",
+    ).skills
+
+
+def _parse_agent_skills_update(data: Any) -> AgentSkillsUpdate:
+    return _validate_write(_AGENT_SKILLS_UPDATE_ADAPTER, data, "agent skill update")

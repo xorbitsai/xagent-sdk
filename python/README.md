@@ -358,7 +358,7 @@ SDK-coined codes:
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored |
 | `TaskTimeout` | `wait()` / `run()` deadline elapsed, or `events()`'s own `timeout` budget -- which covers every read the stream still owes, including time spent between frames, and hands over to a bounded post-close drain once a closing frame has arrived, which ends the stream cleanly rather than raising -- ran out first |
 
 The SDK does **not** retry automatically. Wrap calls with your own
@@ -480,6 +480,30 @@ it surfaces as the proxy's own error page, which is `InternalError` with
 a further limit of 200000 characters; over it raises `InvalidInput` with
 `http_status=400`.
 
+### 11. Choose which skills an agent uses
+
+An agent stores a list of skill names. `replace_skills()` replaces the whole
+list, so read it first and send it back with your change:
+
+```python
+from xagent_sdk import UserClient
+
+AGENT_ID = 42
+
+with UserClient() as user:
+    names = user.agents.get_skills(AGENT_ID)
+    if "weekly-report" not in names:
+        names.append("weekly-report")
+    result = user.agents.replace_skills(AGENT_ID, names)
+    print(result.skills)
+    print(result.unresolved_for_caller)  # added names you cannot see
+```
+
+There is no conflict detection: of two concurrent replacements the later one
+wins. A name in `unresolved_for_caller` is stored anyway, because a task loads
+the skills of the user who runs it. New tasks use the new list at once; an
+existing task can keep using the previous list for a while.
+
 ## API reference
 
 All methods are synchronous.
@@ -500,6 +524,8 @@ which agents and tasks a personal key can reach.
 | `user.agents.create(*, name, instructions, generate_runtime_key=True, metadata=None)` | `AgentCreateResult` | POST `/v1/agents`; `runtime_full_key` is one-time |
 | `user.agents.create_from_template(template_id, *, overrides=None, generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/agents/from-template`; 404 → `TemplateNotFound` |
 | `user.agents.rotate_key(agent_id)` | `RotateKeyResult` | POST `/v1/agents/{agent_id}/api-key`; revokes the previous runtime key atomically |
+| `user.agents.get_skills(agent_id)` | `list[str]` | GET `/v1/agents/{agent_id}/skills`; 404 → `AgentNotFound`; a body that is not the expected object raises `MalformedResponse` (never `[]`) |
+| `user.agents.replace_skills(agent_id, skills)` | `AgentSkillsUpdate` | PUT `/v1/agents/{agent_id}/skills`; 404 → `AgentNotFound`; replaces the whole list, `[]` clears it, and the later of two writers wins; a single string raises `TypeError` before any request; a new name that is neither visible nor valid → `InvalidInput` (400); `unresolved_for_caller` lists added names you cannot see, stored anyway |
 | `user.tasks.create / append / reply / get / steps / events / wait / run` | as in the `AgentClient` table | Any agent you can see (`user.agents.list()`); the task runs as you, not as the agent's owner. Every personal key of yours sees the tasks any of them created, until the task's agent is deleted. An older server answers `InvalidAPIKey` (401) here. |
 | `user.skills.list()` | `list[SkillSummary]` | GET `/v1/skills`; your own skills first, in server order; a body that is not an array of skills raises `MalformedResponse` (never `[]`) |
 | `user.skills.get(name)` | `SkillDetail` | GET `/v1/skills/{name}`; includes `skill_md` and `files`; 404 → `SkillNotFound`; `""`, `"."`, `".."` or a name containing `/` raises `ValueError` before any request |
@@ -704,9 +730,11 @@ export NO_PROXY=localhost,127.0.0.1
 uv run pytest -m e2e
 ```
 
-Set `E2E_AGENT_ID` to point the runtime-only tests at a specific
-agent (``AgentClient`` has no identity probe, so the runtime tests
-skip when this is unset). Set `E2E_TEMPLATE_ID` to pick which template
+Set `E2E_AGENT_ID` to point the tests that run an existing agent, and
+the test that writes its skill list back unchanged, at a specific agent
+(``AgentClient`` has no identity probe, so these tests skip when this is
+unset). The skill list test skips before writing unless the write would
+leave the list as it is. Set `E2E_TEMPLATE_ID` to pick which template
 the full-flow test instantiates from (defaults to the first listed
 template), and `E2E_AGENT_NAME` to override the new agent's display
 name.

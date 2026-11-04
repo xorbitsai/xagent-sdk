@@ -22,6 +22,7 @@ EXPECTED_SURFACE: set[str] = {
     "AgentSummary",
     "AgentCreateResult",
     "RotateKeyResult",
+    "AgentSkillsUpdate",
     "SkillSummary",
     "SkillDetail",
     # Runtime dataclasses

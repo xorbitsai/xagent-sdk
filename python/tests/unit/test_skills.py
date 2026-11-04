@@ -1,4 +1,7 @@
-"""Tests for UserClient.skills (SkillsAPI).
+"""Tests for UserClient.skills (SkillsAPI) and the agent skill methods.
+
+The agent skill methods are ``UserClient.agents.get_skills()`` and
+``UserClient.agents.replace_skills()``.
 
 Each block below pins one invariant of the skill methods: how a name
 becomes a path, which names are refused before any request, how success
@@ -19,6 +22,7 @@ import httpx
 import pytest
 
 from xagent_sdk import (
+    AgentNotFound,
     InternalError,
     InvalidAPIKey,
     InvalidInput,
@@ -63,6 +67,10 @@ _CALLS: dict[tuple[str, str], _Call] = {
     ("skills", "upload"): lambda u: u.skills.upload(
         filename="my-skill.md", content=_SKILL_MD.encode(), name="my-skill"
     ),
+    ("agents", "get_skills"): lambda u: u.agents.get_skills(7),
+    ("agents", "replace_skills"): lambda u: u.agents.replace_skills(
+        7, ["weekly-report"]
+    ),
 }
 _OK_FIXTURES: dict[tuple[str, str], str] = {
     ("skills", "list"): "skills_list",
@@ -71,6 +79,8 @@ _OK_FIXTURES: dict[tuple[str, str], str] = {
     ("skills", "update"): "skill_write",
     ("skills", "delete"): "skill_delete",
     ("skills", "upload"): "skill_write",
+    ("agents", "get_skills"): "agent_skills",
+    ("agents", "replace_skills"): "agent_skills_update",
 }
 
 # HTTP method and raw request path of every new method, for the canonical
@@ -82,6 +92,8 @@ _ROUTES: dict[tuple[str, str], tuple[str, bytes]] = {
     ("skills", "update"): ("PUT", b"/v1/skills/my-skill"),
     ("skills", "delete"): ("DELETE", b"/v1/skills/my-skill"),
     ("skills", "upload"): ("POST", b"/v1/skills/upload"),
+    ("agents", "get_skills"): ("GET", b"/v1/agents/7/skills"),
+    ("agents", "replace_skills"): ("PUT", b"/v1/agents/7/skills"),
 }
 # ``upload`` sends multipart, not JSON, so its row holds this marker instead of
 # an expected JSON body. ``test_upload_multipart_shape`` pins its fields, so the
@@ -94,6 +106,8 @@ _EXPECTED_BODIES: dict[tuple[str, str], dict[str, Any] | None] = {
     ("skills", "update"): {"skill_md": _SKILL_MD},
     ("skills", "delete"): None,
     ("skills", "upload"): _MULTIPART_BODY,
+    ("agents", "get_skills"): None,
+    ("agents", "replace_skills"): {"skills": ["weekly-report"]},
 }
 
 # Methods that take a skill name, called with an arbitrary name.
@@ -292,7 +306,12 @@ class TestParsing:
                     c.skills.delete("x")
 
 
-# (method, status, fixture, expected class): every failure the skill
+# The error table names methods only; every method name is unique across the
+# namespaces in ``_CALLS``.
+_CALL_BY_METHOD: dict[str, _Call] = {m: call for (_, m), call in _CALLS.items()}
+assert len(_CALL_BY_METHOD) == len(_CALLS)
+
+# (method, status, fixture, expected class): the failures the skill
 # methods are documented to raise, through the shared error fixtures.
 _ERROR_CASES: list[tuple[str, int, str, type[XAgentError]]] = [
     ("get", 404, "skill_not_found", SkillNotFound),
@@ -304,6 +323,9 @@ _ERROR_CASES: list[tuple[str, int, str, type[XAgentError]]] = [
     ("list", 401, "invalid_api_key", InvalidAPIKey),
     ("upload", 409, "skill_already_exists", SkillAlreadyExists),
     ("upload", 413, "validation_422", InvalidInput),
+    ("get_skills", 404, "agent_not_found", AgentNotFound),
+    ("replace_skills", 400, "validation_422", InvalidInput),
+    ("replace_skills", 422, "validation_422", InvalidInput),
 ]
 
 
@@ -326,7 +348,7 @@ class TestErrorMapping:
             _make_user(lambda req: httpx.Response(status, json=body)) as c,
             pytest.raises(XAgentError) as exc,
         ):
-            _CALLS[("skills", method)](c)
+            _CALL_BY_METHOD[method](c)
         assert isinstance(exc.value, expected)
         assert exc.value.http_status == status
 

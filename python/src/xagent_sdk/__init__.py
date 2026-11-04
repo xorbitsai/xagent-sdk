@@ -23,6 +23,7 @@ from xagent_sdk.errors import (
 )
 from xagent_sdk.types import (
     AgentCreateResult,
+    AgentSkillsUpdate,
     AgentSummary,
     AppendResult,
     CreateTaskResult,
@@ -47,6 +48,7 @@ __all__ = [
     "AgentClient",
     "AgentCreateResult",
     "AgentNotFound",
+    "AgentSkillsUpdate",
     "AgentSummary",
     "AppendResult",
     "CreateTaskResult",

@@ -205,6 +205,11 @@ class MalformedResponse(XAgentError):
     ``skills.update()`` are idempotent, so retrying one after this error is
     safe; a retried ``skills.delete()`` raises ``SkillNotFound`` if the first
     call went through.
+
+    ``UserClient.agents.get_skills()`` and ``replace_skills()`` raise it in the
+    same three cases. ``get_skills()`` never folds a wrong-shaped body into an
+    empty list. ``replace_skills()`` may already have taken effect when it
+    raises this, so call ``get_skills()`` to check what the server stored.
     """
 
 
