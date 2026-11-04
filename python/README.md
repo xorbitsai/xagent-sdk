@@ -730,9 +730,11 @@ export NO_PROXY=localhost,127.0.0.1
 uv run pytest -m e2e
 ```
 
-Set `E2E_AGENT_ID` to point the runtime-only tests at a specific
-agent (``AgentClient`` has no identity probe, so the runtime tests
-skip when this is unset). Set `E2E_TEMPLATE_ID` to pick which template
+Set `E2E_AGENT_ID` to point the tests that run an existing agent, and
+the test that writes its skill list back unchanged, at a specific agent
+(``AgentClient`` has no identity probe, so these tests skip when this is
+unset). The skill list test skips before writing unless the write would
+leave the list as it is. Set `E2E_TEMPLATE_ID` to pick which template
 the full-flow test instantiates from (defaults to the first listed
 template), and `E2E_AGENT_NAME` to override the new agent's display
 name.
