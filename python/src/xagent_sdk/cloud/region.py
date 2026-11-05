@@ -25,7 +25,10 @@ class Region(StrEnum):
         return _REGION_BASE_URL[self]
 
 
+# The ``-origin`` hosts serve the API directly. The plain region hosts
+# (``au.cloud.xagent.co``) answer every request, API paths included, with a
+# 301 to the browser entry point, and this client does not follow redirects.
 _REGION_BASE_URL = {
-    Region.AU: "https://au.cloud.xagent.co",
-    Region.SG: "https://sg.cloud.xagent.co",
+    Region.AU: "https://au-origin.cloud.xagent.co",
+    Region.SG: "https://sg-origin.cloud.xagent.co",
 }
