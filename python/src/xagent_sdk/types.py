@@ -654,7 +654,7 @@ def _parse_steps(data: Any) -> list[Step]:
     server or an upstream proxy returned a non-canonical shape) the
     function returns ``[]`` rather than raising ``AttributeError`` from
     inside ``dict.get``. The signature is widened to ``Any`` so callers
-    passing ``resp.json()`` (typed ``Any``) do not need to pre-validate.
+    passing a decoded JSON body (typed ``Any``) do not need to pre-validate.
     """
     if not isinstance(data, dict):
         return []

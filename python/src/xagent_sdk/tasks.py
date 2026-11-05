@@ -2,6 +2,7 @@ import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
+from xagent_sdk._base import _json_body
 from xagent_sdk._events import TaskEventStream, open_task_event_stream
 from xagent_sdk.errors import TaskTimeout
 from xagent_sdk.types import (
@@ -133,7 +134,7 @@ class TasksAPI:
         if prompt_context is not None:
             body["prompt_context"] = dict(prompt_context)
         resp = self._client._request("POST", "/v1/chat/tasks", json=body)
-        return _parse_create_task(resp.json())
+        return _parse_create_task(_json_body(resp, "task creation", 202))
 
     def append(
         self,
@@ -169,7 +170,7 @@ class TasksAPI:
         resp = self._client._request(
             "POST", f"/v1/chat/tasks/{task_id}/messages", json=body
         )
-        return _parse_append(resp.json())
+        return _parse_append(_json_body(resp, "task message", 202))
 
     def reply(
         self,
@@ -255,14 +256,14 @@ class TasksAPI:
         resp = self._client._request(
             "POST", f"/v1/chat/tasks/{task_id}/reply", json=body
         )
-        return _parse_append(resp.json())
+        return _parse_append(_json_body(resp, "task reply", 202))
 
     def get(self, task_id: int) -> TaskInfo:
         """``GET /v1/chat/tasks/{task_id}`` -- snapshot the current task
         row. ``output`` is populated once status reaches ``completed``.
         """
         resp = self._client._request("GET", f"/v1/chat/tasks/{task_id}")
-        return _parse_task_info(resp.json())
+        return _parse_task_info(_json_body(resp, "task"))
 
     def steps(self, task_id: int) -> list[Step]:
         """``GET /v1/chat/tasks/{task_id}/steps`` -- full timeline so far
@@ -270,7 +271,7 @@ class TasksAPI:
         ``status='running'`` so the caller can poll and observe progress.
         """
         resp = self._client._request("GET", f"/v1/chat/tasks/{task_id}/steps")
-        return _parse_steps(resp.json())
+        return _parse_steps(_json_body(resp, "task steps"))
 
     def events(self, task_id: int, *, timeout: float | None = None) -> TaskEventStream:
         """``GET /v1/chat/tasks/{task_id}/events`` -- attach to the task's

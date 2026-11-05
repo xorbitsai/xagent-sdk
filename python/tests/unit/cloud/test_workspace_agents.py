@@ -58,7 +58,7 @@ class TestCreate:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(201, json=response("agents_create"))
+            return httpx.Response(200, json=response("agents_create"))
 
         with _make_ws(handler) as c:
             result = c.agents.create(name="HR Bot", instructions="help")
@@ -79,7 +79,7 @@ class TestCreate:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(201, json=response("agents_create"))
+            return httpx.Response(200, json=response("agents_create"))
 
         with _make_ws(handler) as c:
             c.agents.create(
@@ -119,11 +119,13 @@ class TestCreate:
 
     def test_fails_closed_without_key(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(201, json={"agent": {"id": 1, "name": "X"}})
+            return httpx.Response(200, json={"agent": {"id": 1, "name": "X"}})
 
         with _make_ws(handler) as c, pytest.raises(MalformedResponse) as exc:
             c.agents.create(name="X", instructions="i")
         assert exc.value.code == "malformed_response"
+        assert "carried no runtime key" in exc.value.message
+        assert exc.value.http_status is None
 
 
 class TestCreateFromTemplate:
@@ -132,7 +134,7 @@ class TestCreateFromTemplate:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(201, json=response("agents_create"))
+            return httpx.Response(200, json=response("agents_create"))
 
         with _make_ws(handler) as c:
             c.agents.create_from_template("support-ai-chatbot-agent", name="HR Bot")
@@ -155,10 +157,13 @@ class TestCreateFromTemplate:
 
     def test_fails_closed_without_key(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(201, json={"agent": {"id": 1, "name": "X"}})
+            return httpx.Response(200, json={"agent": {"id": 1, "name": "X"}})
 
-        with _make_ws(handler) as c, pytest.raises(MalformedResponse):
+        with _make_ws(handler) as c, pytest.raises(MalformedResponse) as exc:
             c.agents.create_from_template("t")
+        assert exc.value.code == "malformed_response"
+        assert "carried no runtime key" in exc.value.message
+        assert exc.value.http_status is None
 
 
 class TestRotateKey:

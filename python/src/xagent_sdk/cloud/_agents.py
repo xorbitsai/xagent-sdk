@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from xagent_sdk._agents import _require_runtime_key
+from xagent_sdk._base import _json_body
 from xagent_sdk.types import (
     AgentCreateResult,
     AgentSummary,
@@ -52,11 +53,13 @@ class WorkspaceAgentsAPI:
         """``GET /v1/workspace/agents`` -- list the workspace's agents.
 
         Returns the agents the workspace key can manage, as slim summaries
-        (id + name + optional status). Returns an empty list for an empty
-        or non-list body. Standard error mapping applies.
+        (id + name + optional status). Returns an empty list for a JSON
+        body that is not a list; a body that is not JSON, or a status other
+        than 200, raises ``MalformedResponse``. Standard error mapping
+        applies.
         """
         resp = self._client._request("GET", "/v1/workspace/agents")
-        return _parse_agent_list(resp.json())
+        return _parse_agent_list(_json_body(resp, "agent list"))
 
     def create(
         self,
@@ -107,7 +110,8 @@ class WorkspaceAgentsAPI:
         )
         resp = self._client._request("POST", "/v1/workspace/agents", json=body)
         return _require_runtime_key(
-            _parse_agent_create(resp.json()), generate_runtime_key
+            _parse_agent_create(_json_body(resp, "agent creation")),
+            generate_runtime_key,
         )
 
     def create_from_template(
@@ -164,7 +168,8 @@ class WorkspaceAgentsAPI:
             "POST", "/v1/workspace/agents/from-template", json=body
         )
         return _require_runtime_key(
-            _parse_agent_create(resp.json()), generate_runtime_key
+            _parse_agent_create(_json_body(resp, "agent creation from template")),
+            generate_runtime_key,
         )
 
     def rotate_key(self, agent_id: int) -> RotateKeyResult:
@@ -180,4 +185,4 @@ class WorkspaceAgentsAPI:
             InvalidAPIKey: 401 -- workspace key invalid / revoked.
         """
         resp = self._client._request("POST", f"/v1/workspace/agents/{agent_id}/api-key")
-        return _parse_rotate_key(resp.json())
+        return _parse_rotate_key(_json_body(resp, "runtime key rotation"))

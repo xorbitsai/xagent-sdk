@@ -184,6 +184,15 @@ class MalformedResponse(XAgentError):
     second task, and a retried ``append()``/``reply()`` can send the
     message twice.
 
+    Every method that decodes a JSON body also raises it when the response
+    status is not the one success status its endpoint sends -- 200, or 202
+    for ``create()``, ``append()`` and ``reply()`` -- such as a redirect this
+    client does not follow or a 204, and when the success body is not JSON.
+    Only the status case carries the status on ``http_status``. This covers
+    ``UserClient.me()``, ``agents.*``, ``templates.*``, ``tasks.create()``,
+    ``append()``, ``reply()``, ``get()`` and ``steps()``, and the
+    ``WorkspaceClient`` methods, as well as the skill methods below.
+
     ``TasksAPI.events()`` also raises it when the stream's 200 response
     declares a media type other than ``text/event-stream``, or declares
     a charset other than UTF-8 -- SSE bodies are UTF-8 by definition,

@@ -72,11 +72,13 @@ class AgentsAPI:
         """``GET /v1/agents`` -- list the agents the key holder can see.
 
         Returns slim summaries (id + name + optional status). The backend
-        sends a bare JSON array; a non-list body returns an empty list.
-        Standard error mapping applies (``InvalidAPIKey``, etc.).
+        sends a bare JSON array; a JSON body that is not a list returns an
+        empty list. A body that is not JSON, or a status other than 200,
+        raises ``MalformedResponse``. Standard error mapping applies
+        (``InvalidAPIKey``, etc.).
         """
         resp = self._client._request("GET", "/v1/agents")
-        return _parse_agent_list(resp.json())
+        return _parse_agent_list(_json_body(resp, "agent list"))
 
     def create(
         self,
@@ -124,7 +126,8 @@ class AgentsAPI:
             body["metadata"] = metadata
         resp = self._client._request("POST", "/v1/agents", json=body)
         return _require_runtime_key(
-            _parse_agent_create(resp.json()), generate_runtime_key
+            _parse_agent_create(_json_body(resp, "agent creation")),
+            generate_runtime_key,
         )
 
     def create_from_template(
@@ -172,7 +175,8 @@ class AgentsAPI:
         }
         resp = self._client._request("POST", "/v1/agents/from-template", json=body)
         return _require_runtime_key(
-            _parse_agent_create(resp.json()), generate_runtime_key
+            _parse_agent_create(_json_body(resp, "agent creation from template")),
+            generate_runtime_key,
         )
 
     def rotate_key(self, agent_id: int) -> RotateKeyResult:
@@ -198,7 +202,7 @@ class AgentsAPI:
             InvalidAPIKey: 401 -- personal key invalid / revoked.
         """
         resp = self._client._request("POST", f"/v1/agents/{agent_id}/api-key")
-        return _parse_rotate_key(resp.json())
+        return _parse_rotate_key(_json_body(resp, "runtime key rotation"))
 
     def get_skills(self, agent_id: int) -> _StrList:
         """``GET /v1/agents/{agent_id}/skills`` -- read an agent's skill names.

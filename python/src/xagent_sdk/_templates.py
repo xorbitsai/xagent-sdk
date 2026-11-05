@@ -15,6 +15,7 @@ client and not re-exported from ``xagent_sdk.__init__``.
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+from xagent_sdk._base import _json_body
 from xagent_sdk.types import (
     Template,
     TemplateDetail,
@@ -39,12 +40,13 @@ class TemplatesAPI:
         template. Use ``get(template_id)`` to retrieve the full
         ``agent_config`` needed by ``agents.create_from_template``.
 
-        Returns an empty list when the backend sends ``{"templates": []}``
-        or a non-dict body; raises ``InvalidAPIKey`` / other ``XAgentError``
-        subclasses for HTTP errors per the standard envelope mapping.
+        Returns an empty list for a JSON body that is not a list; raises
+        ``MalformedResponse`` for a body that is not JSON or a status other
+        than 200, and ``InvalidAPIKey`` / other ``XAgentError`` subclasses
+        for HTTP errors per the standard envelope mapping.
         """
         resp = self._client._request("GET", "/v1/templates")
-        return _parse_template_list(resp.json())
+        return _parse_template_list(_json_body(resp, "template list"))
 
     def get(self, template_id: str) -> TemplateDetail:
         """``GET /v1/templates/{template_id}`` -- fetch template detail.
@@ -60,4 +62,4 @@ class TemplatesAPI:
         # "#" or "%" cannot alter the route or leak into the query string.
         safe_id = quote(template_id, safe="")
         resp = self._client._request("GET", f"/v1/templates/{safe_id}")
-        return _parse_template_detail(resp.json())
+        return _parse_template_detail(_json_body(resp, "template detail"))

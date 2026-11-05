@@ -72,7 +72,7 @@ class TestCreate:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(201, json=response("agents_create"))
+            return httpx.Response(200, json=response("agents_create"))
 
         with _make_user(handler) as c:
             result = c.agents.create(
@@ -104,7 +104,7 @@ class TestCreate:
             # When generate_runtime_key=False the backend omits the
             # api_key block; only the agent block is present.
             return httpx.Response(
-                201,
+                200,
                 json={
                     "agent": {
                         "id": 42,
@@ -133,19 +133,21 @@ class TestCreate:
         # XAGENT_API_KEY.
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
-                201, json={"agent": {"id": 42, "name": "HR Leave Assistant"}}
+                200, json={"agent": {"id": 42, "name": "HR Leave Assistant"}}
             )
 
         with _make_user(handler) as c, pytest.raises(MalformedResponse) as excinfo:
             c.agents.create(name="HR Leave Assistant", instructions="...")
         assert excinfo.value.code == "malformed_response"
+        assert "carried no runtime key" in excinfo.value.message
+        assert excinfo.value.http_status is None
 
     def test_generate_runtime_key_true_but_empty_key_fails_closed(self) -> None:
         # Empty string is also not a usable runtime credential; create()
         # should surface the malformed backend response immediately.
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
-                201,
+                200,
                 json={
                     "agent": {"id": 42, "name": "HR Leave Assistant"},
                     "api_key": {"full_key": "", "key_prefix": "abc123"},
@@ -155,13 +157,15 @@ class TestCreate:
         with _make_user(handler) as c, pytest.raises(MalformedResponse) as excinfo:
             c.agents.create(name="HR Leave Assistant", instructions="...")
         assert excinfo.value.code == "malformed_response"
+        assert "carried no runtime key" in excinfo.value.message
+        assert excinfo.value.http_status is None
 
     def test_metadata_included_when_given(self) -> None:
         captured: list[httpx.Request] = []
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(201, json=response("agents_create"))
+            return httpx.Response(200, json=response("agents_create"))
 
         with _make_user(handler) as c:
             c.agents.create(
@@ -178,7 +182,7 @@ class TestCreate:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(201, json=response("agents_create"))
+            return httpx.Response(200, json=response("agents_create"))
 
         with _make_user(handler) as c:
             c.agents.create(name="X", instructions="...")
@@ -200,7 +204,7 @@ class TestCreateFromTemplate:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(201, json=response("agents_create"))
+            return httpx.Response(200, json=response("agents_create"))
 
         with _make_user(handler) as c:
             c.agents.create_from_template(
@@ -224,7 +228,7 @@ class TestCreateFromTemplate:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(201, json=response("agents_create"))
+            return httpx.Response(200, json=response("agents_create"))
 
         with _make_user(handler) as c:
             c.agents.create_from_template("q_and_a")
@@ -242,7 +246,7 @@ class TestCreateFromTemplate:
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured.append(req)
-            return httpx.Response(201, json=response("agents_create"))
+            return httpx.Response(200, json=response("agents_create"))
 
         with _make_user(handler) as c:
             c.agents.create_from_template(
@@ -265,18 +269,20 @@ class TestCreateFromTemplate:
         # Same fail-closed contract as create(): default
         # generate_runtime_key=True with a keyless response must raise.
         def h(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(201, json={"agent": {"id": 42, "name": "X"}})
+            return httpx.Response(200, json={"agent": {"id": 42, "name": "X"}})
 
         with _make_user(h) as c, pytest.raises(MalformedResponse) as excinfo:
             c.agents.create_from_template("q_and_a")
         assert excinfo.value.code == "malformed_response"
+        assert "carried no runtime key" in excinfo.value.message
+        assert excinfo.value.http_status is None
 
     def test_generate_runtime_key_true_but_empty_key_fails_closed(self) -> None:
         # Same fail-closed contract as create(): empty full_key is not a
         # usable one-time runtime key.
         def h(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
-                201,
+                200,
                 json={
                     "agent": {"id": 42, "name": "X"},
                     "api_key": {"full_key": "", "key_prefix": "abc123"},
@@ -286,6 +292,8 @@ class TestCreateFromTemplate:
         with _make_user(h) as c, pytest.raises(MalformedResponse) as excinfo:
             c.agents.create_from_template("q_and_a")
         assert excinfo.value.code == "malformed_response"
+        assert "carried no runtime key" in excinfo.value.message
+        assert excinfo.value.http_status is None
 
 
 class TestRotateKey:
