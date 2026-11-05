@@ -4,7 +4,7 @@ Python client SDK for the [xAgent](https://github.com/xorbitsai/xagent)
 HTTP v1 API. Lets a SaaS app authenticate as a user, mint AI agents
 from templates, and trigger them — all in a handful of lines.
 
-> **Status**: 0.5.0 — early access. Optional
+> **Status**: 0.6.0 — early access. Optional
 > `xagent_sdk.cloud.WorkspaceClient` (hosted workspace surface) selects a
 > hosted region. **Breaking change vs 0.1.0**: the SDK
 > exposes two clients (``UserClient`` for a personal key, ``AgentClient`` for
@@ -17,7 +17,7 @@ from templates, and trigger them — all in a handful of lines.
 Pin to a release tag — do **not** install from `main`:
 
 ```bash
-pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.5.0#subdirectory=python"
+pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.6.0#subdirectory=python"
 ```
 
 The Python client lives under [`python/`](.) in the
@@ -695,7 +695,7 @@ connection pool).
 - **Always pin to a git tag** in production:
 
   ```bash
-  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.5.0#subdirectory=python"
+  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.6.0#subdirectory=python"
   ```
 
   Installing from `@main` will eventually break you when the surface
@@ -703,7 +703,7 @@ connection pool).
   required because the SDK lives in a subdirectory of the
   multi-language monorepo.
 - The User-Agent header carries the SDK version
-  (`xagent-sdk-python/0.5.0`) so the backend can correlate issues.
+  (`xagent-sdk-python/0.6.0`) so the backend can correlate issues.
 
 ## Development
 
