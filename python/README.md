@@ -216,26 +216,25 @@ with AgentClient() as agent:
         task.task_id, agent_id=42, message="Now reply with 'second'."
     )
     info = agent.tasks.wait(task.task_id)
-    print(info.output)  # can still be the previous turn if append() returned 'pending'; see below
+    print(info.output)  # 'second'
 ```
 
 `append()` returns immediately with `status='pending'` when the server
 queues the turn for its dispatcher, or `status='running'` when it runs
 the turn in-process.
 
-When `append()` returns `pending`, the server has not started the new
-turn yet, and until it does `get()` still reports the previous turn: a
-task whose last turn finished shows `COMPLETED` (or `FAILED`) with that
-turn's `output`, so `wait()` right after the append can return the
-previous result at once. For a task whose last turn had finished, read
+Until a queued turn starts, `get()` reports the task as `PENDING` with
+`output`, `error` and `completed_at` set to `None`, even when the previous
+turn had finished as `COMPLETED` or `FAILED`; once the turn starts it
+reports `RUNNING`. A server older than v0.8.5 instead keeps reporting the
+previous turn until the new one starts. With such a server, read
 `completed_at` from `get()` before appending; once `get()` shows a
-different value (`None` while the new turn runs, a later time once it
-ends), the server is on the new turn and `wait()` returns its result.
+different value, the server is on the new turn and `wait()` returns its
+result.
 
-If you race two appends, the loser gets `TaskBusy` (409). Waiting has the
-same caveat: `wait()` can return before the other caller's turn has
-started, so the retry below can raise `TaskBusy` again; catch it and
-retry after a pause:
+If you race two appends, the loser gets `TaskBusy` (409). Wait for the
+winning turn to finish and send again; another caller can win the next
+race too, so catch `TaskBusy` and retry after a pause:
 
 ```python
 import time
