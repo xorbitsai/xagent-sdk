@@ -474,11 +474,12 @@ Repeating the same upload returns 200 again. The same name with different
 content, or a name that was created with `create()`, raises
 `SkillAlreadyExists`. The server accepts at most 50 MiB, for the upload and for
 its unpacked contents (a deployment can lower this); over the limit raises
-`InvalidInput` with `http_status=413`. A lower limit set on a proxy in front of
-it surfaces as the proxy's own error page, which is `InternalError` with
-`http_status=413`. The SKILL.md text, in a `.md` upload or inside a `.zip`, has
-a further limit of 200000 characters; over it raises `InvalidInput` with
-`http_status=400`.
+`InvalidInput` with `http_status=413`. A proxy in front of the server can set a
+lower limit. If it answers with the V1 error envelope and code `invalid_input`,
+that is also `InvalidInput` with `http_status=413`; if it sends its own error
+page instead, it is `InternalError` with `http_status=413`. The SKILL.md text,
+in a `.md` upload or inside a `.zip`, has a further limit of 200000 characters;
+over it raises `InvalidInput` with `http_status=400`.
 
 ### 11. Choose which skills an agent uses
 
