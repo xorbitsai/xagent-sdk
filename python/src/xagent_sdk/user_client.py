@@ -1,7 +1,7 @@
 import httpx
 
 from xagent_sdk._agents import AgentsAPI
-from xagent_sdk._base import _BaseClient
+from xagent_sdk._base import _BaseClient, _json_body
 from xagent_sdk._skills import SkillsAPI
 from xagent_sdk._templates import TemplatesAPI
 from xagent_sdk.tasks import TasksAPI
@@ -101,4 +101,4 @@ class UserClient(_BaseClient):
         stale principal.
         """
         resp = self._request("GET", "/v1/me")
-        return _parse_user_principal(resp.json())
+        return _parse_user_principal(_json_body(resp, "caller identity"))

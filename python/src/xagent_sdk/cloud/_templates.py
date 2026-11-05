@@ -10,6 +10,7 @@ personal-key template surface, so the shared parsers are reused.
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+from xagent_sdk._base import _json_body
 from xagent_sdk.types import (
     Template,
     TemplateDetail,
@@ -31,11 +32,12 @@ class WorkspaceTemplatesAPI:
         """``GET /v1/workspace/templates`` -- list available templates.
 
         Returns a slim summary (id + name + optional description) per
-        template. Returns an empty list for a non-list body. Standard
-        error mapping applies.
+        template. Returns an empty list for a JSON body that is not a list;
+        a body that is not JSON, or a status other than 200, raises
+        ``MalformedResponse``. Standard error mapping applies.
         """
         resp = self._client._request("GET", "/v1/workspace/templates")
-        return _parse_template_list(resp.json())
+        return _parse_template_list(_json_body(resp, "template list"))
 
     def get(self, template_id: str) -> TemplateDetail:
         """``GET /v1/workspace/templates/{template_id}`` -- template detail.
@@ -50,4 +52,4 @@ class WorkspaceTemplatesAPI:
         # "#" or "%" cannot alter the route or leak into the query string.
         safe_id = quote(template_id, safe="")
         resp = self._client._request("GET", f"/v1/workspace/templates/{safe_id}")
-        return _parse_template_detail(resp.json())
+        return _parse_template_detail(_json_body(resp, "template detail"))

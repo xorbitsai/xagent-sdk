@@ -55,21 +55,23 @@ def _resolve(
     return default
 
 
-def _json_body(resp: httpx.Response, what: str) -> Any:
+def _json_body(resp: httpx.Response, what: str, expected_status: int = 200) -> Any:
     """Decode the body of a successful call, or raise ``MalformedResponse``.
 
-    Every endpoint that uses this answers success with HTTP 200 only. This
-    client does not follow redirects, and ``_request`` lets every status
-    below 400 through, so a 3xx or a 204 reaches here; like the task event
-    stream (``_events.py``), it is reported with its status, because there
-    the status line is the problem. A 200 whose body is not JSON (for
-    example an HTML page from a proxy) is a protocol failure, reported
-    without a status. Older methods still call ``resp.json()`` directly.
+    Every JSON endpoint decodes its success body here. Each endpoint answers
+    success with exactly one status: 200, or 202 for the task writes that
+    accept a turn (create, append, reply), passed as ``expected_status``.
+    This client does not follow redirects, and ``_request`` lets every
+    status below 400 through, so a 3xx, a 204 or another unexpected success
+    status reaches here; like the task event stream (``_events.py``), it is
+    reported with its status, because there the status line is the problem.
+    A success status whose body is not JSON (for example an HTML page from a
+    proxy) is a protocol failure, reported without a status.
     """
-    if resp.status_code != 200:
+    if resp.status_code != expected_status:
         raise MalformedResponse(
             "malformed_response",
-            f"expected HTTP 200 for {what}, got {resp.status_code}",
+            f"expected HTTP {expected_status} for {what}, got {resp.status_code}",
             http_status=resp.status_code,
         )
     try:
