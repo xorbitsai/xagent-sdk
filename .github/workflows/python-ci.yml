@@ -85,3 +85,22 @@ jobs:
       - name: Run tests
         working-directory: python
         run: uv run pytest
+
+  pytest-pydantic-minimum:
+    # The lowest supported Pydantic: the conversion of models used as
+    # response_format must give the same schemas there.
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history with tags: the package version is derived from
+          # the latest release tag.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+      - name: Run tests with pydantic 2.5.0
+        working-directory: python
+        run: uv run --isolated --python 3.11 --with "pydantic==2.5.0" pytest
