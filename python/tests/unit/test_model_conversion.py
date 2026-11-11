@@ -6,6 +6,7 @@ differs between versions says so.
 """
 
 import copy
+import dataclasses
 import datetime
 import enum
 import json
@@ -14,7 +15,7 @@ import uuid
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Any, Generic, Literal, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar, assert_type
 
 import httpx
 import pydantic
@@ -988,6 +989,101 @@ class TestModelOnTheWire:
         sent = json.loads(requests[1].content)["response_format"]
         assert sent["json_schema"]["name"] == "Page_Item_"
         assert sent["json_schema"]["schema"] == convert_model(Page[Item]).schema
+
+
+class _Loose(BaseModel):
+    a: int | None
+
+
+def _run_handler(
+    name: str, output: dict[str, Any]
+) -> Callable[[httpx.Request], httpx.Response]:
+    """A server for one ``run()``: the format named ``name`` is echoed and
+    the task completes with the ready ``output``."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if path == "/v1/features":
+            return httpx.Response(200, json=response("features"))
+        if path == "/v1/chat/tasks":
+            return httpx.Response(
+                202,
+                json={
+                    **response("create_task"),
+                    "run_id": "run_1",
+                    "response_format_type": "json_schema",
+                    "response_format_name": name,
+                },
+            )
+        if path == "/v1/chat/tasks/10/steps":
+            return httpx.Response(200, json=response("steps_full"))
+        return httpx.Response(
+            200,
+            json={
+                **response("task_info_completed"),
+                "run_id": "run_1",
+                "structured_output_status": "ready",
+                "structured_output": output,
+            },
+        )
+
+    return handler
+
+
+class TestRunKeepsTheModel:
+    def test_parsed_without_a_model_uses_the_model_run_was_given(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        with make_client(_run_handler("Sub", {"a": None})) as c:
+            result = c.tasks.run(agent_id=7, message="hi", response_format=Sub)
+        assert_type(result, RunResult[Sub])
+        assert result.model is Sub
+        parsed = result.parsed()
+        assert_type(parsed, Sub)
+        assert parsed == Sub(a=1)
+        loose = result.parsed(_Loose)
+        assert_type(loose, _Loose)
+        assert loose == _Loose(a=None)
+        assert dataclasses.replace(result, steps=[]).parsed() == Sub(a=1)
+
+    def test_dict_format_keeps_no_model(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        schema = convert_model(Sub).schema
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "Sub", "schema": schema},
+        }
+        with make_client(_run_handler("Sub", {"a": None})) as c:
+            result = c.tasks.run(
+                agent_id=7, message="hi", response_format=response_format
+            )
+        assert_type(result, RunResult[dict[str, Any]])
+        assert result.model is None
+        parsed = result.parsed()
+        assert_type(parsed, dict[str, Any])
+        assert parsed == {"a": None}
+        assert result.parsed(Sub) == Sub(a=1)
+
+    def test_results_built_without_a_model_return_dicts(self) -> None:
+        info = _ready_info({"a": None})
+        built = (
+            RunResult(info, []),
+            RunResult(info, [], None),
+            RunResult(info=info, steps=[], run_id=None),
+        )
+        for result in built:
+            assert_type(result, RunResult[dict[str, Any]])
+            assert result.model is None
+            assert result.parsed() == {"a": None}
+        with_model = RunResult(info, [], None, model=Sub)
+        assert_type(with_model, RunResult[Sub])
+        assert with_model.parsed() == Sub(a=1)
+
+        def read(result: RunResult) -> dict[str, Any]:
+            return result.parsed()
+
+        assert read(RunResult(info, [])) == {"a": None}
 
 
 class Constrained(BaseModel):

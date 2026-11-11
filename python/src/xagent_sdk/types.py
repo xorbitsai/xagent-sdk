@@ -2,9 +2,10 @@ import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, TypeVar, overload
+from typing import Any, Generic, overload
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypeVar
 
 from xagent_sdk._structured import ModelT as _ModelT
 from xagent_sdk._structured import parse_with_model
@@ -605,8 +606,13 @@ class StreamEvent:
     step: Step | None
 
 
-@dataclass(frozen=True)
-class RunResult:
+# What ``RunResult.parsed()`` returns without an argument: the model ``run()``
+# was given, or the result as a dict.
+_ParsedT = TypeVar("_ParsedT", default=dict[str, Any])
+
+
+@dataclass(frozen=True, init=False)
+class RunResult(Generic[_ParsedT]):
     """Bundled result of ``client.tasks.run()``.
 
     Carries the final ``TaskInfo`` snapshot together with the full step
@@ -620,11 +626,52 @@ class RunResult:
     that run. The ``structured_output*`` properties read the fields of the
     same name on ``info``, and ``parsed()`` is ``info.parsed()`` checked
     against ``run_id``.
+
+    ``model`` is the Pydantic model class ``run()`` was given as
+    ``response_format``, and ``None`` for a ``dict`` or no format.
+    ``parsed()`` without an argument validates the result as ``model`` when
+    there is one, and ``parsed(other)`` as ``other``. The type parameter is
+    what ``parsed()`` returns without an argument: ``run(response_format=
+    Invoice)`` returns a ``RunResult[Invoice]``, and a result without a
+    model is a ``RunResult[dict[str, Any]]``, which a bare ``RunResult``
+    annotation also means. Build one with ``model=`` as a keyword.
     """
 
     info: TaskInfo
     steps: list[Step]
     run_id: str | None = None
+    model: type[BaseModel] | None = None
+
+    @overload
+    def __init__(
+        self: "RunResult[dict[str, Any]]",
+        info: TaskInfo,
+        steps: list[Step],
+        run_id: str | None = None,
+        model: None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: "RunResult[_ModelT]",
+        info: TaskInfo,
+        steps: list[Step],
+        run_id: str | None = None,
+        *,
+        model: type[_ModelT],
+    ) -> None: ...
+
+    def __init__(
+        self,
+        info: TaskInfo,
+        steps: list[Step],
+        run_id: str | None = None,
+        model: type[BaseModel] | None = None,
+    ) -> None:
+        object.__setattr__(self, "info", info)
+        object.__setattr__(self, "steps", steps)
+        object.__setattr__(self, "run_id", run_id)
+        object.__setattr__(self, "model", model)
 
     @property
     def output(self) -> str | None:
@@ -647,18 +694,20 @@ class RunResult:
         return self.info.structured_output_reason
 
     @overload
-    def parsed(self, model: None = None) -> dict[str, Any]: ...
+    def parsed(self, model: None = None) -> _ParsedT: ...
 
     @overload
     def parsed(self, model: type[_ModelT]) -> _ModelT: ...
 
-    def parsed(
-        self, model: type[BaseModel] | None = None
-    ) -> dict[str, Any] | BaseModel:
-        """``self.info.parsed(model, expected_run_id=self.run_id)``: the
+    def parsed(self, model: type[BaseModel] | None = None) -> Any:
+        """``self.info.parsed(model, expected_run_id=self.run_id)``, with
+        ``self.model`` in place of a ``model`` that is ``None``: the
         structured result, after checking that ``info`` shows the run
-        ``run()`` started."""
-        return self.info.parsed(model, expected_run_id=self.run_id)
+        ``run()`` started, validated as ``model`` when given, else as
+        ``self.model`` when set, else returned as a dict."""
+        return self.info.parsed(
+            model if model is not None else self.model, expected_run_id=self.run_id
+        )
 
 
 # --- Private parsers --------------------------------------------------

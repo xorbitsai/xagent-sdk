@@ -102,9 +102,7 @@ class TestReplyGuidancePresent:
         assert "``reply()``" in wait_block
 
     def test_run_docstring_mentions_reply(self) -> None:
-        text = _read("python/src/xagent_sdk/tasks.py")
-        run_block = text.split("def run(")[1]
-        assert "``reply()``" in run_block
+        assert "``reply()``" in (inspect.getdoc(TasksAPI.run) or "")
 
     def test_append_docstring_points_at_reply(self) -> None:
         # append() itself must document that it now rejects a waiting

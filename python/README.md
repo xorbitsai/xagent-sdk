@@ -541,10 +541,15 @@ with AgentClient() as agent:
             message="Extract the invoice: INV-001, two lines ...",
             response_format=Invoice,
         )
-        invoice = result.parsed(Invoice)
+        invoice = result.parsed()  # an Invoice
     except StructuredOutputError as exc:
         print(exc.code, exc.message, exc.missing_fields, exc.unexpressible_fields)
 ```
+
+`run()` keeps the model it was given as `RunResult.model`, so
+`result.parsed()` returns an `Invoice` (`result` is a `RunResult[Invoice]`
+to a type checker); `result.parsed(OtherModel)` validates the result as
+another model instead. With a `dict` format, `parsed()` returns a dict.
 
 `response_format` also takes a JSON object (a `dict`) you write yourself:
 `{"type": "json_schema", "json_schema": {"name": "Invoice", "schema": {...}}}`
@@ -561,7 +566,8 @@ Pointers in `missing_fields` (values the answer did not state) and
 `unexpressible_fields` (values it stated in a form the schema cannot hold).
 They are `None` while the task runs, when it has no format, and on a server
 that predates them. `parsed()` returns the result as a dict (a copy), or
-validated as the model you pass, and raises `StructuredOutputError` otherwise:
+validated as the model you pass (on a `RunResult`, by default the model
+`run()` was given), and raises `StructuredOutputError` otherwise:
 with the server's reason code, or with one of the codes only the SDK raises --
 `client_validation_failed` (the model does not validate the ready result) and
 `no_structured_output` (the snapshot has no `structured_output_status`). On a
@@ -730,7 +736,7 @@ only.
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
 | `agent.tasks.events(task_id, *, timeout=None)` | `TaskEventStream` | GET `/v1/chat/tasks/{id}/events` (SSE); iterate decoded `StreamEvent` frames as the task runs; `closed_by` tells how the stream ended |
 | `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0, expected_run_id=None)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline; with `expected_run_id`, a returnable snapshot of another run or of no run raises `RunMismatch` (`run_mismatch`) |
-| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None, response_format=None)` | `RunResult` | `create` + `wait(expected_run_id=created.run_id)` + `steps`; `RunResult.run_id`, the `structured_output*` properties and `parsed(model=None)`; raises `RunMismatch` if the snapshot shows another run or no run |
+| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None, response_format=None)` | `RunResult` | `create` + `wait(expected_run_id=created.run_id)` + `steps`; `RunResult.run_id`, `RunResult.model` (the model passed as `response_format`, which `parsed()` uses when called without one), the `structured_output*` properties and `parsed(model=None)`; raises `RunMismatch` if the snapshot shows another run or no run |
 | `agent.close()` / `with ... as agent` | — | release the connection pool |
 
 **Prompt context**: `create()`, `append()` and `run()` take

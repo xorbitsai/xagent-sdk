@@ -1,12 +1,12 @@
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from pydantic import BaseModel
 
 from xagent_sdk._base import _json_body
 from xagent_sdk._events import TaskEventStream, open_task_event_stream
-from xagent_sdk._structured import expected_echo, prepare_response_format
+from xagent_sdk._structured import ModelT, expected_echo, prepare_response_format
 from xagent_sdk.errors import (
     TaskTimeout,
     UnsupportedFeature,
@@ -729,6 +729,36 @@ class TasksAPI:
             # the caller's requested wall-clock timeout.
             time.sleep(min(poll_interval, remaining))
 
+    @overload
+    def run(
+        self,
+        *,
+        agent_id: int,
+        message: str,
+        timeout: float = 120.0,
+        poll_interval: float = 1.0,
+        metadata: dict[str, Any] | None = None,
+        dispatch_class: Literal["interactive", "batch"] | None = None,
+        priority: int | None = None,
+        prompt_context: Mapping[str, str | int | float | bool] | None = None,
+        response_format: type[ModelT],
+    ) -> RunResult[ModelT]: ...
+
+    @overload
+    def run(
+        self,
+        *,
+        agent_id: int,
+        message: str,
+        timeout: float = 120.0,
+        poll_interval: float = 1.0,
+        metadata: dict[str, Any] | None = None,
+        dispatch_class: Literal["interactive", "batch"] | None = None,
+        priority: int | None = None,
+        prompt_context: Mapping[str, str | int | float | bool] | None = None,
+        response_format: dict[str, Any] | None = None,
+    ) -> RunResult[dict[str, Any]]: ...
+
     def run(
         self,
         *,
@@ -741,7 +771,7 @@ class TasksAPI:
         priority: int | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
         response_format: dict[str, Any] | type[BaseModel] | None = None,
-    ) -> RunResult:
+    ) -> RunResult[Any]:
         """Single-turn convenience: ``create()`` + ``wait()`` + ``steps()``.
 
         Equivalent to::
@@ -755,7 +785,10 @@ class TasksAPI:
         ``metadata``, ``dispatch_class``, ``priority``, ``prompt_context`` and
         ``response_format`` are passed to ``create()`` unchanged; see its
         docstring. With a ``response_format``, read the result with
-        ``RunResult.parsed()``.
+        ``RunResult.parsed()``. A Pydantic model class given as
+        ``response_format`` is kept as ``RunResult.model``, so ``parsed()``
+        without an argument returns an instance of it
+        (``run(response_format=Invoice)`` returns a ``RunResult[Invoice]``).
 
         ``timeout`` is the wall-clock budget for ``create`` + ``wait``
         combined: the time spent in ``create()`` is subtracted from the
@@ -806,7 +839,9 @@ class TasksAPI:
             expected_run_id=created.run_id,
         )
         steps = self.steps(created.task_id)
-        return RunResult(info=info, steps=steps, run_id=created.run_id)
+        if isinstance(response_format, type):
+            return RunResult(info, steps, created.run_id, model=response_format)
+        return RunResult(info, steps, created.run_id)
 
 
 def _check_echo(raw: Any, sent_format: Any, task_id: int) -> None:
