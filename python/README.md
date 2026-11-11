@@ -4,7 +4,7 @@ Python client SDK for the [xAgent](https://github.com/xorbitsai/xagent)
 HTTP v1 API. Lets a SaaS app authenticate as a user, mint AI agents
 from templates, and trigger them — all in a handful of lines.
 
-> **Status**: 0.6.0 — early access. Optional
+> **Status**: early access. Optional
 > `xagent_sdk.cloud.WorkspaceClient` (hosted workspace surface) selects a
 > hosted region. **Breaking change vs 0.1.0**: the SDK
 > exposes two clients (``UserClient`` for a personal key, ``AgentClient`` for
@@ -14,10 +14,11 @@ from templates, and trigger them — all in a handful of lines.
 
 ## Install
 
-Pin to a release tag — do **not** install from `main`:
+Pin to a release tag — do **not** install from `main`. Replace `vX.Y.Z`
+with a tag from the [tags page](https://github.com/xorbitsai/xagent-sdk/tags):
 
 ```bash
-pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.6.0#subdirectory=python"
+pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@vX.Y.Z#subdirectory=python"
 ```
 
 The Python client lives under [`python/`](.) in the
@@ -692,10 +693,11 @@ connection pool).
 - 0.x = alpha. Any minor bump (0.1 → 0.2 → 0.3 → 0.4) may break the
   surface. Patch bumps (0.3.0 → 0.3.1) are bugfix-only.
 - A future 1.0 will lock the public API per SemVer.
-- **Always pin to a git tag** in production:
+- **Always pin to a git tag** in production (pick one from the
+  [tags page](https://github.com/xorbitsai/xagent-sdk/tags)):
 
   ```bash
-  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@v0.6.0#subdirectory=python"
+  pip install "xagent-sdk @ git+https://github.com/xorbitsai/xagent-sdk@vX.Y.Z#subdirectory=python"
   ```
 
   Installing from `@main` will eventually break you when the surface
@@ -703,7 +705,7 @@ connection pool).
   required because the SDK lives in a subdirectory of the
   multi-language monorepo.
 - The User-Agent header carries the SDK version
-  (`xagent-sdk-python/0.6.0`) so the backend can correlate issues.
+  (`xagent-sdk-python/X.Y.Z`) so the backend can correlate issues.
 
 ## Development
 
@@ -712,6 +714,22 @@ uv sync --group dev
 uv run pre-commit install
 uv run pytest                # ~120 unit tests, hermetic, ~1s
 ```
+
+### Releasing
+
+The package version is not stored in any file: the build derives it from
+the nearest `vX.Y.Z` git tag. Tags starting with `v` and a digit are
+reserved for this Python package; other tags are ignored. To release,
+create an annotated tag on the release commit on `main` and push
+that tag to GitHub — no file changes are needed:
+
+```bash
+git tag -a vX.Y.Z -m "xagent-sdk X.Y.Z"
+```
+
+An install from a commit after the latest tag reports a development
+version such as `X.Y.(Z+1).devN+g<commit>`. A source tree without git
+metadata builds as `0+unknown`.
 
 ### Local end-to-end tests
 

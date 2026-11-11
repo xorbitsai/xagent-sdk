@@ -26,6 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history with tags: the package version is derived from
+          # the latest release tag.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -36,6 +40,28 @@ jobs:
       - name: Run pre-commit
         run: uv run --project python pre-commit run --all-files
 
+  build-minimum:
+    # The lowest setuptools-scm that build-system.requires in
+    # python/pyproject.toml admits must still compute the version from the
+    # release tag. Keep this version in step with that requirement.
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history with tags: the package version is derived from
+          # the latest release tag.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+      - name: Build with setuptools-scm 9.0.0
+        working-directory: python
+        run: |
+          echo "setuptools-scm==9.0.0" > "$RUNNER_TEMP/build-constraints.txt"
+          uv build --wheel --build-constraint "$RUNNER_TEMP/build-constraints.txt" --out-dir "$RUNNER_TEMP/dist"
+
   pytest:
     needs: pre-commit
     runs-on: ubuntu-latest
@@ -45,6 +71,10 @@ jobs:
         python-version: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history with tags: the package version is derived from
+          # the latest release tag.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}

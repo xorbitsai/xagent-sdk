@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs", "setuptools-scm>=9"]
 build-backend = "hatchling.build"
 
 [project]
 name = "xagent-sdk"
-version = "0.6.0"
+dynamic = ["version"]
 description = "Python client SDK for xAgent"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,6 +39,22 @@ dev = [
     "mypy>=1.19.0",
     "pytest>=8.0",
 ]
+
+# The version is derived at build time from the latest vX.Y.Z git tag of
+# the repository (one level above this file). A source tree without git
+# metadata builds as 0+unknown instead of failing.
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0+unknown"
+# Only v-prefixed tags count, so a tag for another package in this
+# repository cannot change the Python version.
+raw-options = { root = "..", scm.git.describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v[0-9]*"] }
+
+[tool.uv]
+# Rebuild the local package when the tags or the commit change, so a
+# development environment reports the current version. (uv cannot read
+# the commit inside a git worktree; there only tag changes trigger it.)
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/xagent_sdk"]
