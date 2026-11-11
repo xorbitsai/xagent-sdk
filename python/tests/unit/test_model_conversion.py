@@ -5,9 +5,12 @@ The suite runs under every supported Pydantic version; an expectation that
 differs between versions says so.
 """
 
+import copy
+import datetime
 import enum
 import json
 import re
+import uuid
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -23,6 +26,7 @@ from pydantic import (
     ValidationError,
     WithJsonSchema,
 )
+from typing_extensions import TypeAliasType
 
 from xagent_sdk import (
     AgentClient,
@@ -30,9 +34,14 @@ from xagent_sdk import (
     RunResult,
     StructuredOutputError,
     StructuredOutputReasonCode,
+    UnsupportedFeature,
     UnsupportedSchema,
 )
-from xagent_sdk._structured import constraint_fragment, convert_model
+from xagent_sdk._structured import (
+    constraint_fragment,
+    convert_model,
+    prepare_response_format,
+)
 from xagent_sdk.types import _parse_task_info
 
 from ._fixtures import response
@@ -303,6 +312,19 @@ class TestNodeRules:
         }
 
 
+NullableInt = TypeAliasType("NullableInt", int | None)
+
+
+def _ready_info(output: dict[str, Any]) -> Any:
+    return _parse_task_info(
+        {
+            **response("task_info_completed"),
+            "structured_output_status": "ready",
+            "structured_output": output,
+        }
+    )
+
+
 class TestDefaults:
     def test_default_fields_become_nullable(self) -> None:
         converted = convert_model(Defaults)
@@ -349,6 +371,7 @@ class TestDefaults:
                 "structured_output": output,
             }
         )
+        expected = copy.deepcopy(output)
         parsed = info.parsed(Defaults)
         assert parsed == Defaults(
             items=[Item(), Item(note="kept")],
@@ -357,8 +380,54 @@ class TestDefaults:
             options=Options(),
         )
         assert parsed.sub == Sub(a=1)
-        assert info.parsed() == output
-        assert info.structured_output == output
+        assert info.parsed() == expected
+        assert info.structured_output == expected
+
+    def test_field_whose_alias_is_already_nullable_is_not_wrapped_again(self) -> None:
+        class Aliased(BaseModel):
+            x: NullableInt = None
+
+        converted = convert_model(Aliased)
+        assert converted.schema["properties"]["x"] == {"$ref": "#/$defs/d1"}
+        assert converted.default_paths == set()
+        prepare_response_format(Aliased)
+        assert _ready_info({"x": None}).parsed(Aliased).x is None
+        assert _ready_info({"x": 4}).parsed(Aliased).x == 4
+
+    def test_definition_referenced_from_two_places_reports_every_place(self) -> None:
+        class Twice(BaseModel):
+            first: Sub
+            many: list[Sub]
+            opt: Sub | None
+
+        assert convert_model(Twice).default_paths == {
+            "/first/a",
+            "/many/-/a",
+            "/opt/a",
+        }
+        parsed = _ready_info(
+            {"first": {"a": None}, "many": [{"a": None}, {"a": 3}], "opt": {"a": None}}
+        ).parsed(Twice)
+        assert parsed.first == Sub(a=1)
+        assert parsed.many == [Sub(a=1), Sub(a=3)]
+        assert parsed.opt == Sub(a=1)
+
+    def test_defaults_inside_an_inlined_nested_model_are_found(self) -> None:
+        class Home(BaseModel):
+            home: Options = Field(description="where")
+
+        assert convert_model(Home).default_paths == {"/home/verbose", "/home/limit"}
+        parsed = _ready_info({"home": {"verbose": None, "limit": 3}}).parsed(Home)
+        assert parsed.home == Options(verbose=False, limit=3)
+
+    def test_aliased_fields_are_reported_under_their_alias(self) -> None:
+        class Aliased(BaseModel):
+            slash: int = Field(1, alias="a/b")
+            tilde: int = Field(2, alias="t~u")
+
+        assert convert_model(Aliased).default_paths == {"/a~1b", "/t~0u"}
+        parsed = _ready_info({"a/b": None, "t~u": 7}).parsed(Aliased)
+        assert parsed == Aliased(**{"a/b": 1, "t~u": 7})
 
 
 class TestParsedWithModel:
@@ -388,6 +457,27 @@ class TestParsedWithModel:
         assert exc.value.code == StructuredOutputReasonCode.CLIENT_VALIDATION_FAILED
         assert exc.value.status == "ready"
         assert isinstance(exc.value.__cause__, UnsupportedSchema)
+        assert exc.value.message == exc.value.__cause__.message
+
+    def test_strict_model_reads_json_strings(self) -> None:
+        class Stamped(BaseModel, strict=True):
+            when: datetime.datetime
+            day: datetime.date
+            uid: uuid.UUID
+            color: Color
+
+        output = {
+            "when": "2025-01-01T00:00:00",
+            "day": "2025-01-02",
+            "uid": "12345678-1234-5678-1234-567812345678",
+            "color": "red",
+        }
+        assert self._ready(output).parsed(Stamped) == Stamped(
+            when=datetime.datetime(2025, 1, 1),
+            day=datetime.date(2025, 1, 2),
+            uid=uuid.UUID("12345678-1234-5678-1234-567812345678"),
+            color=Color.RED,
+        )
 
     def test_result_that_does_not_validate(self) -> None:
         class Dated(BaseModel):
@@ -610,6 +700,10 @@ class _BadFormat(BaseModel):
     day: str = Field(json_schema_extra={"format": "date\n"})
 
 
+class _DefaultedBadList(BaseModel):
+    x: list[Annotated[str, Field(json_schema_extra={"format": "date\n"})]] = []
+
+
 class _Mixed(BaseModel):
     flag: Literal[True, 1]
 
@@ -630,6 +724,7 @@ _NOT_CONVERTIBLE: list[tuple[type[BaseModel], str]] = [
     (_FloatOrStr, "/properties/v"),
     (_BadFormat, "/properties/day/format"),
     (_Mixed, "/properties/flag"),
+    (_DefaultedBadList, "/properties/x/items/format"),
 ]
 
 
@@ -717,6 +812,44 @@ class TestModelOnTheWire:
                 "schema": convert_model(Page[Item]).schema,
             },
         }
+
+    @pytest.mark.parametrize("call", ["create", "append", "run"])
+    def test_every_write_sends_the_converted_model_and_checks_the_echo(
+        self, make_client: Callable[..., AgentClient], call: str
+    ) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests.append(req)
+            if req.url.path == "/v1/features":
+                return httpx.Response(200, json=response("features"))
+            base = "create_task" if req.url.path == "/v1/chat/tasks" else "append_task"
+            return httpx.Response(
+                202,
+                json={
+                    **response(base),
+                    "response_format_type": "json_schema",
+                    "response_format_name": "Page",
+                },
+            )
+
+        calls: dict[str, Callable[[AgentClient], object]] = {
+            "create": lambda c: c.tasks.create(
+                agent_id=7, message="hi", response_format=Page[Item]
+            ),
+            "append": lambda c: c.tasks.append(
+                10, agent_id=7, message="hi", response_format=Page[Item]
+            ),
+            "run": lambda c: c.tasks.run(
+                agent_id=7, message="hi", response_format=Page[Item]
+            ),
+        }
+        with make_client(handler) as c, pytest.raises(UnsupportedFeature) as exc:
+            calls[call](c)
+        assert exc.value.task_id == 10
+        sent = json.loads(requests[1].content)["response_format"]
+        assert sent["json_schema"]["name"] == "Page_Item_"
+        assert sent["json_schema"]["schema"] == convert_model(Page[Item]).schema
 
 
 class Constrained(BaseModel):

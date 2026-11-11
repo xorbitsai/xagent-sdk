@@ -6,10 +6,9 @@ from typing import Any, TypeVar, overload
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from xagent_sdk._structured import ModelT as _ModelT
 from xagent_sdk._structured import parse_with_model
 from xagent_sdk.errors import MalformedResponse, StructuredOutputError, _run_mismatch
-
-_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 class TaskStatus(StrEnum):

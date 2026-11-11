@@ -602,8 +602,8 @@ A Pydantic model is converted into the schema subset the server supports:
   Field(default_factory=list)`, `options: Options = Options()`) becomes
   nullable. The raw `structured_output` holds `null` there when the answer
   did not state it; `parsed(Model)` removes those nulls so Pydantic applies
-  the default. `Optional[X] = <not None>` is already nullable, so it stays
-  `None`.
+  the default. `Optional[X] = <not None>`, or a field whose type alias already
+  allows `None`, is already nullable, so it stays `None`.
 - A nested model with a field `description` or `title` is copied into the
   schema in full at that place (the field's description replaces the
   model's), so a model used often this way makes the schema larger; the

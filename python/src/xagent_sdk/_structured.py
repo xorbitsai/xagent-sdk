@@ -24,6 +24,7 @@ from xagent_sdk._schema_rules import (
     PathSegment,
     json_kind,
     local_violation,
+    normalized_enum,
     render_error_path,
     violation_message,
 )
@@ -109,14 +110,11 @@ def parse_with_model(output: dict[str, Any], model: type[ModelT]) -> ModelT:
         default_paths = convert_model(model).default_paths
     except UnsupportedSchema as exc:
         raise StructuredOutputError(
-            _CLIENT_VALIDATION_FAILED,
-            f"The model {model.__name__} cannot be used as a response_format: "
-            f"{exc.message}",
-            status="ready",
+            _CLIENT_VALIDATION_FAILED, exc.message, status="ready"
         ) from exc
     _drop_default_nulls(output, default_paths)
     try:
-        return model.model_validate(output)
+        return model.model_validate_json(json.dumps(output))
     except ValidationError as exc:
         raise StructuredOutputError(
             _CLIENT_VALIDATION_FAILED,
@@ -274,7 +272,7 @@ def convert_model(model: type[BaseModel]) -> ConvertedModel:
        ``writeOnly`` are removed from every schema node.
     2. A ``$ref``, or a one-element ``allOf: [{"$ref": ...}]``, with no other
        key becomes a plain ``{"$ref": ...}``. One with other keys (a field
-       ``description`` or ``title``) is inlined: a deep copy of the target,
+       ``description`` or ``title``) is inlined: a copy of the target,
        with each key at the reference replacing the target's key of the same
        name.
     3. A node with ``enum`` or ``const`` and no ``type`` gets the type of its
@@ -285,7 +283,8 @@ def convert_model(model: type[BaseModel]) -> ConvertedModel:
        ``null`` added to its ``enum`` (a ``const`` becomes a one-value
        ``enum``). Every object gets ``additionalProperties: false`` and lists
        every property in ``required``. A property that was not required and
-       is not nullable has a default value: it is made nullable in the same
+       is not nullable (a ``$ref`` to a definition that accepts null counts as
+       nullable) has a default value: it is made nullable in the same
        way (an object, an array or a ``$ref`` becomes ``anyOf: [T, null]``),
        and its JSON Pointer goes into ``default_paths``. Constraint keywords
        are moved into the description (see ``_CONSTRAINT_FRAGMENTS``).
@@ -415,9 +414,13 @@ class _Converter:
         self._defs: dict[str, dict[str, Any]] = {}
         self._scopes: dict[str | None, _Scope] = {}
         self._scope = _Scope()
-        # The position being converted, as a path in the model's own schema,
-        # for error messages.
+        # The position being converted, as a JSON Pointer from the model's root
+        # (a $defs entry under its own name; an inlined reference under the
+        # field that uses it), for error messages.
         self._path: tuple[PathSegment, ...] = ()
+        # The anyOf wrappers made for fields with a default value; they are
+        # not in the model's schema, so error paths skip them.
+        self._wrappers: set[int] = set()
 
     @property
     def where(self) -> str:
@@ -479,7 +482,7 @@ class _Converter:
                 self._scope.refs.append((pointer, target))
                 return {"$ref": _REF_PREFIX + target}
             site = {k: v for k, v in node.items() if k != "$ref"}
-            node = {**copy.deepcopy(self._raw_defs[target]), **site}
+            node = {**self._raw_defs[target], **site}
 
         if "oneOf" in node:
             raise _ConversionError(
@@ -567,8 +570,10 @@ class _Converter:
         for name, raw_child in properties.items():
             child_pointer = f"{pointer}/{_pointer_segment(name)}"
             child = self._node(raw_child, (*path, "properties", name), child_pointer)
-            if name not in originally_required and not _is_nullable(child):
+            if name not in originally_required and not self._is_nullable(child):
                 child = _made_nullable(child)
+                if "anyOf" in child:
+                    self._wrappers.add(id(child))
                 self._scope.defaults.add(child_pointer)
             converted[name] = child
         self._path = path
@@ -581,6 +586,14 @@ class _Converter:
         result["required"] = list(converted)
         result["additionalProperties"] = False
         return result
+
+    def _is_nullable(self, node: dict[str, Any]) -> bool:
+        """Whether ``node``, or the entry it refers to, accepts null."""
+        while list(node) == ["$ref"]:
+            node = self._raw_defs[node["$ref"][len(_REF_PREFIX) :]]
+        if "type" not in node and ("enum" in node or "const" in node):
+            return None in (normalized_enum(node) or [])
+        return _is_nullable(node)
 
     # -- after conversion ---------------------------------------------------------
 
@@ -608,14 +621,16 @@ class _Converter:
                 description = node.get("description")
                 text = description if type(description) is str else ""
                 node["description"] = text + "".join(fragments)
-            for key in ("properties",):
-                if type(node.get(key)) is dict:
-                    stack.extend(
-                        (child, (*path, key, name)) for name, child in node[key].items()
-                    )
+            if type(node.get("properties")) is dict:
+                stack.extend(
+                    (child, (*path, "properties", name))
+                    for name, child in node["properties"].items()
+                )
             if "items" in node:
                 stack.append((node["items"], (*path, "items")))
-            if type(node.get("anyOf")) is list:
+            if id(node) in self._wrappers:
+                stack.append((node["anyOf"][0], path))
+            elif type(node.get("anyOf")) is list:
                 stack.extend(
                     (child, (*path, "anyOf", i))
                     for i, child in enumerate(node["anyOf"])
@@ -705,12 +720,10 @@ def _nullable_scalar(node: dict[str, Any]) -> dict[str, Any]:
     it has an ``enum`` or a ``const`` (which becomes a one-value ``enum``)."""
     result = dict(node)
     result["type"] = [node["type"], "null"]
-    values = None
-    if "const" in result:
-        values = [result.pop("const")]
-    elif type(result.get("enum")) is list:
-        values = list(result["enum"])
+    values = normalized_enum(node)
+    result.pop("const", None)
     if values is not None:
+        values = list(values)
         if not any(v is None for v in values):
             values.append(None)
         result["enum"] = values
