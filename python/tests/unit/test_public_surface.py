@@ -34,6 +34,9 @@ EXPECTED_SURFACE: set[str] = {
     "PendingInteraction",
     "Step",
     "RunResult",
+    "StructuredOutputReason",
+    "StructuredOutputStatus",
+    "StructuredOutputReasonCode",
     # Task event stream
     "TaskEventStream",
     "StreamEvent",
@@ -61,6 +64,9 @@ EXPECTED_SURFACE: set[str] = {
     "XAgentTransportError",
     "TaskTimeout",
     "RunMismatch",
+    "StructuredOutputError",
+    "UnsupportedFeature",
+    "UnsupportedSchema",
     # Version
     "__version__",
 }

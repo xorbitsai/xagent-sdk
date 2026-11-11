@@ -1,0 +1,25 @@
+{
+  "task_id": 10,
+  "agent_id": 7,
+  "status": "completed",
+  "input": "Extract the invoice fields from the attached text.",
+  "output": "Invoice INV-001, total 120.5 USD.",
+  "error": null,
+  "created_at": "2026-05-10T03:00:00Z",
+  "completed_at": "2026-05-10T03:00:05Z",
+  "pending_interaction": null,
+  "run_id": "run_0a1b2c3d",
+  "state_version": 3,
+  "control_state": "completed",
+  "structured_output": {
+    "invoice_number": "INV-001",
+    "total": 120.5,
+    "currency": "USD",
+    "lines": [
+      {"description": "Paper", "amount": 120.5}
+    ],
+    "note": null
+  },
+  "structured_output_status": "ready",
+  "structured_output_reason": null
+}

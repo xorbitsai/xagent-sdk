@@ -248,11 +248,14 @@ _TASKS_API_DOC = """\
 The ``client.tasks`` namespace, on both ``AgentClient`` and ``UserClient``.
 
 Six of these methods map one-to-one onto a v1 endpoint. Five of them
-are thin wrappers: build a request body, hand it to the owning client's
-``_request`` for transport + error mapping, then parse the success body
-into a frozen dataclass. ``events()`` is the exception -- it holds a
-streaming response open instead of parsing one body, so it does its own
-transport and error mapping (see its docstring).
+build a request body, hand it to the owning client's ``_request`` for
+transport + error mapping, then parse the success body into a frozen
+dataclass. With a ``response_format``, ``create()`` and ``append()`` also
+check it locally, ask ``GET /v1/features`` (once per namespace) whether
+the server supports it, and check the format the server echoes back.
+``events()`` is the exception -- it holds a streaming response open
+instead of parsing one body, so it does its own transport and error
+mapping (see its docstring).
 
 ``message`` arguments take a plain ``str`` rather than a structured
 object: the SDK only sends user-role messages (the v1 contract pins

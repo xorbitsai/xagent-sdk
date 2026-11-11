@@ -219,6 +219,10 @@ class MalformedResponse(XAgentError):
     same three cases. ``get_skills()`` never folds a wrong-shaped body into an
     empty list. ``replace_skills()`` may already have taken effect when it
     raises this, so call ``get_skills()`` to check what the server stored.
+
+    ``TaskInfo.parsed()`` and ``RunResult.parsed()`` raise it when the
+    structured result fields break the server's contract: a ``"ready"``
+    status without an object, or another status without a reason.
     """
 
 
@@ -235,7 +239,55 @@ class TaskTimeout(XAgentError):
     """
 
 
-class RunMismatch(XAgentError):
+class StructuredOutputError(XAgentError):
+    """A structured result could not be returned for the run asked about.
+
+    ``code`` says why. It is the server's reason code from
+    ``TaskInfo.structured_output_reason`` (see
+    ``StructuredOutputReasonCode``), with the server's ``message``, or one
+    of the codes only this SDK raises:
+
+      - ``run_mismatch``: the task snapshot shows a run other than
+        ``expected_run_id``, or no run. It is raised as the subclass
+        ``RunMismatch``, by ``TasksAPI.wait()``, ``TasksAPI.run()``,
+        ``TaskInfo.parsed()`` and ``RunResult.parsed()``.
+      - ``no_structured_output``: ``parsed()`` was called on a snapshot
+        without a ``structured_output_status``.
+
+    So one ``except StructuredOutputError`` around ``run()`` and
+    ``parsed()`` catches every code above: a run that does not match, a
+    reason code from the server and ``no_structured_output``.
+    ``parsed()`` raises ``MalformedResponse`` instead when the fields
+    break the server's contract.
+
+    ``status`` is the ``structured_output_status`` the error comes from, or
+    ``None`` when it does not come from one. ``missing_fields`` and
+    ``unexpressible_fields`` copy the server's lists and are empty when the
+    server sent none. ``http_status`` is ``None``: the error is raised by the
+    SDK after a successful response.
+    """
+
+    status: str | None
+    missing_fields: list[str]
+    unexpressible_fields: list[str]
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        http_status: int | None = None,
+        *,
+        status: str | None = None,
+        missing_fields: list[str] | None = None,
+        unexpressible_fields: list[str] | None = None,
+    ) -> None:
+        super().__init__(code, message, http_status)
+        self.status = status
+        self.missing_fields = list(missing_fields or [])
+        self.unexpressible_fields = list(unexpressible_fields or [])
+
+
+class RunMismatch(StructuredOutputError):
     """Code ``run_mismatch``: the task snapshot shows a run other than the
     one asked about.
 
@@ -243,8 +295,10 @@ class RunMismatch(XAgentError):
     the snapshot it is about to return (terminal or ``WAITING_FOR_USER``)
     shows another run or no run, and so by ``TasksAPI.run()``, which passes
     the run it created. Polling stops and the snapshot is not returned;
-    call ``get(task_id)`` to read it. The task can show another run, or no
-    run, because:
+    call ``get(task_id)`` to read it. ``TaskInfo.parsed()`` raises it when
+    it is given ``expected_run_id`` and the snapshot shows another run or
+    no run, and so does ``RunResult.parsed()``, which passes the run
+    ``run()`` started. The task can show another run, or no run, because:
 
       - another caller appended a turn after yours finished;
       - the server refused to start your turn: the task still shows the
@@ -255,6 +309,9 @@ class RunMismatch(XAgentError):
 
     ``task_id``, ``expected_run_id`` and ``actual_run_id`` say which task,
     which run was asked about and which run the snapshot shows.
+    It is a ``StructuredOutputError``, so ``except StructuredOutputError``
+    catches it too; its ``status`` is ``None`` and its ``missing_fields``
+    and ``unexpressible_fields`` are empty.
     ``http_status`` is ``None``: the error is raised by the SDK after a
     successful response.
     """
@@ -291,6 +348,68 @@ def _run_mismatch(task_id: int, expected: str, actual: str | None) -> RunMismatc
         expected_run_id=expected,
         actual_run_id=actual,
     )
+
+
+class UnsupportedFeature(XAgentError):
+    """The server, or the key in use, does not support a feature the call
+    needs. Code ``unsupported_feature``.
+
+    Raised by ``TasksAPI.create()``, ``append()`` and ``run()`` when called
+    with a ``response_format`` and the server cannot honor it:
+
+      - before anything is created, when ``GET /v1/features`` answers 404 (a
+        server that predates structured output) or does not list
+        ``structured_output`` (a key that cannot set a format). ``task_id`` is
+        ``None``.
+      - after the server accepted the request, when its response does not
+        echo back the format that was sent. ``task_id`` is the task the
+        request created or appended to: it exists, but do not rely on it
+        having that format.
+
+    ``http_status`` is ``None``: the error is decided by the SDK.
+    """
+
+    task_id: int | None
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        http_status: int | None = None,
+        *,
+        task_id: int | None = None,
+    ) -> None:
+        super().__init__(code, message, http_status)
+        self.task_id = task_id
+
+
+class UnsupportedSchema(XAgentError):
+    """A ``response_format`` the SDK refuses before sending any request.
+    Code ``unsupported_schema``.
+
+    The value breaks one of the server's rules that the SDK checks
+    locally: ``rule`` is the rule id (for example ``"S3"``), ``path`` the
+    rendered position (``"/properties/a/minLength"``, or ``"response_format"``
+    / ``"the schema root"`` for the root), and ``message`` exactly the server's
+    message for it: ``<rule> at <path>: <text>``. ``http_status`` is
+    ``None``: nothing was sent.
+    """
+
+    rule: str
+    path: str
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        http_status: int | None = None,
+        *,
+        rule: str,
+        path: str,
+    ) -> None:
+        super().__init__(code, message, http_status)
+        self.rule = rule
+        self.path = path
 
 
 _CODE_MAP: dict[str, type[XAgentError]] = {

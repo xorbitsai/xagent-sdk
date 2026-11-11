@@ -4,7 +4,13 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from xagent_sdk._base import _json_body
 from xagent_sdk._events import TaskEventStream, open_task_event_stream
-from xagent_sdk.errors import TaskTimeout, _run_mismatch
+from xagent_sdk._structured import expected_echo, prepare_response_format
+from xagent_sdk.errors import (
+    TaskTimeout,
+    UnsupportedFeature,
+    XAgentError,
+    _run_mismatch,
+)
 from xagent_sdk.types import (
     AppendResult,
     CreateTaskResult,
@@ -14,6 +20,7 @@ from xagent_sdk.types import (
     TaskStatus,
     _parse_append,
     _parse_create_task,
+    _parse_features,
     _parse_steps,
     _parse_task_info,
 )
@@ -37,16 +44,22 @@ _TERMINAL_STATUSES = frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED})
 # to timeout.
 _WAIT_RETURN_STATUSES = _TERMINAL_STATUSES | frozenset({TaskStatus.WAITING_FOR_USER})
 
+# The name ``GET /v1/features`` lists when the key can set a response_format.
+_STRUCTURED_OUTPUT_FEATURE = "structured_output"
+
 
 class TasksAPI:
     """The ``client.tasks`` namespace, on both ``AgentClient`` and ``UserClient``.
 
     Six of these methods map one-to-one onto a v1 endpoint. Five of them
-    are thin wrappers: build a request body, hand it to the owning client's
-    ``_request`` for transport + error mapping, then parse the success body
-    into a frozen dataclass. ``events()`` is the exception -- it holds a
-    streaming response open instead of parsing one body, so it does its own
-    transport and error mapping (see its docstring).
+    build a request body, hand it to the owning client's ``_request`` for
+    transport + error mapping, then parse the success body into a frozen
+    dataclass. With a ``response_format``, ``create()`` and ``append()`` also
+    check it locally, ask ``GET /v1/features`` (once per namespace) whether
+    the server supports it, and check the format the server echoes back.
+    ``events()`` is the exception -- it holds a streaming response open
+    instead of parsing one body, so it does its own transport and error
+    mapping (see its docstring).
 
     ``message`` arguments take a plain ``str`` rather than a structured
     object: the SDK only sends user-role messages (the v1 contract pins
@@ -69,6 +82,37 @@ class TasksAPI:
 
     def __init__(self, client: "_BaseClient") -> None:
         self._client = client
+        # Whether the server lets this key use structured output, as last
+        # read from ``GET /v1/features``; ``None`` until a call needs it.
+        self._structured_output_supported: bool | None = None
+
+    def _require_structured_output(self) -> None:
+        """Raise ``UnsupportedFeature`` unless this server lets the key use
+        structured output, asking ``GET /v1/features`` the first time.
+
+        A 200 answer and a 404 (no such route) are remembered on this
+        namespace; any other failure is raised unchanged and not remembered,
+        so the next call asks again.
+        """
+        if self._structured_output_supported is None:
+            try:
+                resp = self._client._request("GET", "/v1/features")
+            except XAgentError as exc:
+                if exc.http_status != 404:
+                    raise
+                self._structured_output_supported = False
+            else:
+                features = _parse_features(_json_body(resp, "features"))
+                self._structured_output_supported = (
+                    _STRUCTURED_OUTPUT_FEATURE in features
+                )
+        if not self._structured_output_supported:
+            raise UnsupportedFeature(
+                "unsupported_feature",
+                "This server or key does not support structured output "
+                "(GET /v1/features does not list structured_output); "
+                "nothing was sent.",
+            )
 
     def create(
         self,
@@ -79,6 +123,7 @@ class TasksAPI:
         dispatch_class: Literal["interactive", "batch"] | None = None,
         priority: int | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> CreateTaskResult:
         """``POST /v1/chat/tasks`` -- start a new task with the first user
         message. The server returns 202 with ``status='pending'`` when
@@ -105,11 +150,11 @@ class TasksAPI:
         the server owns those rules and measures the size on its own rendering
         of the value. Anything it rejects raises ``InvalidInput`` (HTTP 422) with
         the reason in ``message``, which is free text to show as it is, not to
-        parse. A ``nan`` or ``inf`` value raises ``ValueError`` before any
-        request is sent with httpx 0.28 or later; older httpx versions send it
+        parse. A ``nan`` or ``inf`` value raises ``ValueError`` before the
+        task request is sent with httpx 0.28 or later; older httpx versions send it
         and the server answers ``InvalidInput``. A value JSON cannot encode,
-        such as a ``date``, raises ``TypeError`` before any request is sent. A
-        server that predates this field ignores it silently.
+        such as a ``date``, raises ``TypeError`` before the task request is sent.
+        A server that predates this field ignores it silently.
 
         How the server treats the values depends on the key. With an agent key
         they count as signed by your backend, and the agent's declared fields do
@@ -120,7 +165,45 @@ class TasksAPI:
         ``message`` names the rejected fields. This SDK can neither set nor read
         an agent's declared fields. Declare them on the agent in the web agent
         builder.
+
+        ``response_format`` asks the server for a structured result that
+        follows a JSON Schema, read from ``TaskInfo.structured_output`` once
+        the task completes (``TaskInfo.parsed()`` does this). Pass a JSON
+        object (a ``dict``) such as
+        ``{"type": "json_schema", "json_schema": {"name": ..., "schema": ...}}``
+        (``json_schema`` may also carry ``description`` and ``strict: true``)
+        or ``{"type": "text"}`` for none. It is sent only when not ``None``,
+        and unlike the fields above it is never silently ignored:
+
+          1. The value is written out and read back as the JSON that will be
+             sent, and checked against the server's rules that do not depend
+             on its size. A value that breaks one raises ``UnsupportedSchema``
+             before any request.
+             A value JSON cannot encode raises ``TypeError`` or
+             ``ValueError`` before any request when writing the value out
+             fails. A NaN, an infinity or a lone surrogate in a position the
+             local check does not cover raises ``ValueError`` after step 2,
+             when the request body is encoded, with httpx 0.28 or later;
+             older httpx versions send it and the server answers 422
+             (``InvalidInput``). The server checks the rest and answers 422
+             (``InvalidInput``).
+          2. Once per ``tasks`` namespace, ``GET /v1/features`` is asked
+             whether this server and key support structured output. A 404 (a
+             server that predates it) or a list without ``structured_output``
+             (a key that cannot set a format) raises ``UnsupportedFeature``
+             before the task is created; the answer is remembered. Any other
+             failure of that call (a 5xx, a timeout, a 401) is raised as it is
+             and asked again on the next call.
+          3. The response must echo the format back
+             (``response_format_type`` and ``response_format_name``). If it
+             does not, the task was created but the format may not be in
+             force, and ``UnsupportedFeature`` is raised with that
+             ``task_id``.
         """
+        sent_format: Any = None
+        if response_format is not None:
+            sent_format = prepare_response_format(response_format)
+            self._require_structured_output()
         body: dict[str, Any] = {
             "agent_id": agent_id,
             "message": {"role": "user", "content": message},
@@ -133,8 +216,14 @@ class TasksAPI:
             body["priority"] = priority
         if prompt_context is not None:
             body["prompt_context"] = dict(prompt_context)
+        if response_format is not None:
+            body["response_format"] = sent_format
         resp = self._client._request("POST", "/v1/chat/tasks", json=body)
-        return _parse_create_task(_json_body(resp, "task creation", 202))
+        raw = _json_body(resp, "task creation", 202)
+        created = _parse_create_task(raw)
+        if response_format is not None:
+            _check_echo(raw, sent_format, created.task_id)
+        return created
 
     def append(
         self,
@@ -144,6 +233,7 @@ class TasksAPI:
         message: str,
         metadata: dict[str, Any] | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AppendResult:
         """``POST /v1/chat/tasks/{task_id}/messages`` -- append the next
         user turn to an existing task. Server returns 202 with
@@ -158,7 +248,18 @@ class TasksAPI:
         ``None`` (the default) sends nothing and the task keeps what it has
         stored; an object replaces the stored value for this and later turns;
         ``{}`` clears it, so later turns carry none.
+
+        ``response_format`` is a JSON object (a ``dict``), checked and sent as
+        described on ``create()``.
+        ``None`` (the default) sends nothing and the task keeps its format; a
+        ``json_schema`` value replaces it for this and later turns;
+        ``{"type": "text"}`` removes it. An ``UnsupportedFeature`` raised
+        after the server accepted the turn carries this ``task_id``.
         """
+        sent_format: Any = None
+        if response_format is not None:
+            sent_format = prepare_response_format(response_format)
+            self._require_structured_output()
         body: dict[str, Any] = {
             "agent_id": agent_id,
             "message": {"role": "user", "content": message},
@@ -167,10 +268,16 @@ class TasksAPI:
             body["metadata"] = metadata
         if prompt_context is not None:
             body["prompt_context"] = dict(prompt_context)
+        if response_format is not None:
+            body["response_format"] = sent_format
         resp = self._client._request(
             "POST", f"/v1/chat/tasks/{task_id}/messages", json=body
         )
-        return _parse_append(_json_body(resp, "task message", 202))
+        raw = _json_body(resp, "task message", 202)
+        appended = _parse_append(raw)
+        if response_format is not None:
+            _check_echo(raw, sent_format, appended.task_id)
+        return appended
 
     def reply(
         self,
@@ -325,7 +432,13 @@ class TasksAPI:
             str}``, with the same optional ``"truncated": True`` as
             ``message.delta``.
           - ``task.completed`` (closing) -- ``{"status": str, "output":
-            str | None, "error": str | None}``, plus
+            str | None, "error": str | None, "structured_output": dict |
+            None, "structured_output_status": str | None,
+            "structured_output_reason": dict | None}`` -- the three
+            structured fields carry the same values as the fields of the
+            same name on ``get()`` (the reason as the raw object, not a
+            ``StructuredOutputReason``), and a server that predates them
+            leaves them out -- plus
             ``"snapshot_truncated": True`` and ``"snapshot_total_steps":
             int`` together, only on the two attach-time fast-path exits
             where the step snapshot handed to this connection was cut
@@ -621,6 +734,7 @@ class TasksAPI:
         dispatch_class: Literal["interactive", "batch"] | None = None,
         priority: int | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> RunResult:
         """Single-turn convenience: ``create()`` + ``wait()`` + ``steps()``.
 
@@ -632,8 +746,10 @@ class TasksAPI:
             )
             steps   = client.tasks.steps(created.task_id)
 
-        ``metadata``, ``dispatch_class``, ``priority`` and ``prompt_context``
-        are passed to ``create()`` unchanged; see its docstring.
+        ``metadata``, ``dispatch_class``, ``priority``, ``prompt_context`` and
+        ``response_format`` are passed to ``create()`` unchanged; see its
+        docstring. With a ``response_format``, read the result with
+        ``RunResult.parsed()``.
 
         ``timeout`` is the wall-clock budget for ``create`` + ``wait``
         combined: the time spent in ``create()`` is subtracted from the
@@ -674,6 +790,7 @@ class TasksAPI:
             dispatch_class=dispatch_class,
             priority=priority,
             prompt_context=prompt_context,
+            response_format=response_format,
         )
         remaining = max(0.0, timeout - (time.monotonic() - start))
         info = self.wait(
@@ -684,3 +801,31 @@ class TasksAPI:
         )
         steps = self.steps(created.task_id)
         return RunResult(info=info, steps=steps, run_id=created.run_id)
+
+
+def _check_echo(raw: Any, sent_format: Any, task_id: int) -> None:
+    """Raise ``UnsupportedFeature`` for ``task_id`` unless the 202 body ``raw``
+    echoes the format that was sent.
+
+    ``raw`` is the body that has just been parsed into a result, so it is a
+    dict. A server that ignores ``response_format`` sends neither echo key.
+    """
+    expected = expected_echo(sent_format)
+    echoed = (
+        raw.get("response_format_type", None),
+        raw.get("response_format_name", None),
+    )
+    if (
+        "response_format_type" not in raw
+        or "response_format_name" not in raw
+        or echoed != expected
+    ):
+        raise UnsupportedFeature(
+            "unsupported_feature",
+            f"The server accepted the request for task {task_id} but did not "
+            "confirm the response_format that was sent (expected "
+            f"response_format_type={expected[0]!r} and "
+            f"response_format_name={expected[1]!r}); the task may not have "
+            "this format.",
+            task_id=task_id,
+        )

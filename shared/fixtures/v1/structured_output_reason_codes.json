@@ -1,0 +1,17 @@
+{
+  "incomplete": [
+    "agent_partial",
+    "agent_blocked",
+    "information_missing",
+    "value_not_expressible",
+    "not_produced"
+  ],
+  "failed": [
+    "schema_mismatch",
+    "result_too_large",
+    "model_error",
+    "invalid_stored_format",
+    "extraction_timeout",
+    "internal_error"
+  ]
+}

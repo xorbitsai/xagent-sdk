@@ -1,11 +1,12 @@
-from dataclasses import dataclass
+import copy
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
-from xagent_sdk.errors import MalformedResponse
+from xagent_sdk.errors import MalformedResponse, StructuredOutputError, _run_mismatch
 
 
 class TaskStatus(StrEnum):
@@ -261,6 +262,74 @@ class AppendResult:
     run_id: str | None = None
 
 
+class StructuredOutputStatus:
+    """The values of ``TaskInfo.structured_output_status`` known to this SDK.
+
+    The field itself is a plain ``str``, so a value a later server adds still
+    reaches you unchanged.
+    """
+
+    READY = "ready"
+    INCOMPLETE = "incomplete"
+    FAILED = "failed"
+
+
+class StructuredOutputReasonCode:
+    """The values of ``StructuredOutputReason.code`` and
+    ``StructuredOutputError.code`` known to this SDK.
+
+    The server reports the first eleven in ``TaskInfo.structured_output_reason``:
+    ``agent_partial``, ``agent_blocked``, ``information_missing``,
+    ``value_not_expressible`` and ``not_produced`` with status ``incomplete``;
+    the rest with status ``failed``. Fields of ``StructuredOutputReason`` and
+    ``StructuredOutputError`` are plain ``str``, so a code a later server adds
+    still reaches you unchanged.
+
+    ``RUN_MISMATCH`` and ``NO_STRUCTURED_OUTPUT`` are raised by this SDK
+    only; the server never sends them.
+    """
+
+    AGENT_PARTIAL = "agent_partial"
+    AGENT_BLOCKED = "agent_blocked"
+    INFORMATION_MISSING = "information_missing"
+    VALUE_NOT_EXPRESSIBLE = "value_not_expressible"
+    NOT_PRODUCED = "not_produced"
+    SCHEMA_MISMATCH = "schema_mismatch"
+    RESULT_TOO_LARGE = "result_too_large"
+    MODEL_ERROR = "model_error"
+    INVALID_STORED_FORMAT = "invalid_stored_format"
+    EXTRACTION_TIMEOUT = "extraction_timeout"
+    INTERNAL_ERROR = "internal_error"
+    RUN_MISMATCH = "run_mismatch"
+    NO_STRUCTURED_OUTPUT = "no_structured_output"
+
+
+# The codes in ``StructuredOutputReasonCode`` that only this SDK raises.
+_SDK_ONLY_REASON_CODES = frozenset(
+    {
+        StructuredOutputReasonCode.RUN_MISMATCH,
+        StructuredOutputReasonCode.NO_STRUCTURED_OUTPUT,
+    }
+)
+
+
+@dataclass(frozen=True)
+class StructuredOutputReason:
+    """Why a task has no structured result: ``TaskInfo.structured_output_reason``.
+
+    ``code`` is one of the server codes in ``StructuredOutputReasonCode`` (or a
+    code a later server adds) and ``message`` the server's sentence for it.
+    ``missing_fields`` lists, as JSON Pointers, up to 20 positions the answer
+    did not state; ``unexpressible_fields`` up to 20 positions it stated in a
+    form the schema cannot hold. Both are empty when the server sent none.
+    """
+
+    code: str
+    message: str
+    missing_fields: list[str] = field(default_factory=list)
+    unexpressible_fields: list[str] = field(default_factory=list)
+
+
 @dataclass(frozen=True)
 class PendingInteraction:
     """The task's current unanswered question.
@@ -315,6 +384,17 @@ class TaskInfo:
     ``run_id`` of the ``create()`` or ``append()`` that started the run
     you are waiting for; ``client.tasks.wait(..., expected_run_id=...)``
     does this for you.
+
+    ``structured_output``, ``structured_output_status`` and
+    ``structured_output_reason`` report the structured result of the run this
+    snapshot shows, when the task has a ``response_format``. They are set only
+    on a ``COMPLETED`` task; otherwise, and on a server that predates them,
+    all three are ``None``. ``structured_output_status`` is ``"ready"``,
+    ``"incomplete"`` or ``"failed"`` (see ``StructuredOutputStatus``; kept as a
+    plain ``str``). When it is ``"ready"``, ``structured_output`` holds the
+    result and the reason is ``None``; otherwise ``structured_output`` is
+    ``None`` and ``structured_output_reason`` says why. ``parsed()`` reads
+    these fields for you.
     """
 
     task_id: int
@@ -327,6 +407,68 @@ class TaskInfo:
     completed_at: datetime | None
     pending_interaction: PendingInteraction | None = None
     run_id: str | None = None
+    structured_output: dict[str, Any] | None = None
+    structured_output_status: str | None = None
+    structured_output_reason: StructuredOutputReason | None = None
+
+    def parsed(self, *, expected_run_id: str | None = None) -> dict[str, Any]:
+        """The structured result of this snapshot.
+
+        With ``expected_run_id``, the snapshot must show that run first;
+        another run or no run (``run_id`` is ``None``) raises
+        ``RunMismatch`` (code ``run_mismatch``), a subclass of
+        ``StructuredOutputError``. Then, when ``structured_output_status``
+        is ``"ready"``, returns a deep copy of ``structured_output``; the
+        snapshot itself is not changed.
+
+        Raises:
+            RunMismatch: ``expected_run_id`` was given and the snapshot
+                shows another run or no run (code ``run_mismatch``).
+            StructuredOutputError: the status is not ``"ready"`` (``code``,
+                ``message`` and the two field lists come from
+                ``structured_output_reason``, and ``status`` is the
+                status); or the snapshot has no structured
+                result at all, because the task is not ``COMPLETED``, has no
+                ``response_format`` or the server predates the fields
+                (``no_structured_output``, ``status`` ``None``).
+            MalformedResponse: the fields break the server's contract: a
+                ``"ready"`` status without an object, or another status
+                without a reason.
+        """
+        if expected_run_id is not None and self.run_id != expected_run_id:
+            raise _run_mismatch(self.task_id, expected_run_id, self.run_id)
+        status = self.structured_output_status
+        if status is None:
+            raise StructuredOutputError(
+                StructuredOutputReasonCode.NO_STRUCTURED_OUTPUT,
+                "The task snapshot carries no structured result: the task is "
+                "not completed, has no response_format, or the server does not "
+                "report structured results.",
+            )
+        if status == StructuredOutputStatus.READY:
+            if type(self.structured_output) is not dict:
+                raise _malformed_structured_output(
+                    "structured_output_status is 'ready' but structured_output "
+                    "is not an object"
+                )
+            return copy.deepcopy(self.structured_output)
+        reason = self.structured_output_reason
+        if reason is None:
+            raise _malformed_structured_output(
+                f"structured_output_status is {status!r} but "
+                "structured_output_reason is missing"
+            )
+        raise StructuredOutputError(
+            reason.code,
+            reason.message,
+            status=status,
+            missing_fields=reason.missing_fields,
+            unexpressible_fields=reason.unexpressible_fields,
+        )
+
+
+def _malformed_structured_output(detail: str) -> MalformedResponse:
+    return MalformedResponse("malformed_response", detail, http_status=None)
 
 
 @dataclass(frozen=True)
@@ -431,7 +573,9 @@ class RunResult:
     ``run_id`` is the run ``run()`` started (``CreateTaskResult.run_id``);
     ``None`` when the server predates the field or the result was built
     without one. ``run()`` has already checked that ``info`` belongs to
-    that run.
+    that run. The ``structured_output*`` properties read the fields of the
+    same name on ``info``, and ``parsed()`` is ``info.parsed()`` checked
+    against ``run_id``.
     """
 
     info: TaskInfo
@@ -445,6 +589,24 @@ class RunResult:
     @property
     def status(self) -> TaskStatus:
         return self.info.status
+
+    @property
+    def structured_output(self) -> dict[str, Any] | None:
+        return self.info.structured_output
+
+    @property
+    def structured_output_status(self) -> str | None:
+        return self.info.structured_output_status
+
+    @property
+    def structured_output_reason(self) -> StructuredOutputReason | None:
+        return self.info.structured_output_reason
+
+    def parsed(self) -> dict[str, Any]:
+        """``self.info.parsed(expected_run_id=self.run_id)``: the structured
+        result, after checking that ``info`` shows the run ``run()``
+        started."""
+        return self.info.parsed(expected_run_id=self.run_id)
 
 
 # --- Private parsers --------------------------------------------------
@@ -742,3 +904,19 @@ def _parse_agent_skills(data: Any) -> list[str]:
 
 def _parse_agent_skills_update(data: Any) -> AgentSkillsUpdate:
     return _validate_write(_AGENT_SKILLS_UPDATE_ADAPTER, data, "agent skill update")
+
+
+def _parse_features(data: Any) -> list[str]:
+    """Parse ``GET /v1/features``: ``{"features": [str, ...]}``.
+
+    Any other shape raises ``MalformedResponse``, so a proxy's page is never
+    read as "no features".
+    """
+    features = _require_mapping(data, "features").get("features")
+    if type(features) is not list or not all(type(f) is str for f in features):
+        raise MalformedResponse(
+            "malformed_response",
+            "features response did not match the expected shape (features)",
+            http_status=None,
+        )
+    return features
