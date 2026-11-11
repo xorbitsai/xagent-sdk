@@ -317,6 +317,12 @@ class TestNodeRules:
 
 
 NullableInt = TypeAliasType("NullableInt", int | None)
+# A nullable alias whose own description, with its constraint written into it,
+# is longer than the server accepts.
+LongDescribedNullableStr = TypeAliasType(
+    "LongDescribedNullableStr",
+    Annotated[str, Field(description="d" * (MAX_TEXT_CHARS - 4), min_length=1)] | None,
+)
 DescribedNullableInt = TypeAliasType(
     "DescribedNullableInt", Annotated[NullableInt, Field(description="count")]
 )
@@ -430,6 +436,20 @@ class TestDefaults:
         prepare_response_format(Twice)
         parsed = _ready_info({"x": None, "y": 3}).parsed(Twice)
         assert (parsed.x, parsed.y) == (None, 3)
+
+    def test_inlined_nullable_alias_is_not_converted_as_an_entry(self) -> None:
+        # The entry alone breaks the description limit; the copy inlined with
+        # the field's shorter description does not, and is all that is sent.
+        class Short(BaseModel):
+            y: LongDescribedNullableStr | None = Field(description="short")
+
+        converted = convert_model(Short)
+        assert converted.schema["properties"]["y"] == {
+            "type": ["string", "null"],
+            "description": "short Min length: 1.",
+        }
+        assert "$defs" not in converted.schema
+        prepare_response_format(Short)
 
     def test_defaulted_object_and_array_have_title_and_description_on_the_union(
         self,

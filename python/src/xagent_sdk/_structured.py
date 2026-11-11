@@ -571,6 +571,10 @@ class _Converter:
             # value stands alone. A reference is inlined when the union has
             # other keys, since $ref must be the only key of its node.
             if "$ref" in value and outer:
+                # The inlined copy replaces the reference recorded when the
+                # branch was converted, so the entry is not converted for it.
+                target = value["$ref"][len(_REF_PREFIX) :]
+                self._scope.refs.remove((pointer, target))
                 return self._node({**value, **outer}, path, pointer)
             return {**value, **outer}
         return {**outer, "anyOf": converted}

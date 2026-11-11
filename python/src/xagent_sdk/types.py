@@ -608,7 +608,7 @@ class StreamEvent:
 
 # What ``RunResult.parsed()`` returns without an argument: the model ``run()``
 # was given, or the result as a dict.
-_ParsedT = TypeVar("_ParsedT", default=dict[str, Any])
+_ParsedT = TypeVar("_ParsedT", covariant=True, default=dict[str, Any])
 
 
 @dataclass(frozen=True, init=False)
