@@ -8,7 +8,7 @@ package, version, and tooling.
 
 | Language | Path | Status |
 |---|---|---|
-| Python | [`python/`](./python/) | 0.3.0 — early access |
+| Python | [`python/`](./python/) | Early access — releases are [git tags](https://github.com/xorbitsai/xagent-sdk/tags) |
 | TypeScript | (planned) | — |
 | JavaScript | (planned) | — |
 

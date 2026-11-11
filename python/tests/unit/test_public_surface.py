@@ -7,6 +7,8 @@ guard against a re-export accidentally re-introducing names that the
 package does not expose.
 """
 
+import importlib.metadata
+
 import xagent_sdk
 
 # The full public surface. Update this set deliberately when adding new
@@ -96,7 +98,9 @@ def test_meresponse_name_not_exposed() -> None:
     assert "MeResponse" not in xagent_sdk.__all__
 
 
-def test_version_matches_pyproject() -> None:
+def test_version_matches_installed_metadata() -> None:
     # The version string the SDK announces (also in the User-Agent
-    # header) must match the packaged release.
-    assert xagent_sdk.__version__ == "0.6.0"
+    # header) is the installed distribution's version, which the build
+    # derives from the release tag.
+    assert xagent_sdk.__version__
+    assert xagent_sdk.__version__ == importlib.metadata.version("xagent-sdk")
