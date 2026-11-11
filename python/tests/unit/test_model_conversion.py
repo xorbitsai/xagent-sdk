@@ -37,8 +37,9 @@ from xagent_sdk import (
     UnsupportedFeature,
     UnsupportedSchema,
 )
+from xagent_sdk._schema_rules import MAX_TEXT_CHARS
 from xagent_sdk._structured import (
-    constraint_fragment,
+    _CONSTRAINT_FRAGMENTS,
     convert_model,
     prepare_response_format,
 )
@@ -408,6 +409,53 @@ class TestDefaults:
         assert converted.schema["properties"]["x"] == {"$ref": "#/$defs/d1"}
         assert converted.default_paths == set()
         prepare_response_format(Aliased)
+        assert _ready_info({"x": None}).parsed(Aliased).x is None
+        assert _ready_info({"x": 4}).parsed(Aliased).x == 4
+
+    def test_optional_of_a_nullable_alias_keeps_one_null(self) -> None:
+        class Twice(BaseModel):
+            x: NullableInt | None
+            y: NullableInt | None = Field(description="count")
+
+        converted = convert_model(Twice)
+        assert converted.schema["properties"] == {
+            "x": {"$ref": "#/$defs/d1"},
+            "y": {"type": ["integer", "null"], "description": "count"},
+        }
+        assert converted.schema["$defs"] == {"d1": {"type": ["integer", "null"]}}
+        assert converted.default_paths == set()
+        prepare_response_format(Twice)
+        parsed = _ready_info({"x": None, "y": 3}).parsed(Twice)
+        assert (parsed.x, parsed.y) == (None, 3)
+
+    def test_defaulted_object_and_array_have_title_and_description_on_the_union(
+        self,
+    ) -> None:
+        class Wrapped(BaseModel):
+            t: list[Sub] = Field(default_factory=list, description="d")
+            s: Sub = Field(Sub(), description="e")
+
+        class Written(BaseModel):
+            t: list[Sub] | None = Field(description="d")
+
+        properties = convert_model(Wrapped).schema["properties"]
+        assert properties["t"] == {
+            "anyOf": [
+                {"type": "array", "items": {"$ref": "#/$defs/d1"}},
+                {"type": "null"},
+            ],
+            "title": "T",
+            "description": "d",
+        }
+        assert properties["t"] == convert_model(Written).schema["properties"]["t"]
+        assert properties["s"]["anyOf"][1] == {"type": "null"}
+        assert (properties["s"]["title"], properties["s"]["description"]) == (
+            "Sub",
+            "e",
+        )
+        assert "title" not in properties["s"]["anyOf"][0]
+        assert "description" not in properties["s"]["anyOf"][0]
+        prepare_response_format(Wrapped)
 
     def test_definition_referenced_from_two_places_reports_every_place(self) -> None:
         class Twice(BaseModel):
@@ -531,7 +579,7 @@ _PERSON_SCHEMA = (
     '{"type": "object", "properties": {"name": {"type": "string", "title": "Name"}, '
     '"address": {"anyOf": [{"$ref": "#/$defs/d1"}, {"type": "null"}]}, '
     '"options": {"$ref": "#/$defs/d2"}, "tags": {"anyOf": [{"type": "array", '
-    '"items": {"type": "string"}, "title": "Tags"}, {"type": "null"}]}, '
+    '"items": {"type": "string"}}, {"type": "null"}], "title": "Tags"}, '
     '"currency": {"type": ["string", "null"], "enum": ["USD", "EUR", null], '
     '"title": "Currency"}, "shifts": {"type": "array", "items": {"$ref": '
     '"#/$defs/d3"}, "title": "Shifts"}, "nick": {"type": ["string", "null"], '
@@ -735,6 +783,18 @@ class _EntryNotAnObject(BaseModel):
         }
 
 
+class _DescribedEntryNotAnObject(BaseModel):
+    x: int = 0
+
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"x": {"$ref": "#/$defs/X", "description": "d"}},
+            "$defs": {"X": [1]},
+        }
+
+
 class _EntryRefersNowhere(BaseModel):
     x: int = 0
 
@@ -765,6 +825,7 @@ _NOT_CONVERTIBLE: list[tuple[type[BaseModel], str]] = [
     (_Mixed, "/properties/flag"),
     (_DefaultedBadList, "/properties/x/items/format"),
     (_EntryNotAnObject, "/$defs/X"),
+    (_DescribedEntryNotAnObject, "/$defs/X"),
     (_EntryRefersNowhere, "/$defs/X"),
 ]
 
@@ -909,10 +970,31 @@ class TestConstraintSuffix:
         ids=[case["id"] for case in _CORPUS["suffix_fragments"]],
     )
     def test_fragment_matches_the_corpus(self, case: dict[str, Any]) -> None:
-        assert constraint_fragment(case["keyword"], case["value"]) == case["fragment"]
+        write = dict(_CONSTRAINT_FRAGMENTS)[case["keyword"]]
+        assert write(case["value"]) == case["fragment"]
 
     def test_unique_items_false_writes_nothing(self) -> None:
-        assert constraint_fragment("uniqueItems", False) is None
+        assert dict(_CONSTRAINT_FRAGMENTS)["uniqueItems"](False) is None
+
+    def test_constraints_that_do_not_fit_the_description_are_refused(self) -> None:
+        class Long(BaseModel):
+            x: str = Field(pattern="a" * 1100)
+
+        with pytest.raises(UnsupportedSchema) as exc:
+            prepare_response_format(Long)
+        assert " at /properties/x/description, " in exc.value.message
+        assert "the constraints do not fit" in exc.value.message
+        assert f"the {MAX_TEXT_CHARS} the server accepts" in exc.value.message
+        assert "S3" not in exc.value.message
+
+    def test_constraints_that_just_fit_are_written(self) -> None:
+        # ' Pattern: "<n a>".' is n + 13 characters.
+        class Fits(BaseModel):
+            x: str = Field(pattern="a" * (MAX_TEXT_CHARS - 13))
+
+        description = convert_model(Fits).schema["properties"]["x"]["description"]
+        assert len(description) == MAX_TEXT_CHARS
+        prepare_response_format(Fits)
 
     def test_written_descriptions(self) -> None:
         properties = convert_model(Constrained).schema["properties"]

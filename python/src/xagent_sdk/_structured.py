@@ -21,6 +21,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from xagent_sdk._schema_rules import (
+    MAX_TEXT_CHARS,
     PathSegment,
     json_kind,
     local_violation,
@@ -248,19 +249,21 @@ _CONSTRAINT_FRAGMENTS: tuple[tuple[str, Any], ...] = (
     ("uniqueItems", _unique_items_fragment),
     ("pattern", _pattern_fragment),
 )
-_CONSTRAINT_WRITERS = dict(_CONSTRAINT_FRAGMENTS)
-
-
-def constraint_fragment(keyword: str, value: Any) -> str | None:
-    """The description fragment written for a constraint keyword, or ``None``
-    when the keyword is dropped without one (``uniqueItems: false``)."""
-    result: str | None = _CONSTRAINT_WRITERS[keyword](value)
-    return result
 
 
 class _ConversionError(Exception):
     """A part of a model the subset cannot express; the reason and what to
-    write instead."""
+    write instead.
+
+    ``path`` is the position when the raiser gives it; otherwise the
+    converter's current position is reported.
+    """
+
+    def __init__(
+        self, reason: str, path: tuple[PathSegment, ...] | None = None
+    ) -> None:
+        super().__init__(reason)
+        self.path = path
 
 
 def convert_model(model: type[BaseModel]) -> ConvertedModel:
@@ -281,13 +284,17 @@ def convert_model(model: type[BaseModel]) -> ConvertedModel:
        ``"null"``). ``"numeric"`` becomes ``"number"``. ``anyOf: [T, null]``
        stays as it is, except that a scalar ``T`` becomes a type array, with
        ``null`` added to its ``enum`` (a ``const`` becomes a one-value
-       ``enum``). Every object gets ``additionalProperties: false`` and lists
-       every property in ``required``. A property that was not required and
-       is not nullable (a ``$ref`` to a definition that accepts null counts as
-       nullable) has a default value: it is made nullable in the same
-       way (an object, an array or a ``$ref`` becomes ``anyOf: [T, null]``),
-       and its JSON Pointer goes into ``default_paths``. Constraint keywords
-       are moved into the description (see ``_CONSTRAINT_FRAGMENTS``).
+       ``enum``), and a ``T`` that accepts null already (a ``$ref`` to a
+       definition that accepts null) replaces the union, inlined as in step
+       2 when the union has other keys. Every object gets
+       ``additionalProperties: false`` and lists every property in
+       ``required``. A property that was not required and is not nullable (a
+       ``$ref`` to a definition that accepts null counts as nullable) has a
+       default value: it is made nullable in the same way (an object, an
+       array or a ``$ref`` becomes ``anyOf: [T, null]``, with the ``title``
+       and ``description`` of ``T`` on the ``anyOf`` node), and its JSON
+       Pointer goes into ``default_paths``. Constraint keywords are moved into
+       the description (see ``_CONSTRAINT_FRAGMENTS``).
     4. Only the ``$defs`` entries reachable from the root are kept, renamed
        ``d1``, ``d2``, ... in the order a pre-order walk from the root first
        references them (keys in order, entering an entry at its first
@@ -303,21 +310,25 @@ def convert_model(model: type[BaseModel]) -> ConvertedModel:
             properties (``dict[str, X]``), ``Any``, a fixed-length tuple, a
             union of several non-null types (including a discriminated
             union), a recursive model, ``Decimal``, a ``Literal`` or enum
-            mixing value types, or a constraint value that cannot be written.
+            mixing value types, a constraint value that cannot be written, or
+            constraints that make a description longer than the server's
+            limit of ``MAX_TEXT_CHARS`` characters.
     """
     raw = _strip_metadata(model.model_json_schema())
     raw_defs = raw.pop("$defs", {})
     if type(raw_defs) is not dict:
         raw_defs = {}
-    _reject_recursion(model, raw, raw_defs)
     converter = _Converter(raw_defs)
     try:
+        _reject_recursion(raw, raw_defs)
         root = converter.convert_root(raw)
     except _ConversionError as exc:
+        path = converter.path if exc.path is None else exc.path
+        where = render_error_path(list(path)) or "the schema root"
         raise UnsupportedSchema(
             "unsupported_schema",
             f"The model {model.__name__} cannot be used as a response_format: "
-            f"at {converter.where}, {exc}.",
+            f"at {where}, {exc}.",
         ) from None
     name = re.sub(r"[^A-Za-z0-9_-]", "_", model.__name__)[:64] or "result"
     return ConvertedModel(name, root, converter.default_paths())
@@ -364,11 +375,9 @@ def _refs_in(node: Any) -> list[str]:
     return found
 
 
-def _reject_recursion(
-    model: type[BaseModel], root: dict[str, Any], defs: dict[str, Any]
-) -> None:
-    """Raise ``UnsupportedSchema`` when an entry reachable from the root
-    refers back to itself."""
+def _reject_recursion(root: dict[str, Any], defs: dict[str, Any]) -> None:
+    """Raise ``_ConversionError`` at the ``$defs`` entry when an entry
+    reachable from the root refers back to itself."""
     edges = {name: _refs_in(entry) for name, entry in defs.items()}
     # Depth-first search with an explicit stack; a grey entry is on the path.
     state: dict[str, str] = {}
@@ -381,14 +390,11 @@ def _reject_recursion(
             name, successors = work[-1]
             for succ in successors:
                 if state.get(succ) == "grey":
-                    raise UnsupportedSchema(
-                        "unsupported_schema",
-                        f"The model {model.__name__} cannot be used as a "
-                        f"response_format: at {render_error_path(['$defs', succ])}, "
-                        "the model refers "
-                        "back to itself (a recursive model), which is not "
-                        "supported; nest a fixed number of levels with "
-                        "separate models instead.",
+                    raise _ConversionError(
+                        "the model refers back to itself (a recursive model), "
+                        "which is not supported; nest a fixed number of levels "
+                        "with separate models instead",
+                        ("$defs", succ),
                     )
                 if succ not in state:
                     state[succ] = "grey"
@@ -414,17 +420,19 @@ class _Converter:
         self._defs: dict[str, dict[str, Any]] = {}
         self._scopes: dict[str | None, _Scope] = {}
         self._scope = _Scope()
-        # The position being converted, as a JSON Pointer from the model's root
-        # (a $defs entry under its own name; an inlined reference under the
-        # field that uses it), for error messages.
+        # The position being converted, for error messages: a JSON Pointer
+        # into the node as converted so far, from the model's root. A $defs
+        # entry is under its own name and an inlined reference under the
+        # field that uses it; a scalar Optional is already one node, so a
+        # keyword in its value branch is reported on that node.
         self._path: tuple[PathSegment, ...] = ()
         # The anyOf wrappers made for fields with a default value; they are
         # not in the model's schema, so error paths skip them.
         self._wrappers: set[int] = set()
 
     @property
-    def where(self) -> str:
-        return render_error_path(list(self._path)) or "the schema root"
+    def path(self) -> tuple[PathSegment, ...]:
+        return self._path
 
     def convert_root(self, raw: dict[str, Any]) -> dict[str, Any]:
         self._scopes[None] = self._scope
@@ -481,8 +489,12 @@ class _Converter:
             if len(node) == 1:
                 self._scope.refs.append((pointer, target))
                 return {"$ref": _REF_PREFIX + target}
+            entry = self._raw_defs[target]
+            if type(entry) is not dict:
+                self._path = ("$defs", target)
+                raise _ConversionError("this part of the schema is not an object")
             site = {k: v for k, v in node.items() if k != "$ref"}
-            node = {**self._raw_defs[target], **site}
+            node = {**entry, **site}
 
         if "oneOf" in node:
             raise _ConversionError(
@@ -553,6 +565,14 @@ class _Converter:
         value = values[0]
         if _is_simple(value):
             return {**_nullable_scalar(value), **outer}
+        if self._is_nullable(value):
+            # The value accepts null already (such as a reference to an alias
+            # of Optional[X]); a second null branch would break S10, so the
+            # value stands alone. A reference is inlined when the union has
+            # other keys, since $ref must be the only key of its node.
+            if "$ref" in value and outer:
+                return self._node({**value, **outer}, path, pointer)
+            return {**value, **outer}
         return {**outer, "anyOf": converted}
 
     def _object(
@@ -635,7 +655,17 @@ class _Converter:
             if fragments:
                 description = node.get("description")
                 text = description if type(description) is str else ""
-                node["description"] = text + "".join(fragments)
+                text += "".join(fragments)
+                if len(text) > MAX_TEXT_CHARS:
+                    self._path = (*path, "description")
+                    raise _ConversionError(
+                        f"the description with the constraints written into it "
+                        f"has {len(text)} characters, more than the "
+                        f"{MAX_TEXT_CHARS} the server accepts, so the "
+                        "constraints do not fit; shorten the description or "
+                        "the constraint values"
+                    )
+                node["description"] = text
             if type(node.get("properties")) is dict:
                 stack.extend(
                     (child, (*path, "properties", name))
@@ -746,6 +776,14 @@ def _nullable_scalar(node: dict[str, Any]) -> dict[str, Any]:
 
 
 def _made_nullable(node: dict[str, Any]) -> dict[str, Any]:
+    """``node`` made nullable: a scalar as by :func:`_nullable_scalar`, any
+    other node wrapped as ``anyOf: [node, null]`` with its ``title`` and
+    ``description`` moved onto the wrapper, where Pydantic writes them for
+    ``Optional[X]``."""
     if _is_simple(node):
         return _nullable_scalar(node)
-    return {"anyOf": [node, dict(_NULL_BRANCH)]}
+    value = {k: v for k, v in node.items() if k not in ("title", "description")}
+    hoisted: dict[str, Any] = {
+        k: node[k] for k in ("title", "description") if k in node
+    }
+    return {"anyOf": [value, dict(_NULL_BRANCH)], **hoisted}
