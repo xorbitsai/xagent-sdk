@@ -313,6 +313,9 @@ class TestNodeRules:
 
 
 NullableInt = TypeAliasType("NullableInt", int | None)
+DescribedNullableInt = TypeAliasType(
+    "DescribedNullableInt", Annotated[NullableInt, Field(description="count")]
+)
 
 
 def _ready_info(output: dict[str, Any]) -> Any:
@@ -393,6 +396,18 @@ class TestDefaults:
         prepare_response_format(Aliased)
         assert _ready_info({"x": None}).parsed(Aliased).x is None
         assert _ready_info({"x": 4}).parsed(Aliased).x == 4
+
+    @pytest.mark.skipif(
+        _PYDANTIC_2_5, reason="Pydantic 2.5 cannot build an alias of an alias"
+    )
+    def test_described_alias_of_a_nullable_alias_is_not_wrapped(self) -> None:
+        class Aliased(BaseModel):
+            x: DescribedNullableInt = None
+
+        converted = convert_model(Aliased)
+        assert converted.schema["properties"]["x"] == {"$ref": "#/$defs/d1"}
+        assert converted.default_paths == set()
+        prepare_response_format(Aliased)
 
     def test_definition_referenced_from_two_places_reports_every_place(self) -> None:
         class Twice(BaseModel):
@@ -708,6 +723,30 @@ class _Mixed(BaseModel):
     flag: Literal[True, 1]
 
 
+class _EntryNotAnObject(BaseModel):
+    x: int = 0
+
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"x": {"$ref": "#/$defs/X"}},
+            "$defs": {"X": [1]},
+        }
+
+
+class _EntryRefersNowhere(BaseModel):
+    x: int = 0
+
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"x": {"$ref": "#/$defs/X"}},
+            "$defs": {"X": {"$ref": "#/$defs/Missing"}},
+        }
+
+
 class _Blank(BaseModel):
     kind: Literal[""]
 
@@ -725,6 +764,8 @@ _NOT_CONVERTIBLE: list[tuple[type[BaseModel], str]] = [
     (_BadFormat, "/properties/day/format"),
     (_Mixed, "/properties/flag"),
     (_DefaultedBadList, "/properties/x/items/format"),
+    (_EntryNotAnObject, "/$defs/X"),
+    (_EntryRefersNowhere, "/$defs/X"),
 ]
 
 

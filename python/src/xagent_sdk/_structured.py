@@ -588,9 +588,24 @@ class _Converter:
         return result
 
     def _is_nullable(self, node: dict[str, Any]) -> bool:
-        """Whether ``node``, or the entry it refers to, accepts null."""
-        while list(node) == ["$ref"]:
-            node = self._raw_defs[node["$ref"][len(_REF_PREFIX) :]]
+        """Whether ``node``, or the entry it refers to, accepts null.
+
+        A reference is followed the way it is inlined: the keys next to
+        ``$ref`` replace the entry's keys. An entry that is not an object, or
+        a ``$ref`` that names no entry, counts as not nullable; converting
+        that entry refuses it later.
+        """
+        while "$ref" in node:
+            ref = node["$ref"]
+            target = (
+                self._raw_defs.get(ref[len(_REF_PREFIX) :])
+                if type(ref) is str and ref.startswith(_REF_PREFIX)
+                else None
+            )
+            if type(target) is not dict:
+                return False
+            site = {k: v for k, v in node.items() if k != "$ref"}
+            node = {**target, **site}
         if "type" not in node and ("enum" in node or "const" in node):
             return None in (normalized_enum(node) or [])
         return _is_nullable(node)
