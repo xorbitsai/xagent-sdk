@@ -152,7 +152,7 @@ class TestStreamingErrorTable:
         assert {row.split("`")[1] for row in rows} == {
             "XAgentTransportError",
             "MalformedResponse",
-            "StructuredOutputError",
+            "RunMismatch",
             "TaskTimeout",
         }
 

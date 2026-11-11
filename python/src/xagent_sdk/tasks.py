@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from xagent_sdk._base import _json_body
 from xagent_sdk._events import TaskEventStream, open_task_event_stream
-from xagent_sdk.errors import TaskTimeout
+from xagent_sdk.errors import TaskTimeout, _run_mismatch
 from xagent_sdk.types import (
     AppendResult,
     CreateTaskResult,
@@ -16,7 +16,6 @@ from xagent_sdk.types import (
     _parse_create_task,
     _parse_steps,
     _parse_task_info,
-    _run_mismatch_error,
 )
 
 if TYPE_CHECKING:
@@ -549,14 +548,15 @@ class TasksAPI:
         With ``expected_run_id`` (the ``run_id`` of the ``create()`` or
         ``append()`` you are waiting for), every snapshot ``wait()`` is
         about to return -- terminal or ``WAITING_FOR_USER`` -- must show
-        that run; one that shows another run raises
-        ``StructuredOutputError`` with code ``run_mismatch`` instead of
-        being returned, and polling stops. So a question asked by a turn
-        another caller appended is never handed to this caller. Snapshots
-        that keep the loop going are not compared. Without
-        ``expected_run_id`` no snapshot is compared. If a turn appended
-        to a ``PAUSED`` task is refused before it starts, the task stays
-        ``PAUSED`` and ``wait()`` runs until ``TaskTimeout``.
+        that run; one that shows another run, or no run (``run_id`` is
+        ``None``), raises ``RunMismatch`` (code ``run_mismatch``) instead
+        of being returned, and polling stops. So a question asked by a
+        turn another caller appended is never handed to this caller;
+        ``RunMismatch`` lists the other causes. Snapshots that keep the
+        loop going are not compared. Without ``expected_run_id`` no
+        snapshot is compared. If a turn appended to a ``PAUSED`` task is
+        refused before it starts, the task stays ``PAUSED`` and ``wait()``
+        runs until ``TaskTimeout``.
         Any other exception raised by ``get()`` (``XAgentTransportError``,
         ``TaskNotFound``, ``InvalidAPIKey``, ...) propagates immediately
         -- this helper deliberately does not retry transient failures,
@@ -580,8 +580,8 @@ class TasksAPI:
         Raises:
             ValueError: ``timeout`` or ``poll_interval`` is negative.
             TaskTimeout: ``timeout`` elapsed without a returnable state.
-            StructuredOutputError: ``expected_run_id`` was given and the
-                returnable snapshot shows another run (code
+            RunMismatch: ``expected_run_id`` was given and the returnable
+                snapshot shows another run or no run (code
                 ``run_mismatch``).
         """
         if timeout < 0:
@@ -593,7 +593,7 @@ class TasksAPI:
             info = self.get(task_id)
             if info.status in _WAIT_RETURN_STATUSES:
                 if expected_run_id is not None and info.run_id != expected_run_id:
-                    raise _run_mismatch_error(expected_run_id, info.run_id)
+                    raise _run_mismatch(task_id, expected_run_id, info.run_id)
                 return info
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -652,9 +652,10 @@ class TasksAPI:
 
         The returned ``RunResult.run_id`` is ``created.run_id``, and
         ``wait()`` has checked that ``info`` shows that run: a snapshot of
-        another run raises ``StructuredOutputError`` with code
-        ``run_mismatch``. A server that does not report a ``run_id`` on
-        ``create()`` leaves it ``None`` and nothing is compared.
+        another run, or of no run, raises ``RunMismatch`` (code
+        ``run_mismatch``), whose ``task_id`` is the task this call created.
+        A server that does not report a ``run_id`` on ``create()`` leaves it
+        ``None`` and nothing is compared.
 
         Raises ``TaskTimeout`` if the task does not reach a returnable
         state within the combined ``create`` + ``wait`` budget. Other

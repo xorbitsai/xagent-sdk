@@ -10,8 +10,8 @@ import pytest
 
 from xagent_sdk import (
     AgentClient,
+    RunMismatch,
     RunResult,
-    StructuredOutputError,
     TaskInfo,
     TaskStatus,
     TaskTimeout,
@@ -71,6 +71,20 @@ class TestRunIdParsed:
         assert info.run_id == "r"
 
 
+class TestReplyRunId:
+    def test_reply_returns_the_run_it_resumes(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            assert req.url.path == "/v1/chat/tasks/10/reply"
+            return httpx.Response(
+                202, json={**response("reply_task"), "run_id": "run_1"}
+            )
+
+        with make_client(handler) as c:
+            assert c.tasks.reply(10, agent_id=7, message="yes").run_id == "run_1"
+
+
 class TestWaitExpectedRunId:
     @pytest.mark.parametrize("status", ["completed", "failed", "waiting_for_user"])
     def test_mismatch_on_returnable_snapshot_raises_and_stops(
@@ -83,10 +97,26 @@ class TestWaitExpectedRunId:
             else {}
         )
         handler = _polling_handler([_task(status, "run_other", **extra)], calls)
-        with make_client(handler) as c, pytest.raises(StructuredOutputError) as exc:
+        with make_client(handler) as c, pytest.raises(RunMismatch) as exc:
             c.tasks.wait(10, timeout=2.0, poll_interval=0.0, expected_run_id="run_1")
         assert exc.value.code == "run_mismatch"
         assert exc.value.http_status is None
+        assert exc.value.task_id == 10
+        assert exc.value.expected_run_id == "run_1"
+        assert exc.value.actual_run_id == "run_other"
+        assert "Task 10" in exc.value.message
+        assert calls == ["GET /v1/chat/tasks/10"]
+
+    def test_snapshot_without_run_id_raises(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # A new task whose start was refused reads FAILED with no run.
+        calls: list[str] = []
+        handler = _polling_handler([_task("failed", None)], calls)
+        with make_client(handler) as c, pytest.raises(RunMismatch) as exc:
+            c.tasks.wait(10, timeout=2.0, poll_interval=0.0, expected_run_id="run_1")
+        assert exc.value.actual_run_id is None
+        assert "no run" in exc.value.message
         assert calls == ["GET /v1/chat/tasks/10"]
 
     def test_matching_run_is_returned(
@@ -168,10 +198,24 @@ class TestRunRunId:
         calls: list[str] = []
         with (
             make_client(_run_handler("run_1", "run_2", calls)) as c,
-            pytest.raises(StructuredOutputError) as exc,
+            pytest.raises(RunMismatch) as exc,
         ):
             c.tasks.run(agent_id=7, message="hi", poll_interval=0.0)
         assert exc.value.code == "run_mismatch"
+        assert exc.value.task_id == 10
+        assert calls == ["POST /v1/chat/tasks", "GET /v1/chat/tasks/10"]
+
+    def test_run_raises_when_the_snapshot_shows_no_run(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        calls: list[str] = []
+        with (
+            make_client(_run_handler("run_1", None, calls)) as c,
+            pytest.raises(RunMismatch) as exc,
+        ):
+            c.tasks.run(agent_id=7, message="hi", poll_interval=0.0)
+        assert exc.value.task_id == 10
+        assert exc.value.actual_run_id is None
         assert calls == ["POST /v1/chat/tasks", "GET /v1/chat/tasks/10"]
 
     def test_run_on_a_server_without_run_id_compares_nothing(

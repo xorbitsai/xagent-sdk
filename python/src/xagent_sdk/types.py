@@ -5,7 +5,7 @@ from typing import Any, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
-from xagent_sdk.errors import MalformedResponse, StructuredOutputError
+from xagent_sdk.errors import MalformedResponse
 
 
 class TaskStatus(StrEnum):
@@ -248,8 +248,10 @@ class AppendResult:
     ``append()`` started, or, for ``reply()``, the run the task already
     had, which the answer resumes. Pass it to
     ``client.tasks.wait(..., expected_run_id=...)`` to make sure the
-    snapshot you get back belongs to that run. It is ``None`` when the
-    server predates the field.
+    snapshot you get back belongs to that run. For ``reply()`` that only
+    rules out another run: a new question the same run asks after your
+    answer has the same ``run_id`` (see ``reply()`` on comparing the
+    question). It is ``None`` when the server predates the field.
     """
 
     task_id: int
@@ -325,14 +327,6 @@ class TaskInfo:
     completed_at: datetime | None
     pending_interaction: PendingInteraction | None = None
     run_id: str | None = None
-
-
-def _run_mismatch_error(expected: str, actual: str | None) -> StructuredOutputError:
-    """The error for a snapshot that shows another run than ``expected``."""
-    return StructuredOutputError(
-        "run_mismatch",
-        f"The task shows run {actual!r}, not the expected run {expected!r}.",
-    )
 
 
 @dataclass(frozen=True)
