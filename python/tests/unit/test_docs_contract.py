@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from xagent_sdk import UserClient
+from xagent_sdk import UnsupportedModel, UserClient
 from xagent_sdk.errors import _CODE_MAP
 from xagent_sdk.tasks import TasksAPI
 
@@ -102,9 +102,7 @@ class TestReplyGuidancePresent:
         assert "``reply()``" in wait_block
 
     def test_run_docstring_mentions_reply(self) -> None:
-        text = _read("python/src/xagent_sdk/tasks.py")
-        run_block = text.split("def run(")[1]
-        assert "``reply()``" in run_block
+        assert "``reply()``" in (inspect.getdoc(TasksAPI.run) or "")
 
     def test_append_docstring_points_at_reply(self) -> None:
         # append() itself must document that it now rejects a waiting
@@ -130,7 +128,7 @@ class TestReplyGuidancePresent:
 
 class TestStreamingErrorTable:
     """The SDK-coined error table in README.md must list exactly the
-    seven exceptions this SDK raises on its own, with events()'s two
+    eight exceptions this SDK raises on its own, with events()'s two
     stream-specific cases called out on the rows they actually belong
     to -- an edit that adds a row without updating this count, or that
     documents an events() case on the wrong row, drifts silently
@@ -142,22 +140,38 @@ class TestStreamingErrorTable:
         after_heading = text.split("SDK-coined codes:")[1]
         return after_heading.split("The SDK does **not** retry automatically.")[0]
 
-    def test_table_has_exactly_seven_data_rows(self) -> None:
+    def test_table_has_exactly_eight_data_rows(self) -> None:
         rows = [
             line
             for line in self._table_block().splitlines()
             if line.strip().startswith("| `")
         ]
-        assert len(rows) == 7
+        assert len(rows) == 8
         assert {row.split("`")[1] for row in rows} == {
             "XAgentTransportError",
             "MalformedResponse",
             "RunMismatch",
             "UnsupportedFeature",
             "UnsupportedSchema",
+            "UnsupportedModel",
             "StructuredOutputError",
             "TaskTimeout",
         }
+
+    def test_unsupported_model_row_states_its_rule_and_path(self) -> None:
+        rows = [
+            line
+            for line in self._table_block().splitlines()
+            if line.strip().startswith("| `UnsupportedModel`")
+        ]
+        assert len(rows) == 1
+        assert "a subclass of `UnsupportedSchema`" in rows[0]
+        assert '`rule` is always `"model"`' in rows[0]
+        assert "`path` is the position the `message` names" in rows[0]
+        assert "`parsed(model)`" in rows[0]
+        doc = " ".join((UnsupportedModel.__doc__ or "").split())
+        assert '``rule`` is always ``"model"``' in doc
+        assert "``path`` is the position where the conversion stopped" in doc
 
     def test_transport_error_and_timeout_rows_mention_events(self) -> None:
         # Track which of the two rows were actually seen, not just
