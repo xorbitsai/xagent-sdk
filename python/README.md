@@ -284,9 +284,9 @@ with AgentClient() as agent:
 ```
 
 `reply()` resumes the task's paused execution -- the same server-side
-run continues rather than a new one starting, unlike `append()` -- but
-that continuity is internal server state; the `AppendResult` it returns
-has no `run_id` field to check. It is also **not idempotent** -- the SDK
+run continues rather than a new one starting, unlike `append()` -- so
+the `run_id` on the `AppendResult` it returns is the run the task already
+had, not a new one. It is also **not idempotent** -- the SDK
 sends no request-level idempotency key, so a client-side timeout does
 not tell you whether the answer was delivered. If a call raises
 `XAgentTransportError` (network/timeout below the HTTP layer), call
