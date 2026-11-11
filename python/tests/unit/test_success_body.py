@@ -70,6 +70,14 @@ _CASES: list[tuple[str, str, Call, int]] = [
         202,
     ),
     ("tasks.get", "agent", lambda c: c.tasks.get(1), 200),
+    (
+        "tasks features",
+        "agent",
+        lambda c: c.tasks.create(
+            agent_id=1, message="hi", response_format={"type": "text"}
+        ),
+        200,
+    ),
     ("tasks.steps", "agent", lambda c: c.tasks.steps(1), 200),
     ("workspace agents.list", "workspace", lambda c: c.agents.list(), 200),
     (

@@ -37,13 +37,37 @@ row below.
 | `skill_delete.json` | `DELETE /v1/skills/{name}` (200) | `{"name": ...}` confirmation |
 | `create_task.json` | `POST /v1/chat/tasks` (202) | Older-server shape: initial `status=pending`, no `dispatch_class` |
 | `create_task_dispatch_class.json` | `POST /v1/chat/tasks` (202) | Current queued-server shape: `status=pending`, carries `run_id`, `state_version`, `control_state` and `dispatch_class` |
+| `create_task_response_format.json` | `POST /v1/chat/tasks` (202) | Current-server shape for a request with a `response_format`: also echoes `response_format_type=json_schema` and the format's `response_format_name` |
 | `append_task.json` | `POST /v1/chat/tasks/{id}/messages` (202) | `status=running`, carries `accepted_at` (not `created_at`) |
+| `append_task_response_format.json` | `POST /v1/chat/tasks/{id}/messages` (202) | Current-server shape for a turn whose `response_format` was `{"type": "text"}`: carries `run_id` and echoes `response_format_type=text`, `response_format_name=""` |
+| `features.json` | `GET /v1/features` (200) | `{"features": [...]}`: the optional features the key can use; `structured_output` means it can set, change or clear a task's `response_format`. A server without this route answers 404 |
 | `task_info_completed.json` | `GET /v1/chat/tasks/{id}` (200) | Terminal state, `output` populated |
 | `task_info_waiting.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with a structured `pending_interaction.interactions` list |
+| `task_info_structured_ready.json` | `GET /v1/chat/tasks/{id}` (200) | Completed task with a `response_format`: `run_id`, `structured_output_status=ready`, the result in `structured_output`, `structured_output_reason=null` |
+| `task_info_structured_incomplete.json` | `GET /v1/chat/tasks/{id}` (200) | Completed task whose structured result is `incomplete`: `structured_output=null`, and a `structured_output_reason` with `code`, `message`, `missing_fields` and `unexpressible_fields` |
 | `task_info_waiting_plain.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with `pending_interaction.interactions=null` (question asked with no structured controls) |
 | `reply_task.json` | `POST /v1/chat/tasks/{id}/reply` (202) | Same shape as `append_task.json`: `status=running`, `accepted_at` |
 | `steps_full.json` | `GET /v1/chat/tasks/{id}/steps` (200) | Wrapper with all four `Step` types present (`message`, `thinking`, `tool_call`, `agent_delegation`) |
 | `task_events_stream.json` | `GET /v1/chat/tasks/{id}/events` (200, `text/event-stream`) | Not a single response body -- `frames` is the ordered sequence of one connection: status, a `tool_call` step's start/complete pair, a `message.delta` sequence, `message.completed`, then the `task.completed` closing frame. `closing_frame_variants` is a separate, unordered list -- one connection cannot end three different ways, so `task.input_required` and `stream.error` live outside `frames` rather than pretending to follow it. Each client's test loader turns these into its own SSE wire bytes rather than storing the raw text directly, so the fixture stays language-agnostic; the server actually emits `event: <name>\ndata: <json>\n\n` (LF-terminated), and `\r\n` is equally legal SSE -- the Python suite exercises both wire forms against the same fixture data. |
+
+### `fixtures/v1/structured_output_reason_codes.json`
+
+Not a response body: the complete set of `structured_output_reason.code`
+values the server sends, grouped by the `structured_output_status` that
+carries them (`incomplete`, `failed`). A client's own list of known server
+codes must equal this set.
+
+### `fixtures/v1/structured_schema_corpus.json`
+
+Not a response body: the corpus of `response_format` values the server's
+schema rules are tested against -- values it accepts, values it rejects with
+the rule and path it reports, and the description suffix fragments a client
+writes for constraint keywords. It is a byte-for-byte copy of
+`tests/fixtures/structured_output/structured_schema_corpus.json` in the
+server repository, SHA-256
+`5f8ef162f956483be8d2d5e32a40c9ae0765b61bdee3ea5dff1748201cbdbe9d`. The
+Python suite checks that digest; when the server's corpus changes, copy the
+new file and update the digest here and in that test.
 
 ### `fixtures/v1/errors/`
 

@@ -12,6 +12,7 @@ from xagent_sdk import (
     AgentClient,
     RunMismatch,
     RunResult,
+    StructuredOutputError,
     TaskInfo,
     TaskStatus,
     TaskTimeout,
@@ -99,7 +100,9 @@ class TestWaitExpectedRunId:
         handler = _polling_handler([_task(status, "run_other", **extra)], calls)
         with make_client(handler) as c, pytest.raises(RunMismatch) as exc:
             c.tasks.wait(10, timeout=2.0, poll_interval=0.0, expected_run_id="run_1")
+        assert isinstance(exc.value, StructuredOutputError)
         assert exc.value.code == "run_mismatch"
+        assert exc.value.status is None
         assert exc.value.http_status is None
         assert exc.value.task_id == 10
         assert exc.value.expected_run_id == "run_1"
@@ -201,6 +204,7 @@ class TestRunRunId:
             pytest.raises(RunMismatch) as exc,
         ):
             c.tasks.run(agent_id=7, message="hi", poll_interval=0.0)
+        assert isinstance(exc.value, StructuredOutputError)
         assert exc.value.code == "run_mismatch"
         assert exc.value.task_id == 10
         assert calls == ["POST /v1/chat/tasks", "GET /v1/chat/tasks/10"]

@@ -359,8 +359,11 @@ SDK-coined codes:
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored |
-| `RunMismatch` | `wait()` / `run()` with an expected run: the snapshot about to be returned shows another run or no run (code `run_mismatch`) |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
+| `RunMismatch` | `wait()` / `run()` with an expected run: the snapshot about to be returned shows another run or no run (code `run_mismatch`); `TaskInfo.parsed(expected_run_id=...)` and `RunResult.parsed()` for the same reason; a subclass of `StructuredOutputError` |
+| `UnsupportedFeature` | `create()` / `append()` / `run()` with a `response_format`: `GET /v1/features` answered 404 or does not list `structured_output` (raised before the write, `task_id=None`), or the write's response did not echo the format back (`task_id` is the accepted task) |
+| `UnsupportedSchema` | a `response_format` refused before any request: it breaks a server rule checked locally (`rule`, `path` and `message` as the server reports them) |
+| `StructuredOutputError` | `parsed()` could not return a structured result: `code` is the server's reason code with its `message`, `missing_fields` and `unexpressible_fields`, or `no_structured_output`; a run that does not match raises its subclass `RunMismatch` (code `run_mismatch`, also raised by `wait()` / `run()`), so `except StructuredOutputError` catches both |
 | `TaskTimeout` | `wait()` / `run()` deadline elapsed, or `events()`'s own `timeout` budget -- which covers every read the stream still owes, including time spent between frames, and hands over to a bounded post-close drain once a closing frame has arrived, which ends the stream cleanly rather than raising -- ran out first |
 
 The SDK does **not** retry automatically. Wrap calls with your own
@@ -507,25 +510,122 @@ wins. A name in `unresolved_for_caller` is stored anyway, because a task loads
 the skills of the user who runs it. New tasks use the new list at once; an
 existing task can keep using the previous list for a while.
 
-### 12. Wait for the run you started
+### 12. Structured output
+
+Ask for the answer as JSON that follows a schema, and read it back as a
+dict:
+
+```python
+from xagent_sdk import AgentClient, StructuredOutputError
+
+INVOICE = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "Invoice",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "number": {"type": "string"},
+                "total": {"type": "number"},
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": {"type": "string"},
+                            "amount": {"type": "number"},
+                        },
+                        "required": ["description", "amount"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["number", "total", "lines"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+with AgentClient() as agent:
+    try:
+        result = agent.tasks.run(
+            agent_id=42,
+            message="Extract the invoice: INV-001, two lines ...",
+            response_format=INVOICE,
+        )
+        invoice = result.parsed()
+    except StructuredOutputError as exc:
+        print(exc.code, exc.message, exc.missing_fields, exc.unexpressible_fields)
+```
+
+`response_format` is a JSON object (a `dict`):
+`{"type": "json_schema", "json_schema": {"name": "Invoice", "schema": {...}}}`
+(`json_schema` may also carry `description` and `"strict": true`), or
+`{"type": "text"}` to ask for no structured result. On `append()` it changes
+the format for this and later turns; `None` keeps the task's format.
+
+Once the task is `COMPLETED`, `TaskInfo` (and `RunResult`) carry three
+fields: `structured_output_status` is `"ready"`, `"incomplete"` or `"failed"`
+(`StructuredOutputStatus`); `structured_output` is the result when ready;
+`structured_output_reason` (`StructuredOutputReason`) says why not otherwise,
+with `code` (`StructuredOutputReasonCode`), `message`, and up to 20 JSON
+Pointers in `missing_fields` (values the answer did not state) and
+`unexpressible_fields` (values it stated in a form the schema cannot hold).
+They are `None` while the task runs, when it has no format, and on a server
+that predates them. `parsed()` returns the result as a dict (a copy), and
+raises `StructuredOutputError` otherwise: with the server's reason code, or
+with `no_structured_output`, a code only the SDK raises (the snapshot has no
+`structured_output_status`). The run is compared first:
+`TaskInfo.parsed(expected_run_id=...)` with the run you pass, and
+`RunResult.parsed()` with the run `run()` started. A snapshot of another
+run or of no run raises `RunMismatch` (code `run_mismatch`), a subclass of
+`StructuredOutputError`, so the `except StructuredOutputError` above
+catches it too.
+
+Before the request, the SDK checks the format:
+
+- The value is turned into the JSON that will be sent and checked against the
+  server's schema rules that do not depend on its size. A value that breaks
+  one raises `UnsupportedSchema` before any request; `rule`, `path` and
+  `message` are what the server would report (for example
+  `S3 at /properties/a/minLength: ...`). The size limits are checked by the
+  server, which answers `InvalidInput` (422). A value JSON cannot encode
+  raises `TypeError` or `ValueError` before any request when writing the
+  value out fails. A NaN, an infinity or a lone surrogate in a position the
+  local check does not cover raises `ValueError` after the
+  `GET /v1/features` check, when the task request body is encoded, with
+  httpx 0.28 or later; older httpx versions send it and the server answers
+  `InvalidInput` (422).
+- The first call with a `response_format` on a `tasks` namespace asks
+  `GET /v1/features` whether the server and key support structured output.
+  A server without that endpoint (404), or a key that cannot set a format,
+  raises `UnsupportedFeature` before the task is created. Any other failure of
+  that call is raised as it is, and asked again next time.
+- The response to the write must echo the format back. If it does not, the
+  request was accepted but the format may not be in force:
+  `UnsupportedFeature.task_id` names the task.
 
 To wait for the turn you started rather than whatever the task shows next,
 pass its `run_id`:
 
 ```python
-turn = agent.tasks.append(task_id, agent_id=42, message="...")
+turn = agent.tasks.append(task_id, agent_id=42, message="...", response_format=INVOICE)
 info = agent.tasks.wait(task_id, expected_run_id=turn.run_id)
+invoice = info.parsed(expected_run_id=turn.run_id)
 ```
 
-`wait()` raises `RunMismatch` (code `run_mismatch`) instead of returning a
-snapshot (terminal or `WAITING_FOR_USER`) of another run, so a question
-asked by a turn someone else appended does not reach you. `run()` does this
-for you with the run it started. The error carries `task_id`,
-`expected_run_id` and `actual_run_id`; call `get(task_id)` to see what the
-task shows. Besides another caller's turn, it is raised when:
+`wait()` raises `RunMismatch` (code `run_mismatch`), a subclass of
+`StructuredOutputError`, instead of returning a snapshot (terminal or
+`WAITING_FOR_USER`) of another run, so a question asked by a turn someone
+else appended does not reach you. `run()` does this for you with the run it
+started, and `RunResult.parsed()` checks it again. The error carries
+`task_id`, `expected_run_id` and `actual_run_id`; call `get(task_id)` to see
+what the task shows. Besides another caller's turn, it is raised when:
 
 - the server refused to start your turn: the task still shows the previous
-  run's result, or, for a new task, `FAILED` with no `run_id`;
+  run's result, or, for a new task, `FAILED` with no `run_id`. If that
+  previous run had no format and the new turn set one, the task reports
+  `incomplete` with `not_produced` until a turn with the format finishes;
 - the server is older than v0.8.5 and your appended turn is still queued:
   `get()` shows the previous turn until it starts (see
   [Example 5](#5-multi-turn-task)), so
@@ -534,6 +634,9 @@ task shows. Besides another caller's turn, it is raised when:
 
 Known limitations:
 
+- The SDK checks the structure of a schema and its characters (NUL, lone
+  surrogates, NaN, Infinity) locally; a schema that is too large or too deep
+  is refused by the server with `InvalidInput` (422).
 - If a turn appended to a `PAUSED` task is refused before it starts, the task
   stays `PAUSED` and `wait()` runs until `TaskTimeout` rather than raising
   `run_mismatch`.
@@ -541,6 +644,19 @@ Known limitations:
   returns cannot tell the question you answered from a new question that
   run asks next; compare `pending_interaction.question`
   (see [Example 6](#6-answer-a-pending-question)).
+- The result never holds a blank string (`""`, `" "`): a blank answer reads as
+  not stated. Use a nullable field when you need an empty string.
+- A nullable object whose fields are all nullable or fixed to one value is
+  always `null` when none of them is stated, so it cannot say "this exists
+  but has no details"; add a boolean field for that. A list of such objects
+  is likewise read as not stated.
+- Whether the answer stated a value, which allowed value it meant, and
+  whether it could be written in the required form are decided by the model
+  that extracts the result. A misreading can give a `ready` result with a
+  missing or wrong value; check results that matter.
+- Calling an older server over plain HTTP, the `response_format` field is
+  ignored silently. This SDK detects that through `GET /v1/features` and the
+  echoed fields, as described above.
 
 ## API reference
 
@@ -581,14 +697,14 @@ only.
 | Method | Returns | Notes |
 |---|---|---|
 | `AgentClient(api_key, base_url, ...)` | `AgentClient` | env-var fallback: `XAGENT_API_KEY` / `XAGENT_BASE_URL` |
-| `agent.tasks.create(*, agent_id, message, metadata=None, dispatch_class=None, priority=None, prompt_context=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` when the server queues the task for its dispatcher or `'running'` when it runs the task in-process; `dispatch_class` (`'interactive'`/`'batch'`) and `priority` (-10..10) apply to the new task only, the server validates them (422 → `InvalidInput`) and an older server ignores them; the result's `dispatch_class` shows the class the server gave the start command (`None` if not dispatched through a queue or on an older server); `run_id` names the run it started |
-| `agent.tasks.append(task_id, *, agent_id, message, metadata=None, prompt_context=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='pending'` (queued) or `'running'` (in-process); raises `TaskBusy` if the prior turn is still queued or running, `InteractionResponseRequired` if `WAITING_FOR_USER`; `run_id` names the new run |
+| `agent.tasks.create(*, agent_id, message, metadata=None, dispatch_class=None, priority=None, prompt_context=None, response_format=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` when the server queues the task for its dispatcher or `'running'` when it runs the task in-process; `dispatch_class` (`'interactive'`/`'batch'`) and `priority` (-10..10) apply to the new task only, the server validates them (422 → `InvalidInput`) and an older server ignores them; the result's `dispatch_class` shows the class the server gave the start command (`None` if not dispatched through a queue or on an older server); `run_id` names the run it started; `response_format` (a `dict`) asks for a structured result, see [Example 12](#12-structured-output) (`UnsupportedSchema` / `UnsupportedFeature`) |
+| `agent.tasks.append(task_id, *, agent_id, message, metadata=None, prompt_context=None, response_format=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='pending'` (queued) or `'running'` (in-process); raises `TaskBusy` if the prior turn is still queued or running, `InteractionResponseRequired` if `WAITING_FOR_USER`; `run_id` names the new run; `response_format` replaces the task's format (`{"type": "text"}` removes it, `None` keeps it) |
 | `agent.tasks.reply(task_id, *, agent_id, message)` | `AppendResult` | POST `/v1/chat/tasks/{id}/reply`; answers a `WAITING_FOR_USER` task's pending question and resumes its server-side run (the result's `run_id` is that run, not a new one); not idempotent |
-| `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER`; `run_id` names the run the snapshot shows |
+| `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER`; `run_id` and the `structured_output*` fields; `TaskInfo.parsed(*, expected_run_id=None)` reads the structured result |
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
 | `agent.tasks.events(task_id, *, timeout=None)` | `TaskEventStream` | GET `/v1/chat/tasks/{id}/events` (SSE); iterate decoded `StreamEvent` frames as the task runs; `closed_by` tells how the stream ended |
 | `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0, expected_run_id=None)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline; with `expected_run_id`, a returnable snapshot of another run or of no run raises `RunMismatch` (`run_mismatch`) |
-| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None)` | `RunResult` | `create` + `wait(expected_run_id=created.run_id)` + `steps`; `RunResult.run_id`; raises `RunMismatch` if the snapshot shows another run or no run |
+| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None, response_format=None)` | `RunResult` | `create` + `wait(expected_run_id=created.run_id)` + `steps`; `RunResult.run_id`, the `structured_output*` properties and `parsed()`; raises `RunMismatch` if the snapshot shows another run or no run |
 | `agent.close()` / `with ... as agent` | — | release the connection pool |
 
 **Prompt context**: `create()`, `append()` and `run()` take
@@ -604,10 +720,10 @@ length, otherwise the whole request raises `InvalidInput` (422) and
 `message` names the rejected fields. This SDK can neither set nor read
 an agent's declared fields. Declare them on the agent in the web agent
 builder. The server checks keys, value types and size. A `nan` or `inf`
-value raises `ValueError` before any request is sent with httpx 0.28 or
+value raises `ValueError` before the task request is sent with httpx 0.28 or
 later; older httpx versions send it and the server answers
 `InvalidInput`. A value JSON cannot encode, such as a `date`, raises
-`TypeError` before any request is sent. A server that predates this
+`TypeError` before the task request is sent. A server that predates this
 field ignores it silently.
 
 ### `WorkspaceClient` — hosted workspace surface (`xagent_sdk.cloud`)

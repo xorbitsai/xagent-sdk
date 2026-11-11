@@ -1,0 +1,11 @@
+{
+  "task_id": 10,
+  "agent_id": 7,
+  "status": "running",
+  "accepted_at": "2026-05-10T03:01:00Z",
+  "run_id": "run_4e5f6a7b",
+  "state_version": 4,
+  "control_state": "running",
+  "response_format_type": "text",
+  "response_format_name": ""
+}

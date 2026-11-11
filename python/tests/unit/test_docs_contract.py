@@ -130,7 +130,7 @@ class TestReplyGuidancePresent:
 
 class TestStreamingErrorTable:
     """The SDK-coined error table in README.md must list exactly the
-    four exceptions this SDK raises on its own, with events()'s two
+    seven exceptions this SDK raises on its own, with events()'s two
     stream-specific cases called out on the rows they actually belong
     to -- an edit that adds a row without updating this count, or that
     documents an events() case on the wrong row, drifts silently
@@ -142,17 +142,20 @@ class TestStreamingErrorTable:
         after_heading = text.split("SDK-coined codes:")[1]
         return after_heading.split("The SDK does **not** retry automatically.")[0]
 
-    def test_table_has_exactly_four_data_rows(self) -> None:
+    def test_table_has_exactly_seven_data_rows(self) -> None:
         rows = [
             line
             for line in self._table_block().splitlines()
             if line.strip().startswith("| `")
         ]
-        assert len(rows) == 4
+        assert len(rows) == 7
         assert {row.split("`")[1] for row in rows} == {
             "XAgentTransportError",
             "MalformedResponse",
             "RunMismatch",
+            "UnsupportedFeature",
+            "UnsupportedSchema",
+            "StructuredOutputError",
             "TaskTimeout",
         }
 
@@ -248,11 +251,14 @@ _TASKS_API_DOC = """\
 The ``client.tasks`` namespace, on both ``AgentClient`` and ``UserClient``.
 
 Six of these methods map one-to-one onto a v1 endpoint. Five of them
-are thin wrappers: build a request body, hand it to the owning client's
-``_request`` for transport + error mapping, then parse the success body
-into a frozen dataclass. ``events()`` is the exception -- it holds a
-streaming response open instead of parsing one body, so it does its own
-transport and error mapping (see its docstring).
+build a request body, hand it to the owning client's ``_request`` for
+transport + error mapping, then parse the success body into a frozen
+dataclass. With a ``response_format``, ``create()`` and ``append()`` also
+check it locally, ask ``GET /v1/features`` (once per namespace) whether
+the server supports it, and check the format the server echoes back.
+``events()`` is the exception -- it holds a streaming response open
+instead of parsing one body, so it does its own transport and error
+mapping (see its docstring).
 
 ``message`` arguments take a plain ``str`` rather than a structured
 object: the SDK only sends user-role messages (the v1 contract pins
