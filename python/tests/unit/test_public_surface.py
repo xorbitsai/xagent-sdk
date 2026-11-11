@@ -67,6 +67,7 @@ EXPECTED_SURFACE: set[str] = {
     "StructuredOutputError",
     "UnsupportedFeature",
     "UnsupportedSchema",
+    "UnsupportedModel",
     # Version
     "__version__",
 }

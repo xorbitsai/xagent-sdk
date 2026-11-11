@@ -26,6 +26,7 @@ from pydantic import (
     ValidationError,
     WithJsonSchema,
 )
+from pydantic.errors import PydanticInvalidForJsonSchema
 from typing_extensions import TypeAliasType
 
 from xagent_sdk import (
@@ -35,6 +36,7 @@ from xagent_sdk import (
     StructuredOutputError,
     StructuredOutputReasonCode,
     UnsupportedFeature,
+    UnsupportedModel,
     UnsupportedSchema,
 )
 from xagent_sdk._schema_rules import MAX_TEXT_CHARS
@@ -295,9 +297,9 @@ class TestNodeRules:
 
     @pytest.mark.parametrize("values", [[True, 1], ["a", 1], [None]])
     def test_values_of_mixed_types_are_refused(self, values: list[Any]) -> None:
-        with pytest.raises(UnsupportedSchema) as exc:
+        with pytest.raises(UnsupportedModel) as exc:
             _field_schema({"enum": values})
-        assert exc.value.rule is None
+        assert (exc.value.rule, exc.value.path) == ("model", "/properties/value")
 
     def test_numeric_becomes_number(self) -> None:
         assert _field_schema({"type": "numeric", "enum": [1.5]})["type"] == "number"
@@ -511,16 +513,30 @@ class TestParsedWithModel:
         assert self._ready(output).parsed(Tagged).tags == ["a", None]
         assert self._ready({"tags": None}).parsed(Tagged).tags == []
 
-    def test_model_that_cannot_be_converted(self) -> None:
+    def test_model_that_cannot_be_converted_raises_unsupported_model(self) -> None:
         class Free(BaseModel):
             data: dict[str, int]
 
-        with pytest.raises(StructuredOutputError) as exc:
-            self._ready({"data": {}}).parsed(Free)
-        assert exc.value.code == StructuredOutputReasonCode.CLIENT_VALIDATION_FAILED
-        assert exc.value.status == "ready"
-        assert isinstance(exc.value.__cause__, UnsupportedSchema)
-        assert exc.value.message == exc.value.__cause__.message
+        with pytest.raises(UnsupportedModel) as sent:
+            prepare_response_format(Free)
+        info = self._ready({"data": {}})
+        calls: tuple[Callable[[], object], ...] = (
+            lambda: info.parsed(Free),
+            lambda: RunResult(info, []).parsed(Free),
+        )
+        for call in calls:
+            with pytest.raises(UnsupportedModel) as exc:
+                call()
+            assert not isinstance(exc.value, StructuredOutputError)
+            assert (exc.value.rule, exc.value.path) == ("model", "/properties/data")
+            assert exc.value.message == sent.value.message
+
+    def test_error_from_generating_the_json_schema_propagates(self) -> None:
+        class Hook(BaseModel):
+            f: Callable[[], int]
+
+        with pytest.raises(PydanticInvalidForJsonSchema):
+            self._ready({"f": None}).parsed(Hook)
 
     def test_strict_model_reads_json_strings(self) -> None:
         class Stamped(BaseModel, strict=True):
@@ -851,9 +867,28 @@ class TestNotConvertible:
         with make_client(handler) as c, pytest.raises(UnsupportedSchema) as exc:
             c.tasks.create(agent_id=7, message="hi", response_format=model)
         assert requests == []
-        assert exc.value.rule is None
-        assert exc.value.path is None
+        assert type(exc.value) is UnsupportedModel
+        assert (exc.value.rule, exc.value.path) == ("model", where)
         assert f" at {where}, " in exc.value.message
+
+    def test_error_from_generating_the_json_schema_propagates(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        class Hook(BaseModel):
+            f: Callable[[], int]
+
+        requests: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests.append(req)
+            return httpx.Response(500)
+
+        with (
+            make_client(handler) as c,
+            pytest.raises(PydanticInvalidForJsonSchema),
+        ):
+            c.tasks.create(agent_id=7, message="hi", response_format=Hook)
+        assert requests == []
 
     @pytest.mark.parametrize(
         ("model", "hint"),
@@ -882,6 +917,7 @@ class TestNotConvertible:
 
         with pytest.raises(UnsupportedSchema) as exc:
             prepare_response_format(_Blank)
+        assert type(exc.value) is UnsupportedSchema
         assert (exc.value.rule, exc.value.path) == ("S12a", "/properties/kind")
 
 

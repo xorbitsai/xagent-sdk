@@ -362,8 +362,9 @@ SDK-coined codes:
 | `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
 | `RunMismatch` | `wait()` / `run()` with an expected run: the snapshot about to be returned shows another run or no run (code `run_mismatch`); `TaskInfo.parsed(expected_run_id=...)` and `RunResult.parsed()` for the same reason; a subclass of `StructuredOutputError` |
 | `UnsupportedFeature` | `create()` / `append()` / `run()` with a `response_format`: `GET /v1/features` answered 404 or does not list `structured_output` (raised before the write, `task_id=None`), or the write's response did not echo the format back (`task_id` is the accepted task) |
-| `UnsupportedSchema` | a `response_format` refused before any request: it breaks a server rule checked locally (`rule`, `path` and `message` as the server reports them), or a Pydantic model uses something the schema subset cannot express (`rule` and `path` are `None`) |
-| `StructuredOutputError` | `parsed()` could not return a structured result: `code` is the server's reason code with its `message`, `missing_fields` and `unexpressible_fields`, or `client_validation_failed` (`parsed(model)` could not convert the model or validate the result with it), or `no_structured_output`; a run that does not match raises its subclass `RunMismatch` (code `run_mismatch`, also raised by `wait()` / `run()`), so `except StructuredOutputError` catches both |
+| `UnsupportedSchema` | a `response_format` refused before any request: it breaks a server rule checked locally (`rule`, `path` and `message` as the server reports them); a Pydantic model that cannot be converted raises its subclass `UnsupportedModel` |
+| `UnsupportedModel` | a Pydantic model that cannot be converted into the schema subset, passed as `response_format` (raised before any request) or to `parsed(model)`; a subclass of `UnsupportedSchema` whose `rule` is always `"model"` (not a server rule id) and whose `path` is the position the `message` names, such as `/properties/data` |
+| `StructuredOutputError` | `parsed()` could not return a structured result: `code` is the server's reason code with its `message`, `missing_fields` and `unexpressible_fields`, or `client_validation_failed` (the ready result does not validate with the model passed to `parsed(model)`), or `no_structured_output`; a run that does not match raises its subclass `RunMismatch` (code `run_mismatch`, also raised by `wait()` / `run()`), so `except StructuredOutputError` catches both |
 | `TaskTimeout` | `wait()` / `run()` deadline elapsed, or `events()`'s own `timeout` budget -- which covers every read the stream still owes, including time spent between frames, and hands over to a bounded post-close drain once a closing frame has arrived, which ends the stream cleanly rather than raising -- ran out first |
 
 The SDK does **not** retry automatically. Wrap calls with your own
@@ -562,9 +563,10 @@ They are `None` while the task runs, when it has no format, and on a server
 that predates them. `parsed()` returns the result as a dict (a copy), or
 validated as the model you pass, and raises `StructuredOutputError` otherwise:
 with the server's reason code, or with one of the codes only the SDK raises --
-`client_validation_failed` (the conversion refuses the model or the model
-does not validate the result) and `no_structured_output` (the snapshot has no
-`structured_output_status`). The run is compared first:
+`client_validation_failed` (the model does not validate the ready result) and
+`no_structured_output` (the snapshot has no `structured_output_status`). On a
+ready result, a model that cannot be converted raises `UnsupportedModel`
+instead, as it does from `run()`. The run is compared first:
 `TaskInfo.parsed(expected_run_id=...)` with the run you pass, and
 `RunResult.parsed()` with the run `run()` started. A snapshot of another
 run or of no run raises `RunMismatch` (code `run_mismatch`), a subclass of
@@ -618,10 +620,13 @@ A Pydantic model is converted into the schema subset the server supports:
 - `dict[str, X]`, `Any`, fixed-length tuples such as `tuple[int, str]` (a
   `tuple[int, ...]` is sent as an array), unions of several non-null types
   (including discriminated unions), recursive models, `Decimal`, `Literal`s
-  that mix value types and constraint values that cannot be written (such as
-  a `format` outside `a-z0-9-`) raise `UnsupportedSchema` naming the field and
-  the reason. An error Pydantic raises while generating the model's JSON
-  schema (for example for a `Callable` field) propagates unchanged.
+  that mix value types, constraint values that cannot be written (such as a
+  `format` outside `a-z0-9-`) and constraints that make a description longer
+  than the 1024 characters the server accepts raise `UnsupportedModel`, a
+  subclass of `UnsupportedSchema`, naming the position and the reason:
+  `create()`, `append()` and `run()` before any request, and `parsed(Model)`.
+  An error Pydantic raises while generating the model's JSON schema (for
+  example for a `Callable` field) propagates unchanged.
 
 To wait for the turn you started rather than whatever the task shows next,
 pass its `run_id`:

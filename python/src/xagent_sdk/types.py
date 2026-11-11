@@ -289,6 +289,9 @@ class StructuredOutputReasonCode:
 
     ``RUN_MISMATCH``, ``CLIENT_VALIDATION_FAILED`` and ``NO_STRUCTURED_OUTPUT``
     are raised by this SDK only; the server never sends them.
+    ``CLIENT_VALIDATION_FAILED`` means only that a ready result does not
+    validate with the model passed to ``parsed(model)``; a model that cannot
+    be converted raises ``UnsupportedModel`` instead.
     """
 
     AGENT_PARTIAL = "agent_partial"
@@ -456,18 +459,22 @@ class TaskInfo:
                 status); or the snapshot has no structured
                 result at all, because the task is not ``COMPLETED``, has no
                 ``response_format`` or the server predates the fields
-                (``no_structured_output``, ``status`` ``None``); or the
-                conversion refuses ``model``, or ``model`` does not validate
-                the result, for example because of a ``format`` or length
-                constraint the server does not check
-                (``client_validation_failed``, status ``"ready"``, the
-                original error as ``__cause__``). An error Pydantic raises
-                while generating the model's JSON schema (for example
-                ``PydanticInvalidForJsonSchema`` for a ``Callable`` field)
-                propagates unchanged.
+                (``no_structured_output``, ``status`` ``None``); or
+                ``model`` does not validate the ready result, for example
+                because of a ``format`` or length constraint the server does
+                not check (``client_validation_failed``, status ``"ready"``,
+                the ``ValidationError`` as ``__cause__``).
+            UnsupportedModel: the status is ``"ready"`` and ``model`` cannot
+                be converted into the supported schema subset, as when it is
+                passed as ``response_format``; a subclass of
+                ``UnsupportedSchema``, not of ``StructuredOutputError``.
             MalformedResponse: the fields break the server's contract: a
                 ``"ready"`` status without an object, or another status
                 without a reason.
+
+        An error Pydantic raises while generating the model's JSON schema
+        (for example ``PydanticInvalidForJsonSchema`` for a ``Callable``
+        field) propagates unchanged.
         """
         if expected_run_id is not None and self.run_id != expected_run_id:
             raise _run_mismatch(self.task_id, expected_run_id, self.run_id)

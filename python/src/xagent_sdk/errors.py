@@ -251,18 +251,19 @@ class StructuredOutputError(XAgentError):
         ``expected_run_id``, or no run. It is raised as the subclass
         ``RunMismatch``, by ``TasksAPI.wait()``, ``TasksAPI.run()``,
         ``TaskInfo.parsed()`` and ``RunResult.parsed()``.
-      - ``client_validation_failed``: ``parsed(model)`` could not convert
-        ``model`` or validate the ready result with it (for example a
-        ``format`` or length constraint the server does not check); the
-        original error is the ``__cause__`` and ``status`` is ``"ready"``.
+      - ``client_validation_failed``: the ready result does not validate
+        with the ``model`` given to ``parsed(model)`` (for example because of
+        a ``format`` or length constraint the server does not check); the
+        Pydantic ``ValidationError`` is the ``__cause__`` and ``status`` is
+        ``"ready"``. A ``model`` that cannot be converted raises
+        ``UnsupportedModel`` instead.
       - ``no_structured_output``: ``parsed()`` was called on a snapshot
         without a ``structured_output_status``.
 
     So one ``except StructuredOutputError`` around ``run()`` and
     ``parsed()`` catches every code above: a run that does not match, a
-    reason code from the server, a ``model`` that cannot be converted or
-    rejects the result (``client_validation_failed``) and
-    ``no_structured_output``.
+    reason code from the server, a result the ``model`` rejects
+    (``client_validation_failed``) and ``no_structured_output``.
     ``parsed()`` raises ``MalformedResponse`` instead when the fields
     break the server's contract.
 
@@ -393,23 +394,20 @@ class UnsupportedSchema(XAgentError):
     """A ``response_format`` the SDK refuses before sending any request.
     Code ``unsupported_schema``.
 
-    When the value breaks one of the server's rules that the SDK checks
-    locally, ``rule`` is the rule id (for example ``"S3"``), ``path`` the
+    The value breaks one of the server's rules that the SDK checks
+    locally: ``rule`` is the rule id (for example ``"S3"``), ``path`` the
     rendered position (``"/properties/a/minLength"``, or ``"response_format"``
     / ``"the schema root"`` for the root), and ``message`` exactly the server's
-    message for it: ``<rule> at <path>: <text>``. ``rule`` and ``path`` are
-    ``None`` when a Pydantic model passed as ``response_format`` uses
-    something the supported schema subset cannot express (``dict[str, X]``,
-    ``Any``, a fixed-length tuple, a union of several non-null types, a
-    recursive model, ``Decimal``, a ``Literal`` mixing value types, a
-    constraint value that cannot be written such as a ``format`` outside
-    ``[a-z0-9-]+``); ``message`` then names the position and the reason,
-    and for most of them what to write instead. ``http_status`` is
+    message for it: ``<rule> at <path>: <text>``. ``http_status`` is
     ``None``: nothing was sent.
+
+    A Pydantic model that cannot be converted into the supported schema
+    subset raises the subclass ``UnsupportedModel`` instead, so
+    ``except UnsupportedSchema`` catches both.
     """
 
-    rule: str | None
-    path: str | None
+    rule: str
+    path: str
 
     def __init__(
         self,
@@ -417,12 +415,52 @@ class UnsupportedSchema(XAgentError):
         message: str,
         http_status: int | None = None,
         *,
-        rule: str | None = None,
-        path: str | None = None,
+        rule: str,
+        path: str,
     ) -> None:
         super().__init__(code, message, http_status)
         self.rule = rule
         self.path = path
+
+
+class UnsupportedModel(UnsupportedSchema):
+    """A Pydantic model, passed as ``response_format`` or to
+    ``parsed(model)``, that the SDK cannot convert into the supported schema
+    subset. Code ``unsupported_schema``.
+
+    The model uses something the subset cannot express (``dict[str, X]``,
+    ``Any``, a fixed-length tuple, a union of several non-null types, a
+    recursive model, ``Decimal``, a ``Literal`` mixing value types), or a
+    constraint that cannot be written into the description (a ``format``
+    outside ``[a-z0-9-]+``, or constraints that make a description longer
+    than the server accepts). ``create()``, ``append()`` and ``run()`` raise
+    it before any request; ``parsed(model)`` raises it instead of reading the
+    result.
+
+    A refused conversion names no server rule, so ``rule`` is always
+    ``"model"``, which is not a server rule id; ``rule`` stays a ``str`` for
+    code that handles every ``UnsupportedSchema``. ``path`` is the position
+    where the conversion stopped, as a JSON Pointer from the root of the
+    model's JSON schema (a
+    field such as ``"/properties/data"``, a keyword such as
+    ``"/properties/day/format"``, or a ``$defs`` entry under the model's own
+    name such as ``"/$defs/Node"``), or ``"the schema root"``. A nested model
+    used with a ``description`` is reported under the field that uses it, and
+    a keyword in the value branch of a scalar ``Optional`` on the field
+    itself. ``message`` names that position and the reason, and for most of
+    them what to write instead. ``http_status`` is ``None``: the SDK raises
+    it, not the server.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        http_status: int | None = None,
+        *,
+        path: str,
+    ) -> None:
+        super().__init__(code, message, http_status, rule="model", path=path)
 
 
 _CODE_MAP: dict[str, type[XAgentError]] = {

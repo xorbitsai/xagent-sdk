@@ -182,8 +182,9 @@ class TasksAPI:
 
           1. The value is written out and read back as the JSON that will be
              sent, and checked against the server's rules that do not depend
-             on its size. A value that breaks one, or a model the subset
-             cannot express, raises ``UnsupportedSchema`` before any request.
+             on its size. A value that breaks one raises ``UnsupportedSchema``
+             before any request, and a model the subset cannot express its
+             subclass ``UnsupportedModel``.
              A value JSON cannot encode raises ``TypeError`` or
              ``ValueError`` before any request when writing the value out
              fails. A NaN, an infinity or a lone surrogate in a position the

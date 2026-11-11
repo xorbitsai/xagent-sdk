@@ -4,7 +4,8 @@ conversion of a Pydantic model into the supported schema subset.
 :func:`prepare_response_format` turns the caller's value (a dict, or a
 Pydantic model class converted by :func:`convert_model`) into the JSON that
 will be sent, and refuses with :class:`UnsupportedSchema` a value that breaks
-one of the server's rules checked locally (see ``_schema_rules``).
+one of the server's rules checked locally (see ``_schema_rules``), or with
+its subclass :class:`UnsupportedModel` a model that cannot be converted.
 :func:`expected_echo` is the ``(response_format_type, response_format_name)``
 pair a server that honored the value reports back. :func:`parse_with_model`
 validates a ready structured result against the model it was requested with.
@@ -29,7 +30,7 @@ from xagent_sdk._schema_rules import (
     render_error_path,
     violation_message,
 )
-from xagent_sdk.errors import StructuredOutputError, UnsupportedSchema
+from xagent_sdk.errors import StructuredOutputError, UnsupportedModel, UnsupportedSchema
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -52,8 +53,8 @@ def prepare_response_format(value: dict[str, Any] | type[BaseModel]) -> Any:
     refused by the S1 check.
 
     Raises:
-        UnsupportedSchema: the model cannot be converted, or the value breaks
-            a rule checked locally.
+        UnsupportedModel: the model cannot be converted.
+        UnsupportedSchema: the value breaks a rule checked locally.
     """
     if isinstance(value, type) and issubclass(value, BaseModel):
         converted = convert_model(value)
@@ -101,19 +102,16 @@ def parse_with_model(output: dict[str, Any], model: type[ModelT]) -> ModelT:
     themselves are never removed.
 
     Raises:
+        UnsupportedModel: the conversion refuses the model, as it does when
+            the model is passed as ``response_format``.
         StructuredOutputError: code ``client_validation_failed`` and status
-            ``ready`` when the conversion refuses the model or the model does
-            not validate the result; the original error is the ``__cause__``.
-            An error Pydantic raises while generating the model's JSON schema
-            propagates unchanged.
+            ``ready`` when the model does not validate the result; the
+            ``ValidationError`` is the ``__cause__``.
+
+    An error Pydantic raises while generating the model's JSON schema
+    propagates unchanged.
     """
-    try:
-        default_paths = convert_model(model).default_paths
-    except UnsupportedSchema as exc:
-        raise StructuredOutputError(
-            _CLIENT_VALIDATION_FAILED, exc.message, status="ready"
-        ) from exc
-    _drop_default_nulls(output, default_paths)
+    _drop_default_nulls(output, convert_model(model).default_paths)
     try:
         return model.model_validate_json(json.dumps(output))
     except ValidationError as exc:
@@ -305,14 +303,15 @@ def convert_model(model: type[BaseModel]) -> ConvertedModel:
     when that is empty.
 
     Raises:
-        UnsupportedSchema: (``rule`` and ``path`` ``None``) the model uses
-            something the subset cannot express: an object without fixed
-            properties (``dict[str, X]``), ``Any``, a fixed-length tuple, a
-            union of several non-null types (including a discriminated
-            union), a recursive model, ``Decimal``, a ``Literal`` or enum
-            mixing value types, a constraint value that cannot be written, or
-            constraints that make a description longer than the server's
-            limit of ``MAX_TEXT_CHARS`` characters.
+        UnsupportedModel: the model uses something the subset cannot
+            express: an object without fixed properties (``dict[str, X]``),
+            ``Any``, a fixed-length tuple, a union of several non-null types
+            (including a discriminated union), a recursive model,
+            ``Decimal``, a ``Literal`` or enum mixing value types, a
+            constraint value that cannot be written, or constraints that
+            make a description longer than the server's limit of
+            ``MAX_TEXT_CHARS`` characters. ``path`` is the position the
+            message names.
     """
     raw = _strip_metadata(model.model_json_schema())
     raw_defs = raw.pop("$defs", {})
@@ -325,10 +324,11 @@ def convert_model(model: type[BaseModel]) -> ConvertedModel:
     except _ConversionError as exc:
         path = converter.path if exc.path is None else exc.path
         where = render_error_path(list(path)) or "the schema root"
-        raise UnsupportedSchema(
+        raise UnsupportedModel(
             "unsupported_schema",
             f"The model {model.__name__} cannot be used as a response_format: "
             f"at {where}, {exc}.",
+            path=where,
         ) from None
     name = re.sub(r"[^A-Za-z0-9_-]", "_", model.__name__)[:64] or "result"
     return ConvertedModel(name, root, converter.default_paths())
