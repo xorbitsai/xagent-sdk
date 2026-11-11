@@ -228,6 +228,10 @@ class TestRunRunId:
         assert result.info.run_id == "run_2"
 
 
+def test_run_mismatch_accepts_http_status_like_its_siblings() -> None:
+    assert RunMismatch("run_mismatch", "m", http_status=None).http_status is None
+
+
 class TestRunResultConstruction:
     def _info(self) -> TaskInfo:
         return TaskInfo(

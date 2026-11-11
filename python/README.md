@@ -586,8 +586,8 @@ only.
 | `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER`; `run_id` names the run the snapshot shows |
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
 | `agent.tasks.events(task_id, *, timeout=None)` | `TaskEventStream` | GET `/v1/chat/tasks/{id}/events` (SSE); iterate decoded `StreamEvent` frames as the task runs; `closed_by` tells how the stream ended |
-| `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0, expected_run_id=None)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline; with `expected_run_id`, a returnable snapshot of another run raises `RunMismatch` (`run_mismatch`) |
-| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None)` | `RunResult` | `create` + `wait(expected_run_id=created.run_id)` + `steps`; `RunResult.run_id` |
+| `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0, expected_run_id=None)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline; with `expected_run_id`, a returnable snapshot of another run or of no run raises `RunMismatch` (`run_mismatch`) |
+| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None)` | `RunResult` | `create` + `wait(expected_run_id=created.run_id)` + `steps`; `RunResult.run_id`; raises `RunMismatch` if the snapshot shows another run or no run |
 | `agent.close()` / `with ... as agent` | — | release the connection pool |
 
 **Prompt context**: `create()`, `append()` and `run()` take

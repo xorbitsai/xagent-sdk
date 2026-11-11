@@ -243,7 +243,8 @@ class RunMismatch(XAgentError):
     the snapshot it is about to return (terminal or ``WAITING_FOR_USER``)
     shows another run or no run, and so by ``TasksAPI.run()``, which passes
     the run it created. Polling stops and the snapshot is not returned;
-    call ``get(task_id)`` to read it. The task can show another run because:
+    call ``get(task_id)`` to read it. The task can show another run, or no
+    run, because:
 
       - another caller appended a turn after yours finished;
       - the server refused to start your turn: the task still shows the
