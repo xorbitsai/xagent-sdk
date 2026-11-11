@@ -2,11 +2,14 @@ import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, TypeVar
+from typing import Any, TypeVar, overload
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from xagent_sdk._structured import parse_with_model
 from xagent_sdk.errors import MalformedResponse, StructuredOutputError, _run_mismatch
+
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 class TaskStatus(StrEnum):
@@ -285,8 +288,8 @@ class StructuredOutputReasonCode:
     ``StructuredOutputError`` are plain ``str``, so a code a later server adds
     still reaches you unchanged.
 
-    ``RUN_MISMATCH`` and ``NO_STRUCTURED_OUTPUT`` are raised by this SDK
-    only; the server never sends them.
+    ``RUN_MISMATCH``, ``CLIENT_VALIDATION_FAILED`` and ``NO_STRUCTURED_OUTPUT``
+    are raised by this SDK only; the server never sends them.
     """
 
     AGENT_PARTIAL = "agent_partial"
@@ -301,6 +304,7 @@ class StructuredOutputReasonCode:
     EXTRACTION_TIMEOUT = "extraction_timeout"
     INTERNAL_ERROR = "internal_error"
     RUN_MISMATCH = "run_mismatch"
+    CLIENT_VALIDATION_FAILED = "client_validation_failed"
     NO_STRUCTURED_OUTPUT = "no_structured_output"
 
 
@@ -308,6 +312,7 @@ class StructuredOutputReasonCode:
 _SDK_ONLY_REASON_CODES = frozenset(
     {
         StructuredOutputReasonCode.RUN_MISMATCH,
+        StructuredOutputReasonCode.CLIENT_VALIDATION_FAILED,
         StructuredOutputReasonCode.NO_STRUCTURED_OUTPUT,
     }
 )
@@ -411,15 +416,37 @@ class TaskInfo:
     structured_output_status: str | None = None
     structured_output_reason: StructuredOutputReason | None = None
 
-    def parsed(self, *, expected_run_id: str | None = None) -> dict[str, Any]:
+    @overload
+    def parsed(
+        self, model: None = None, *, expected_run_id: str | None = None
+    ) -> dict[str, Any]: ...
+
+    @overload
+    def parsed(
+        self, model: type[_ModelT], *, expected_run_id: str | None = None
+    ) -> _ModelT: ...
+
+    def parsed(
+        self,
+        model: type[BaseModel] | None = None,
+        *,
+        expected_run_id: str | None = None,
+    ) -> dict[str, Any] | BaseModel:
         """The structured result of this snapshot.
 
         With ``expected_run_id``, the snapshot must show that run first;
         another run or no run (``run_id`` is ``None``) raises
         ``RunMismatch`` (code ``run_mismatch``), a subclass of
         ``StructuredOutputError``. Then, when ``structured_output_status``
-        is ``"ready"``, returns a deep copy of ``structured_output``; the
-        snapshot itself is not changed.
+        is ``"ready"``, returns a deep copy of ``structured_output``, or,
+        with ``model``, that copy validated as ``model``; the snapshot
+        itself is not changed.
+
+        A field of ``model`` that has a default value reads as null in
+        ``structured_output`` when the answer did not state it. With
+        ``model``, those nulls are removed before validation so the defaults
+        apply; an ``Optional`` field whose default is not ``None`` stays
+        ``None``. Without ``model`` the dict keeps the nulls.
 
         Raises:
             RunMismatch: ``expected_run_id`` was given and the snapshot
@@ -430,7 +457,15 @@ class TaskInfo:
                 status); or the snapshot has no structured
                 result at all, because the task is not ``COMPLETED``, has no
                 ``response_format`` or the server predates the fields
-                (``no_structured_output``, ``status`` ``None``).
+                (``no_structured_output``, ``status`` ``None``); or the
+                conversion refuses ``model``, or ``model`` does not validate
+                the result, for example because of a ``format`` or length
+                constraint the server does not check
+                (``client_validation_failed``, status ``"ready"``, the
+                original error as ``__cause__``). An error Pydantic raises
+                while generating the model's JSON schema (for example
+                ``PydanticInvalidForJsonSchema`` for a ``Callable`` field)
+                propagates unchanged.
             MalformedResponse: the fields break the server's contract: a
                 ``"ready"`` status without an object, or another status
                 without a reason.
@@ -451,7 +486,10 @@ class TaskInfo:
                     "structured_output_status is 'ready' but structured_output "
                     "is not an object"
                 )
-            return copy.deepcopy(self.structured_output)
+            output = copy.deepcopy(self.structured_output)
+            if model is None:
+                return output
+            return parse_with_model(output, model)
         reason = self.structured_output_reason
         if reason is None:
             raise _malformed_structured_output(
@@ -602,11 +640,19 @@ class RunResult:
     def structured_output_reason(self) -> StructuredOutputReason | None:
         return self.info.structured_output_reason
 
-    def parsed(self) -> dict[str, Any]:
-        """``self.info.parsed(expected_run_id=self.run_id)``: the structured
-        result, after checking that ``info`` shows the run ``run()``
-        started."""
-        return self.info.parsed(expected_run_id=self.run_id)
+    @overload
+    def parsed(self, model: None = None) -> dict[str, Any]: ...
+
+    @overload
+    def parsed(self, model: type[_ModelT]) -> _ModelT: ...
+
+    def parsed(
+        self, model: type[BaseModel] | None = None
+    ) -> dict[str, Any] | BaseModel:
+        """``self.info.parsed(model, expected_run_id=self.run_id)``: the
+        structured result, after checking that ``info`` shows the run
+        ``run()`` started."""
+        return self.info.parsed(model, expected_run_id=self.run_id)
 
 
 # --- Private parsers --------------------------------------------------

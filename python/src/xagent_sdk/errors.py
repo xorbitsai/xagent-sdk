@@ -251,12 +251,18 @@ class StructuredOutputError(XAgentError):
         ``expected_run_id``, or no run. It is raised as the subclass
         ``RunMismatch``, by ``TasksAPI.wait()``, ``TasksAPI.run()``,
         ``TaskInfo.parsed()`` and ``RunResult.parsed()``.
+      - ``client_validation_failed``: ``parsed(model)`` could not convert
+        ``model`` or validate the ready result with it (for example a
+        ``format`` or length constraint the server does not check); the
+        original error is the ``__cause__`` and ``status`` is ``"ready"``.
       - ``no_structured_output``: ``parsed()`` was called on a snapshot
         without a ``structured_output_status``.
 
     So one ``except StructuredOutputError`` around ``run()`` and
     ``parsed()`` catches every code above: a run that does not match, a
-    reason code from the server and ``no_structured_output``.
+    reason code from the server, a ``model`` that cannot be converted or
+    rejects the result (``client_validation_failed``) and
+    ``no_structured_output``.
     ``parsed()`` raises ``MalformedResponse`` instead when the fields
     break the server's contract.
 
@@ -387,16 +393,23 @@ class UnsupportedSchema(XAgentError):
     """A ``response_format`` the SDK refuses before sending any request.
     Code ``unsupported_schema``.
 
-    The value breaks one of the server's rules that the SDK checks
-    locally: ``rule`` is the rule id (for example ``"S3"``), ``path`` the
+    When the value breaks one of the server's rules that the SDK checks
+    locally, ``rule`` is the rule id (for example ``"S3"``), ``path`` the
     rendered position (``"/properties/a/minLength"``, or ``"response_format"``
     / ``"the schema root"`` for the root), and ``message`` exactly the server's
-    message for it: ``<rule> at <path>: <text>``. ``http_status`` is
+    message for it: ``<rule> at <path>: <text>``. ``rule`` and ``path`` are
+    ``None`` when a Pydantic model passed as ``response_format`` uses
+    something the supported schema subset cannot express (``dict[str, X]``,
+    ``Any``, a fixed-length tuple, a union of several non-null types, a
+    recursive model, ``Decimal``, a ``Literal`` mixing value types, a
+    constraint value that cannot be written such as a ``format`` outside
+    ``[a-z0-9-]+``); ``message`` then names the position and the reason,
+    and for most of them what to write instead. ``http_status`` is
     ``None``: nothing was sent.
     """
 
-    rule: str
-    path: str
+    rule: str | None
+    path: str | None
 
     def __init__(
         self,
@@ -404,8 +417,8 @@ class UnsupportedSchema(XAgentError):
         message: str,
         http_status: int | None = None,
         *,
-        rule: str,
-        path: str,
+        rule: str | None = None,
+        path: str | None = None,
     ) -> None:
         super().__init__(code, message, http_status)
         self.rule = rule

@@ -2,6 +2,8 @@ import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
+from pydantic import BaseModel
+
 from xagent_sdk._base import _json_body
 from xagent_sdk._events import TaskEventStream, open_task_event_stream
 from xagent_sdk._structured import expected_echo, prepare_response_format
@@ -123,7 +125,7 @@ class TasksAPI:
         dispatch_class: Literal["interactive", "batch"] | None = None,
         priority: int | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
-        response_format: dict[str, Any] | None = None,
+        response_format: dict[str, Any] | type[BaseModel] | None = None,
     ) -> CreateTaskResult:
         """``POST /v1/chat/tasks`` -- start a new task with the first user
         message. The server returns 202 with ``status='pending'`` when
@@ -171,14 +173,17 @@ class TasksAPI:
         the task completes (``TaskInfo.parsed()`` does this). Pass a JSON
         object (a ``dict``) such as
         ``{"type": "json_schema", "json_schema": {"name": ..., "schema": ...}}``
-        (``json_schema`` may also carry ``description`` and ``strict: true``)
-        or ``{"type": "text"}`` for none. It is sent only when not ``None``,
-        and unlike the fields above it is never silently ignored:
+        (``json_schema`` may also carry ``description`` and ``strict: true``),
+        ``{"type": "text"}`` for none, or a Pydantic model class, which is
+        converted into the supported schema subset and named after the class
+        (see "Structured output" in the README); then pass the same class to
+        ``parsed()``. It is sent only when not ``None``, and unlike the fields
+        above it is never silently ignored:
 
           1. The value is written out and read back as the JSON that will be
              sent, and checked against the server's rules that do not depend
-             on its size. A value that breaks one raises ``UnsupportedSchema``
-             before any request.
+             on its size. A value that breaks one, or a model the subset
+             cannot express, raises ``UnsupportedSchema`` before any request.
              A value JSON cannot encode raises ``TypeError`` or
              ``ValueError`` before any request when writing the value out
              fails. A NaN, an infinity or a lone surrogate in a position the
@@ -233,7 +238,7 @@ class TasksAPI:
         message: str,
         metadata: dict[str, Any] | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
-        response_format: dict[str, Any] | None = None,
+        response_format: dict[str, Any] | type[BaseModel] | None = None,
     ) -> AppendResult:
         """``POST /v1/chat/tasks/{task_id}/messages`` -- append the next
         user turn to an existing task. Server returns 202 with
@@ -249,8 +254,8 @@ class TasksAPI:
         stored; an object replaces the stored value for this and later turns;
         ``{}`` clears it, so later turns carry none.
 
-        ``response_format`` is a JSON object (a ``dict``), checked and sent as
-        described on ``create()``.
+        ``response_format`` is a JSON object (a ``dict``) or a Pydantic model
+        class, checked and sent as described on ``create()``.
         ``None`` (the default) sends nothing and the task keeps its format; a
         ``json_schema`` value replaces it for this and later turns;
         ``{"type": "text"}`` removes it. An ``UnsupportedFeature`` raised
@@ -734,7 +739,7 @@ class TasksAPI:
         dispatch_class: Literal["interactive", "batch"] | None = None,
         priority: int | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
-        response_format: dict[str, Any] | None = None,
+        response_format: dict[str, Any] | type[BaseModel] | None = None,
     ) -> RunResult:
         """Single-turn convenience: ``create()`` + ``wait()`` + ``steps()``.
 

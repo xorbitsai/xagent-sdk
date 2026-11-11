@@ -1,0 +1,761 @@
+"""Pydantic models as ``response_format``: the conversion into the supported
+schema subset, fields with default values, and ``parsed(model)``.
+
+The suite runs under every supported Pydantic version; an expectation that
+differs between versions says so.
+"""
+
+import enum
+import json
+import re
+from collections.abc import Callable
+from decimal import Decimal
+from pathlib import Path
+from typing import Annotated, Any, Generic, Literal, TypeVar
+
+import httpx
+import pydantic
+import pytest
+from pydantic import (
+    BaseModel,
+    Field,
+    NonNegativeFloat,
+    ValidationError,
+    WithJsonSchema,
+)
+
+from xagent_sdk import (
+    AgentClient,
+    RunMismatch,
+    RunResult,
+    StructuredOutputError,
+    StructuredOutputReasonCode,
+    UnsupportedSchema,
+)
+from xagent_sdk._structured import constraint_fragment, convert_model
+from xagent_sdk.types import _parse_task_info
+
+from ._fixtures import response
+
+_PYDANTIC_2_5 = pydantic.VERSION.startswith("2.5.")
+
+_CORPUS: dict[str, Any] = json.loads(
+    (
+        Path(__file__).resolve().parents[3]
+        / "shared"
+        / "fixtures"
+        / "v1"
+        / "structured_schema_corpus.json"
+    ).read_text(encoding="utf-8")
+)
+
+# How the server recognizes the constraint suffix of a description.
+_INT = r"(?:0|[1-9][0-9]*)"
+_NUM = r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
+_JSTR = r'"(?:[^"\\]|\\.)*"'
+_FRAG = (
+    r"(?: Format: [a-z0-9-]+\."
+    rf"| Min length: {_INT}\.| Max length: {_INT}\."
+    rf"| Minimum: {_NUM}\.| Maximum: {_NUM}\."
+    rf"| Greater than: {_NUM}\.| Less than: {_NUM}\."
+    rf"| Multiple of: {_NUM}\."
+    rf"| Min items: {_INT}\.| Max items: {_INT}\."
+    r"| Unique items\."
+    rf"| Pattern: {_JSTR}\.)"
+)
+SUFFIX_RE = re.compile(rf"(?:{_FRAG})+\Z")
+
+
+class Color(enum.Enum):
+    RED = "red"
+    BLUE = "blue"
+
+
+class Address(BaseModel):
+    """Postal address."""
+
+    street: str
+    city: str
+
+
+class Sub(BaseModel):
+    a: int = 1
+
+
+class Item(BaseModel):
+    note: str = ""
+
+
+class Options(BaseModel):
+    verbose: bool = False
+    limit: int = 10
+
+
+class Shapes(BaseModel):
+    single: Literal["x"]
+    maybe_choice: Literal["a", "b"] | None
+    maybe_single: Literal["x"] | None
+    maybe_address: Address | None
+    color: Color
+    items: list[Item]
+    home: Address = Field(description="home address")
+
+
+class Defaults(BaseModel):
+    note: str = ""
+    currency: str = "USD"
+    tags: list[str] = Field(default_factory=list)
+    items: list[Item]
+    nick: str | None = "x"
+    sub: Sub = Sub()
+    choice: Literal["a", None] = "a"
+    options: Options
+
+
+class WithSub(BaseModel):
+    sub: Sub = Sub()
+
+
+class OnlyHome(BaseModel):
+    home: Address = Field(description="home address")
+
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    items: list[T]
+
+
+def _all_nodes(schema: Any) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    stack = [schema]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            found.append(node)
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return found
+
+
+class TestShapes:
+    def test_shapes_convert_the_same_on_every_version(self) -> None:
+        converted = convert_model(Shapes)
+        assert converted.name == "Shapes"
+        assert converted.default_paths == {"/items/-/note"}
+        address = {
+            "type": "object",
+            "properties": {
+                "street": {"type": "string", "title": "Street"},
+                "city": {"type": "string", "title": "City"},
+            },
+            "required": ["street", "city"],
+            "additionalProperties": False,
+            "title": "Address",
+        }
+        assert converted.schema == {
+            "type": "object",
+            "properties": {
+                "single": {"type": "string", "const": "x", "title": "Single"},
+                "maybe_choice": {
+                    "type": ["string", "null"],
+                    "enum": ["a", "b", None],
+                    "title": "Maybe Choice",
+                },
+                "maybe_single": {
+                    "type": ["string", "null"],
+                    "enum": ["x", None],
+                    "title": "Maybe Single",
+                },
+                "maybe_address": {
+                    "anyOf": [{"$ref": "#/$defs/d1"}, {"type": "null"}],
+                },
+                "color": {"$ref": "#/$defs/d2"},
+                "items": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/d3"},
+                    "title": "Items",
+                },
+                "home": {**address, "description": "home address"},
+            },
+            "required": [
+                "single",
+                "maybe_choice",
+                "maybe_single",
+                "maybe_address",
+                "color",
+                "items",
+                "home",
+            ],
+            "additionalProperties": False,
+            "title": "Shapes",
+            "$defs": {
+                "d1": {**address, "description": "Postal address."},
+                "d2": {"type": "string", "enum": ["red", "blue"], "title": "Color"},
+                "d3": {
+                    "type": "object",
+                    "properties": {
+                        "note": {"type": ["string", "null"], "title": "Note"}
+                    },
+                    "required": ["note"],
+                    "additionalProperties": False,
+                    "title": "Item",
+                },
+            },
+        }
+
+    def test_described_nested_field_is_inlined_without_a_defs_entry(self) -> None:
+        schema = convert_model(OnlyHome).schema
+        assert "$defs" not in schema
+        assert schema["properties"]["home"]["description"] == "home address"
+
+    def test_defs_are_named_by_first_reference_in_pre_order(self) -> None:
+        class C(BaseModel):
+            v: int
+
+        class A(BaseModel):
+            c: C
+
+        class B(BaseModel):
+            v: int
+
+        class Root(BaseModel):
+            a: A
+            b: B
+            c: C
+
+        schema = convert_model(Root).schema
+        assert [d["title"] for d in schema["$defs"].values()] == ["A", "C", "B"]
+        assert list(schema["$defs"]) == ["d1", "d2", "d3"]
+        assert schema["properties"]["c"] == {"$ref": "#/$defs/d2"}
+
+    @pytest.mark.parametrize(
+        ("model", "name"),
+        [(Page[Item], "Page_Item_"), (type("a" * 70, (BaseModel,), {}), "a" * 64)],
+    )
+    def test_format_name(self, model: type[BaseModel], name: str) -> None:
+        assert convert_model(model).name == name
+
+
+def _field_schema(extra: dict[str, Any]) -> dict[str, Any]:
+    """The converted schema of one required field whose Pydantic schema is
+    ``extra``."""
+    model = pydantic.create_model(
+        "One", value=(Annotated[int, WithJsonSchema(extra)], ...)
+    )
+    node: dict[str, Any] = convert_model(model).schema["properties"]["value"]
+    return node
+
+
+class FloatChoice(float, enum.Enum):
+    LOW = 1.5
+    HIGH = 2.5
+
+
+class TestNodeRules:
+    def test_metadata_keywords_are_removed(self) -> None:
+        node = _field_schema(
+            {
+                "type": "string",
+                "default": "d",
+                "examples": ["e"],
+                "deprecated": True,
+                "readOnly": True,
+                "writeOnly": True,
+            }
+        )
+        assert node == {"type": "string", "title": "Value"}
+
+    @pytest.mark.parametrize(
+        ("values", "inferred"),
+        [
+            (["a", "b"], "string"),
+            ([1, 2], "integer"),
+            ([1, 2.5], "number"),
+            ([True, False], "boolean"),
+            (["a", None], ["string", "null"]),
+        ],
+    )
+    def test_type_is_inferred_from_values(
+        self, values: list[Any], inferred: Any
+    ) -> None:
+        assert _field_schema({"enum": values})["type"] == inferred
+
+    @pytest.mark.parametrize("values", [[True, 1], ["a", 1], [None]])
+    def test_values_of_mixed_types_are_refused(self, values: list[Any]) -> None:
+        with pytest.raises(UnsupportedSchema) as exc:
+            _field_schema({"enum": values})
+        assert exc.value.rule is None
+
+    def test_numeric_becomes_number(self) -> None:
+        assert _field_schema({"type": "numeric", "enum": [1.5]})["type"] == "number"
+
+        class Pick(BaseModel):
+            choice: FloatChoice
+
+        defs = convert_model(Pick).schema["$defs"]
+        assert defs["d1"] == {
+            "type": "number",
+            "enum": [1.5, 2.5],
+            "title": "FloatChoice",
+        }
+
+
+class TestDefaults:
+    def test_default_fields_become_nullable(self) -> None:
+        converted = convert_model(Defaults)
+        properties = converted.schema["properties"]
+        assert properties["note"]["type"] == ["string", "null"]
+        assert properties["currency"]["type"] == ["string", "null"]
+        assert properties["tags"]["anyOf"][1] == {"type": "null"}
+        assert properties["sub"]["anyOf"][1] == {"type": "null"}
+        assert converted.default_paths == {
+            "/note",
+            "/currency",
+            "/tags",
+            "/items/-/note",
+            "/sub",
+            "/sub/a",
+            "/options/verbose",
+            "/options/limit",
+        }
+        for node in _all_nodes(converted.schema):
+            assert " Default:" not in node.get("description", "")
+
+    def test_defaulted_nested_model_converts_the_same_on_every_version(self) -> None:
+        schema = convert_model(WithSub).schema
+        assert schema["properties"]["sub"] == {
+            "anyOf": [{"$ref": "#/$defs/d1"}, {"type": "null"}]
+        }
+        assert schema["$defs"]["d1"]["title"] == "Sub"
+
+    def test_parsed_applies_defaults_only_with_a_model(self) -> None:
+        output = {
+            "note": None,
+            "currency": None,
+            "tags": None,
+            "items": [{"note": None}, {"note": "kept"}],
+            "nick": None,
+            "sub": {"a": None},
+            "choice": None,
+            "options": {"verbose": None, "limit": None},
+        }
+        info = _parse_task_info(
+            {
+                **response("task_info_completed"),
+                "structured_output_status": "ready",
+                "structured_output": output,
+            }
+        )
+        parsed = info.parsed(Defaults)
+        assert parsed == Defaults(
+            items=[Item(), Item(note="kept")],
+            nick=None,
+            choice=None,
+            options=Options(),
+        )
+        assert parsed.sub == Sub(a=1)
+        assert info.parsed() == output
+        assert info.structured_output == output
+
+
+class TestParsedWithModel:
+    def _ready(self, output: dict[str, Any]) -> Any:
+        return _parse_task_info(
+            {
+                **response("task_info_completed"),
+                "structured_output_status": "ready",
+                "structured_output": output,
+            }
+        )
+
+    def test_null_array_elements_are_kept(self) -> None:
+        class Tagged(BaseModel):
+            tags: list[str | None] = Field(default_factory=list)
+
+        output = {"tags": ["a", None]}
+        assert self._ready(output).parsed(Tagged).tags == ["a", None]
+        assert self._ready({"tags": None}).parsed(Tagged).tags == []
+
+    def test_model_that_cannot_be_converted(self) -> None:
+        class Free(BaseModel):
+            data: dict[str, int]
+
+        with pytest.raises(StructuredOutputError) as exc:
+            self._ready({"data": {}}).parsed(Free)
+        assert exc.value.code == StructuredOutputReasonCode.CLIENT_VALIDATION_FAILED
+        assert exc.value.status == "ready"
+        assert isinstance(exc.value.__cause__, UnsupportedSchema)
+
+    def test_result_that_does_not_validate(self) -> None:
+        class Dated(BaseModel):
+            when: pydantic.PastDate
+
+        with pytest.raises(StructuredOutputError) as exc:
+            self._ready({"when": "not a date"}).parsed(Dated)
+        assert exc.value.code == StructuredOutputReasonCode.CLIENT_VALIDATION_FAILED
+        assert exc.value.status == "ready"
+        assert isinstance(exc.value.__cause__, ValidationError)
+
+
+# The server's judgement of the converted ``Person`` schema for five answers:
+# the status, and the output or the reason code with its two field lists.
+class _Address(BaseModel):
+    street: str
+    city: str
+
+
+class _Shift(BaseModel):
+    date: str
+    note: str = ""
+
+
+class Person(BaseModel):
+    name: str
+    address: _Address | None
+    options: Options
+    tags: list[str] = Field(default_factory=list)
+    currency: Literal["USD", "EUR"] = "USD"
+    shifts: list[_Shift]
+    nick: str | None = "x"
+
+
+_PERSON_SCHEMA = (
+    '{"type": "object", "properties": {"name": {"type": "string", "title": "Name"}, '
+    '"address": {"anyOf": [{"$ref": "#/$defs/d1"}, {"type": "null"}]}, '
+    '"options": {"$ref": "#/$defs/d2"}, "tags": {"anyOf": [{"type": "array", '
+    '"items": {"type": "string"}, "title": "Tags"}, {"type": "null"}]}, '
+    '"currency": {"type": ["string", "null"], "enum": ["USD", "EUR", null], '
+    '"title": "Currency"}, "shifts": {"type": "array", "items": {"$ref": '
+    '"#/$defs/d3"}, "title": "Shifts"}, "nick": {"type": ["string", "null"], '
+    '"title": "Nick"}}, "required": ["name", "address", "options", "tags", '
+    '"currency", "shifts", "nick"], "additionalProperties": false, "title": '
+    '"Person", "$defs": {"d1": {"type": "object", "properties": {"street": '
+    '{"type": "string", "title": "Street"}, "city": {"type": "string", "title": '
+    '"City"}}, "required": ["street", "city"], "additionalProperties": false, '
+    '"title": "_Address"}, "d2": {"type": "object", "properties": {"verbose": '
+    '{"type": ["boolean", "null"], "title": "Verbose"}, "limit": {"type": '
+    '["integer", "null"], "title": "Limit"}}, "required": ["verbose", "limit"], '
+    '"additionalProperties": false, "title": "Options"}, "d3": {"type": "object", '
+    '"properties": {"date": {"type": "string", "title": "Date"}, "note": {"type": '
+    '["string", "null"], "title": "Note"}}, "required": ["date", "note"], '
+    '"additionalProperties": false, "title": "_Shift"}}}'
+)
+_UNSTATED = {
+    "name": "Alice",
+    "address": None,
+    "options": {"verbose": None, "limit": None},
+    "tags": None,
+    "currency": None,
+    "shifts": [{"date": "2025-03-03", "note": None}],
+    "nick": None,
+}
+_SERVER_OUTCOMES: dict[str, dict[str, Any]] = {
+    "nothing-optional-stated": {"status": "ready", "output": _UNSTATED},
+    "options-skeleton-and-empty-tags": {
+        "status": "ready",
+        "output": {**_UNSTATED, "tags": []},
+    },
+    "currency-not-expressible": {
+        "status": "incomplete",
+        "code": "value_not_expressible",
+        "missing_fields": [],
+        "unexpressible_fields": ["/currency"],
+    },
+    "only-street-stated": {
+        "status": "incomplete",
+        "code": "information_missing",
+        "missing_fields": ["/address/city"],
+        "unexpressible_fields": [],
+    },
+    "shifts-mentioned-without-items": {
+        "status": "incomplete",
+        "code": "information_missing",
+        "missing_fields": ["/shifts"],
+        "unexpressible_fields": [],
+    },
+}
+
+
+def _snapshot(outcome: dict[str, Any]) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        **response("task_info_completed"),
+        "run_id": "run_1",
+        "structured_output_status": outcome["status"],
+    }
+    if outcome["status"] == "ready":
+        body["structured_output"] = outcome["output"]
+        return body
+    reason: dict[str, Any] = {"code": outcome["code"], "message": "m"}
+    for key in ("missing_fields", "unexpressible_fields"):
+        if outcome[key]:
+            reason[key] = outcome[key]
+    body["structured_output_reason"] = reason
+    return body
+
+
+class TestServerJudgement:
+    def test_person_converts_the_same_on_every_version(self) -> None:
+        assert json.dumps(convert_model(Person).schema) == _PERSON_SCHEMA
+
+    def _parsed(self, make_client: Callable[..., AgentClient], case: str) -> Person:
+        body = _snapshot(_SERVER_OUTCOMES[case])
+        with make_client(lambda req: httpx.Response(200, json=body)) as c:
+            info = c.tasks.get(10)
+        return info.parsed(Person, expected_run_id="run_1")
+
+    def test_unstated_default_fields_get_their_defaults(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        person = self._parsed(make_client, "nothing-optional-stated")
+        assert person == Person(
+            name="Alice",
+            address=None,
+            options=Options(),
+            shifts=[_Shift(date="2025-03-03")],
+            nick=None,
+        )
+
+    def test_stated_empty_list_is_kept(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        person = self._parsed(make_client, "options-skeleton-and-empty-tags")
+        assert person.options == Options()
+        assert person.tags == []
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            "currency-not-expressible",
+            "only-street-stated",
+            "shifts-mentioned-without-items",
+        ],
+    )
+    def test_incomplete_answers_raise(
+        self, make_client: Callable[..., AgentClient], case: str
+    ) -> None:
+        outcome = _SERVER_OUTCOMES[case]
+        with pytest.raises(StructuredOutputError) as exc:
+            self._parsed(make_client, case)
+        assert exc.value.code == outcome["code"]
+        assert exc.value.status == "incomplete"
+        assert exc.value.missing_fields == outcome["missing_fields"]
+        assert exc.value.unexpressible_fields == outcome["unexpressible_fields"]
+
+    @pytest.mark.parametrize("actual", ["run_2", None])
+    def test_run_is_compared_before_the_model(self, actual: str | None) -> None:
+        # The result does not validate as Person; the run is compared first.
+        body = {**_snapshot({"status": "ready", "output": {}}), "run_id": actual}
+        info = _parse_task_info(body)
+        calls: tuple[Callable[[], object], ...] = (
+            lambda: info.parsed(Person, expected_run_id="run_1"),
+            lambda: RunResult(info, [], "run_1").parsed(Person),
+        )
+        for call in calls:
+            with pytest.raises(RunMismatch) as exc:
+                call()
+            assert exc.value.code == StructuredOutputReasonCode.RUN_MISMATCH
+            assert exc.value.expected_run_id == "run_1"
+            assert exc.value.actual_run_id == actual
+            assert exc.value.__cause__ is None
+
+
+class _Free(BaseModel):
+    data: dict[str, int]
+
+
+class _Anything(BaseModel):
+    data: Any
+
+
+class _Pair(BaseModel):
+    pair: tuple[int, str]
+
+
+class _Either(BaseModel):
+    value: int | str
+
+
+class _Cat(BaseModel):
+    kind: Literal["cat"]
+
+
+class _Dog(BaseModel):
+    kind: Literal["dog"]
+
+
+class _Pet(BaseModel):
+    pet: _Cat | _Dog = Field(discriminator="kind")
+
+
+class _Node(BaseModel):
+    children: list["_Node"]
+
+
+class _Tree(BaseModel):
+    root: _Node
+
+
+class _Money(BaseModel):
+    amount: Decimal
+
+
+class _FloatOrStr(BaseModel):
+    v: float | str
+
+
+class _BadFormat(BaseModel):
+    day: str = Field(json_schema_extra={"format": "date\n"})
+
+
+class _Mixed(BaseModel):
+    flag: Literal[True, 1]
+
+
+class _Blank(BaseModel):
+    kind: Literal[""]
+
+
+_NOT_CONVERTIBLE: list[tuple[type[BaseModel], str]] = [
+    (_Free, "/properties/data"),
+    (_Anything, "/properties/data"),
+    (_Pair, "/properties/pair"),
+    (_Either, "/properties/value"),
+    (_Pet, "/properties/pet"),
+    (_Node, "/$defs/_Node"),
+    (_Tree, "/$defs/_Node"),
+    (_Money, "/properties/amount"),
+    (_FloatOrStr, "/properties/v"),
+    (_BadFormat, "/properties/day/format"),
+    (_Mixed, "/properties/flag"),
+]
+
+
+class TestNotConvertible:
+    @pytest.mark.parametrize(
+        ("model", "where"),
+        _NOT_CONVERTIBLE,
+        ids=[model.__name__ for model, _ in _NOT_CONVERTIBLE],
+    )
+    def test_refused_before_any_request(
+        self,
+        make_client: Callable[..., AgentClient],
+        model: type[BaseModel],
+        where: str,
+    ) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests.append(req)
+            return httpx.Response(500)
+
+        with make_client(handler) as c, pytest.raises(UnsupportedSchema) as exc:
+            c.tasks.create(agent_id=7, message="hi", response_format=model)
+        assert requests == []
+        assert exc.value.rule is None
+        assert exc.value.path is None
+        assert f" at {where}, " in exc.value.message
+
+    @pytest.mark.parametrize(
+        ("model", "hint"),
+        [
+            (_Money, "A number-or-string union (such as Decimal) is not supported"),
+            (
+                _FloatOrStr,
+                "A number-or-string union (such as Decimal) is not supported",
+            ),
+            (_Pet, "discriminated union"),
+        ],
+        ids=["decimal", "float-or-str", "discriminated-union"],
+    )
+    def test_refusal_names_the_unsupported_construct(
+        self, model: type[BaseModel], hint: str
+    ) -> None:
+        from xagent_sdk._structured import prepare_response_format
+
+        with pytest.raises(UnsupportedSchema) as exc:
+            prepare_response_format(model)
+        assert hint.lower() in exc.value.message.lower()
+        assert "Decimal is not supported" not in exc.value.message
+
+    def test_blank_literal_breaks_a_server_rule(self) -> None:
+        from xagent_sdk._structured import prepare_response_format
+
+        with pytest.raises(UnsupportedSchema) as exc:
+            prepare_response_format(_Blank)
+        assert (exc.value.rule, exc.value.path) == ("S12a", "/properties/kind")
+
+
+class TestModelOnTheWire:
+    def test_create_sends_the_converted_model(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            requests.append(req)
+            if req.url.path == "/v1/features":
+                return httpx.Response(200, json=response("features"))
+            return httpx.Response(
+                202,
+                json={
+                    **response("create_task"),
+                    "response_format_type": "json_schema",
+                    "response_format_name": "Page_Item_",
+                },
+            )
+
+        with make_client(handler) as c:
+            c.tasks.create(agent_id=7, message="hi", response_format=Page[Item])
+        sent = json.loads(requests[1].content)["response_format"]
+        assert sent == {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "Page_Item_",
+                "schema": convert_model(Page[Item]).schema,
+            },
+        }
+
+
+class Constrained(BaseModel):
+    code: str = Field(min_length=1, max_length=5, pattern=r"^\d{3}\.x$")
+    ratio: NonNegativeFloat
+    count: int = Field(gt=0, le=10, multiple_of=2, description="How many.")
+    tags: set[str] = Field(min_length=1, max_length=3)
+    day: str = Field(json_schema_extra={"format": "date"})
+    upper: float = Field(lt=1e20, ge=-0.5)
+
+
+class TestConstraintSuffix:
+    @pytest.mark.parametrize(
+        "case",
+        _CORPUS["suffix_fragments"],
+        ids=[case["id"] for case in _CORPUS["suffix_fragments"]],
+    )
+    def test_fragment_matches_the_corpus(self, case: dict[str, Any]) -> None:
+        assert constraint_fragment(case["keyword"], case["value"]) == case["fragment"]
+
+    def test_unique_items_false_writes_nothing(self) -> None:
+        assert constraint_fragment("uniqueItems", False) is None
+
+    def test_written_descriptions(self) -> None:
+        properties = convert_model(Constrained).schema["properties"]
+        zero = "0.0" if _PYDANTIC_2_5 else "0"
+        expected = {
+            "code": ' Min length: 1. Max length: 5. Pattern: "^\\\\d{3}\\\\.x$".',
+            "ratio": f" Minimum: {zero}.",
+            "count": "How many. Maximum: 10. Greater than: 0. Multiple of: 2.",
+            "tags": " Min items: 1. Max items: 3. Unique items.",
+            "day": " Format: date.",
+            "upper": " Minimum: -0.5. Less than: 1e+20.",
+        }
+        assert {k: v["description"] for k, v in properties.items()} == expected
+        for name, description in expected.items():
+            match = SUFFIX_RE.search(description)
+            assert match is not None, name
+            original = "How many." if name == "count" else ""
+            assert match.group(0) == description[len(original) :]
+            for keyword in ("minLength", "pattern", "minimum", "uniqueItems"):
+                assert keyword not in properties[name]
