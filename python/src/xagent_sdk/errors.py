@@ -235,6 +235,23 @@ class TaskTimeout(XAgentError):
     """
 
 
+class StructuredOutputError(XAgentError):
+    """The result of the run asked about could not be returned.
+
+    ``code`` says why. It is a code only this SDK raises:
+
+      - ``run_mismatch``: the task snapshot belongs to a run other than
+        ``expected_run_id``. Raised by ``TasksAPI.wait()`` and
+        ``TasksAPI.run()``.
+
+    ``http_status`` is ``None``: the error is raised by the SDK after a
+    successful response.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(code, message, http_status=None)
+
+
 _CODE_MAP: dict[str, type[XAgentError]] = {
     "invalid_api_key": InvalidAPIKey,
     "agent_not_found": AgentNotFound,

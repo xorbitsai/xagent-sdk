@@ -58,6 +58,7 @@ EXPECTED_SURFACE: set[str] = {
     "MalformedResponse",
     "XAgentTransportError",
     "TaskTimeout",
+    "StructuredOutputError",
     # Version
     "__version__",
 }
