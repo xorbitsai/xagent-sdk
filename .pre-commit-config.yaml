@@ -32,3 +32,6 @@ repos:
     rev: v2.4.1
     hooks:
       - id: codespell
+        # The schema corpus is a byte-for-byte copy of the server's file;
+        # its non-ASCII property names are test data, not misspellings.
+        exclude: ^shared/fixtures/v1/structured_schema_corpus\.json$
