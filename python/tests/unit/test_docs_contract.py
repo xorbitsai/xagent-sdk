@@ -130,7 +130,7 @@ class TestReplyGuidancePresent:
 
 class TestStreamingErrorTable:
     """The SDK-coined error table in README.md must list exactly the
-    four exceptions this SDK raises on its own, with events()'s two
+    seven exceptions this SDK raises on its own, with events()'s two
     stream-specific cases called out on the rows they actually belong
     to -- an edit that adds a row without updating this count, or that
     documents an events() case on the wrong row, drifts silently
@@ -142,17 +142,20 @@ class TestStreamingErrorTable:
         after_heading = text.split("SDK-coined codes:")[1]
         return after_heading.split("The SDK does **not** retry automatically.")[0]
 
-    def test_table_has_exactly_four_data_rows(self) -> None:
+    def test_table_has_exactly_seven_data_rows(self) -> None:
         rows = [
             line
             for line in self._table_block().splitlines()
             if line.strip().startswith("| `")
         ]
-        assert len(rows) == 4
+        assert len(rows) == 7
         assert {row.split("`")[1] for row in rows} == {
             "XAgentTransportError",
             "MalformedResponse",
             "RunMismatch",
+            "UnsupportedFeature",
+            "UnsupportedSchema",
+            "StructuredOutputError",
             "TaskTimeout",
         }
 
