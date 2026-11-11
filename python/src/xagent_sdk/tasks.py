@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from xagent_sdk._base import _json_body
 from xagent_sdk._events import TaskEventStream, open_task_event_stream
-from xagent_sdk.errors import TaskTimeout
+from xagent_sdk.errors import TaskTimeout, _run_mismatch
 from xagent_sdk.types import (
     AppendResult,
     CreateTaskResult,
@@ -195,9 +195,8 @@ class TasksAPI:
         answering. Server returns 202 with ``status='running'``. Under
         the hood this resumes the same server-side run the task had
         before the reply, rather than starting a new one -- unlike
-        ``append()`` -- but that continuity is server state, not
-        something this call's ``AppendResult`` return value exposes;
-        there is no ``run_id`` field on it to check.
+        ``append()`` -- so the ``run_id`` on the returned
+        ``AppendResult`` is the run the task already had, not a new one.
 
         Not idempotent: this SDK sends no request-level idempotency key
         with this call, so a client-side timeout does not tell you
@@ -528,6 +527,7 @@ class TasksAPI:
         *,
         timeout: float = 120.0,
         poll_interval: float = 1.0,
+        expected_run_id: str | None = None,
     ) -> TaskInfo:
         """Poll ``get()`` until the task stops needing the SDK to wait.
 
@@ -544,6 +544,19 @@ class TasksAPI:
 
         Returns the ``TaskInfo`` once one of those states is observed.
         Raises ``TaskTimeout`` if the wall-clock deadline elapses first.
+
+        With ``expected_run_id`` (the ``run_id`` of the ``create()`` or
+        ``append()`` you are waiting for), every snapshot ``wait()`` is
+        about to return -- terminal or ``WAITING_FOR_USER`` -- must show
+        that run; one that shows another run, or no run (``run_id`` is
+        ``None``), raises ``RunMismatch`` (code ``run_mismatch``) instead
+        of being returned, and polling stops. So a question asked by a
+        turn another caller appended is never handed to this caller;
+        ``RunMismatch`` lists the other causes. Snapshots that keep the
+        loop going are not compared. Without ``expected_run_id`` no
+        snapshot is compared. If a turn appended to a ``PAUSED`` task is
+        refused before it starts, the task stays ``PAUSED`` and ``wait()``
+        runs until ``TaskTimeout``.
         Any other exception raised by ``get()`` (``XAgentTransportError``,
         ``TaskNotFound``, ``InvalidAPIKey``, ...) propagates immediately
         -- this helper deliberately does not retry transient failures,
@@ -558,6 +571,8 @@ class TasksAPI:
             poll_interval: Seconds to sleep between polls. Must be
                 non-negative; ``0`` tight-loops (yields the GIL each
                 iteration via ``time.sleep(0)``). Default 1.0.
+            expected_run_id: The run the returned snapshot must show, or
+                ``None`` (the default) to accept any run.
 
         Returns:
             The ``TaskInfo`` snapshot at the returnable state.
@@ -565,6 +580,9 @@ class TasksAPI:
         Raises:
             ValueError: ``timeout`` or ``poll_interval`` is negative.
             TaskTimeout: ``timeout`` elapsed without a returnable state.
+            RunMismatch: ``expected_run_id`` was given and the returnable
+                snapshot shows another run or no run (code
+                ``run_mismatch``).
         """
         if timeout < 0:
             raise ValueError("timeout must be non-negative")
@@ -574,6 +592,8 @@ class TasksAPI:
         while True:
             info = self.get(task_id)
             if info.status in _WAIT_RETURN_STATUSES:
+                if expected_run_id is not None and info.run_id != expected_run_id:
+                    raise _run_mismatch(task_id, expected_run_id, info.run_id)
                 return info
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -607,7 +627,9 @@ class TasksAPI:
         Equivalent to::
 
             created = client.tasks.create(agent_id=..., message=...)
-            info    = client.tasks.wait(created.task_id, timeout=...)
+            info    = client.tasks.wait(
+                created.task_id, timeout=..., expected_run_id=created.run_id
+            )
             steps   = client.tasks.steps(created.task_id)
 
         ``metadata``, ``dispatch_class``, ``priority`` and ``prompt_context``
@@ -627,6 +649,13 @@ class TasksAPI:
         with ``reply()``, and ``wait()`` again -- or use the lower-level
         trio directly when you need multiple turns or to interleave other
         work.
+
+        The returned ``RunResult.run_id`` is ``created.run_id``, and
+        ``wait()`` has checked that ``info`` shows that run: a snapshot of
+        another run, or of no run, raises ``RunMismatch`` (code
+        ``run_mismatch``), whose ``task_id`` is the task this call created.
+        A server that does not report a ``run_id`` on ``create()`` leaves it
+        ``None`` and nothing is compared.
 
         Raises ``TaskTimeout`` if the task does not reach a returnable
         state within the combined ``create`` + ``wait`` budget. Other
@@ -648,7 +677,10 @@ class TasksAPI:
         )
         remaining = max(0.0, timeout - (time.monotonic() - start))
         info = self.wait(
-            created.task_id, timeout=remaining, poll_interval=poll_interval
+            created.task_id,
+            timeout=remaining,
+            poll_interval=poll_interval,
+            expected_run_id=created.run_id,
         )
         steps = self.steps(created.task_id)
-        return RunResult(info=info, steps=steps)
+        return RunResult(info=info, steps=steps, run_id=created.run_id)

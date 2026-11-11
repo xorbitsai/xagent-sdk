@@ -285,9 +285,10 @@ with AgentClient() as agent:
 ```
 
 `reply()` resumes the task's paused execution -- the same server-side
-run continues rather than a new one starting, unlike `append()` -- but
-that continuity is internal server state; the `AppendResult` it returns
-has no `run_id` field to check. It is also **not idempotent** -- the SDK
+run continues rather than a new one starting, unlike `append()` -- so
+the `run_id` on the `AppendResult` it returns is the run the task already
+had, not a new one. Waiting with it as `expected_run_id` rules out another
+run, not a new question from this run. It is also **not idempotent** -- the SDK
 sends no request-level idempotency key, so a client-side timeout does
 not tell you whether the answer was delivered. If a call raises
 `XAgentTransportError` (network/timeout below the HTTP layer), call
@@ -359,6 +360,7 @@ SDK-coined codes:
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
 | `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored |
+| `RunMismatch` | `wait()` / `run()` with an expected run: the snapshot about to be returned shows another run or no run (code `run_mismatch`) |
 | `TaskTimeout` | `wait()` / `run()` deadline elapsed, or `events()`'s own `timeout` budget -- which covers every read the stream still owes, including time spent between frames, and hands over to a bounded post-close drain once a closing frame has arrived, which ends the stream cleanly rather than raising -- ran out first |
 
 The SDK does **not** retry automatically. Wrap calls with your own
@@ -505,6 +507,41 @@ wins. A name in `unresolved_for_caller` is stored anyway, because a task loads
 the skills of the user who runs it. New tasks use the new list at once; an
 existing task can keep using the previous list for a while.
 
+### 12. Wait for the run you started
+
+To wait for the turn you started rather than whatever the task shows next,
+pass its `run_id`:
+
+```python
+turn = agent.tasks.append(task_id, agent_id=42, message="...")
+info = agent.tasks.wait(task_id, expected_run_id=turn.run_id)
+```
+
+`wait()` raises `RunMismatch` (code `run_mismatch`) instead of returning a
+snapshot (terminal or `WAITING_FOR_USER`) of another run, so a question
+asked by a turn someone else appended does not reach you. `run()` does this
+for you with the run it started. The error carries `task_id`,
+`expected_run_id` and `actual_run_id`; call `get(task_id)` to see what the
+task shows. Besides another caller's turn, it is raised when:
+
+- the server refused to start your turn: the task still shows the previous
+  run's result, or, for a new task, `FAILED` with no `run_id`;
+- the server is older than v0.8.5 and your appended turn is still queued:
+  `get()` shows the previous turn until it starts (see
+  [Example 5](#5-multi-turn-task)), so
+  `wait(expected_run_id=turn.run_id)` raises at once. With such a server,
+  wait until `completed_at` changes before calling it.
+
+Known limitations:
+
+- If a turn appended to a `PAUSED` task is refused before it starts, the task
+  stays `PAUSED` and `wait()` runs until `TaskTimeout` rather than raising
+  `run_mismatch`.
+- A `reply()` keeps its run, so `wait(expected_run_id=...)` with the run it
+  returns cannot tell the question you answered from a new question that
+  run asks next; compare `pending_interaction.question`
+  (see [Example 6](#6-answer-a-pending-question)).
+
 ## API reference
 
 All methods are synchronous.
@@ -544,14 +581,14 @@ only.
 | Method | Returns | Notes |
 |---|---|---|
 | `AgentClient(api_key, base_url, ...)` | `AgentClient` | env-var fallback: `XAGENT_API_KEY` / `XAGENT_BASE_URL` |
-| `agent.tasks.create(*, agent_id, message, metadata=None, dispatch_class=None, priority=None, prompt_context=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` when the server queues the task for its dispatcher or `'running'` when it runs the task in-process; `dispatch_class` (`'interactive'`/`'batch'`) and `priority` (-10..10) apply to the new task only, the server validates them (422 → `InvalidInput`) and an older server ignores them; the result's `dispatch_class` shows the class the server gave the start command (`None` if not dispatched through a queue or on an older server) |
-| `agent.tasks.append(task_id, *, agent_id, message, metadata=None, prompt_context=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='pending'` (queued) or `'running'` (in-process); raises `TaskBusy` if the prior turn is still queued or running, `InteractionResponseRequired` if `WAITING_FOR_USER` |
-| `agent.tasks.reply(task_id, *, agent_id, message)` | `AppendResult` | POST `/v1/chat/tasks/{id}/reply`; answers a `WAITING_FOR_USER` task's pending question and resumes its server-side run (no `run_id` field on the response to check); not idempotent |
-| `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER` |
+| `agent.tasks.create(*, agent_id, message, metadata=None, dispatch_class=None, priority=None, prompt_context=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` when the server queues the task for its dispatcher or `'running'` when it runs the task in-process; `dispatch_class` (`'interactive'`/`'batch'`) and `priority` (-10..10) apply to the new task only, the server validates them (422 → `InvalidInput`) and an older server ignores them; the result's `dispatch_class` shows the class the server gave the start command (`None` if not dispatched through a queue or on an older server); `run_id` names the run it started |
+| `agent.tasks.append(task_id, *, agent_id, message, metadata=None, prompt_context=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='pending'` (queued) or `'running'` (in-process); raises `TaskBusy` if the prior turn is still queued or running, `InteractionResponseRequired` if `WAITING_FOR_USER`; `run_id` names the new run |
+| `agent.tasks.reply(task_id, *, agent_id, message)` | `AppendResult` | POST `/v1/chat/tasks/{id}/reply`; answers a `WAITING_FOR_USER` task's pending question and resumes its server-side run (the result's `run_id` is that run, not a new one); not idempotent |
+| `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER`; `run_id` names the run the snapshot shows |
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
 | `agent.tasks.events(task_id, *, timeout=None)` | `TaskEventStream` | GET `/v1/chat/tasks/{id}/events` (SSE); iterate decoded `StreamEvent` frames as the task runs; `closed_by` tells how the stream ended |
-| `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline |
-| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None)` | `RunResult` | `create` + `wait` + `steps` |
+| `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0, expected_run_id=None)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline; with `expected_run_id`, a returnable snapshot of another run or of no run raises `RunMismatch` (`run_mismatch`) |
+| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None)` | `RunResult` | `create` + `wait(expected_run_id=created.run_id)` + `steps`; `RunResult.run_id`; raises `RunMismatch` if the snapshot shows another run or no run |
 | `agent.close()` / `with ... as agent` | — | release the connection pool |
 
 **Prompt context**: `create()`, `append()` and `run()` take

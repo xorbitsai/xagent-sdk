@@ -216,6 +216,11 @@ class CreateTaskResult:
     added later does not break parsing. It is ``None`` when the server
     runs the task in-process rather than through the dispatch queue, or
     when the server predates the field.
+
+    ``run_id`` identifies the run this request started. Pass it to
+    ``client.tasks.wait(..., expected_run_id=...)`` to make sure the
+    snapshot you get back belongs to this run. It is ``None`` when the
+    server predates the field.
     """
 
     task_id: int
@@ -223,6 +228,7 @@ class CreateTaskResult:
     status: TaskStatus
     created_at: datetime
     dispatch_class: str | None = None
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -237,12 +243,22 @@ class AppendResult:
     queues the turn for its dispatcher and ``TaskStatus.RUNNING`` when it
     runs the turn in-process; ``reply()`` documents its own
     status. The timestamp field is ``accepted_at``, not ``created_at``.
+
+    ``run_id`` identifies the run the turn belongs to: the new run an
+    ``append()`` started, or, for ``reply()``, the run the task already
+    had, which the answer resumes. Pass it to
+    ``client.tasks.wait(..., expected_run_id=...)`` to make sure the
+    snapshot you get back belongs to that run. For ``reply()`` that only
+    rules out another run: a new question the same run asks after your
+    answer has the same ``run_id`` (see ``reply()`` on comparing the
+    question). It is ``None`` when the server predates the field.
     """
 
     task_id: int
     agent_id: int
     status: TaskStatus
     accepted_at: datetime
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -293,6 +309,12 @@ class TaskInfo:
     and also ``None`` when talking to a backend that predates this field
     -- the default value means an old server's response (which omits the
     key entirely) parses the same as a new server's ``null``.
+
+    ``run_id`` identifies the run this snapshot shows; ``None`` when the
+    task has none or the server predates the field. Compare it with the
+    ``run_id`` of the ``create()`` or ``append()`` that started the run
+    you are waiting for; ``client.tasks.wait(..., expected_run_id=...)``
+    does this for you.
     """
 
     task_id: int
@@ -304,6 +326,7 @@ class TaskInfo:
     created_at: datetime
     completed_at: datetime | None
     pending_interaction: PendingInteraction | None = None
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -404,10 +427,16 @@ class RunResult:
     timeline so callers do not need to re-fetch either after a
     convenience run. The ``status`` and ``output`` properties shortcut
     the most common reads (``result.output`` vs ``result.info.output``).
+
+    ``run_id`` is the run ``run()`` started (``CreateTaskResult.run_id``);
+    ``None`` when the server predates the field or the result was built
+    without one. ``run()`` has already checked that ``info`` belongs to
+    that run.
     """
 
     info: TaskInfo
     steps: list[Step]
+    run_id: str | None = None
 
     @property
     def output(self) -> str | None:

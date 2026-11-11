@@ -235,6 +235,64 @@ class TaskTimeout(XAgentError):
     """
 
 
+class RunMismatch(XAgentError):
+    """Code ``run_mismatch``: the task snapshot shows a run other than the
+    one asked about.
+
+    Raised by ``TasksAPI.wait()`` when it is given ``expected_run_id`` and
+    the snapshot it is about to return (terminal or ``WAITING_FOR_USER``)
+    shows another run or no run, and so by ``TasksAPI.run()``, which passes
+    the run it created. Polling stops and the snapshot is not returned;
+    call ``get(task_id)`` to read it. The task can show another run, or no
+    run, because:
+
+      - another caller appended a turn after yours finished;
+      - the server refused to start your turn: the task still shows the
+        previous run's result, or, for a new task, ``FAILED`` with no run
+        (``actual_run_id`` is ``None``);
+      - the server is older than v0.8.5 and your appended turn is still
+        queued: such a server shows the previous turn until it starts.
+
+    ``task_id``, ``expected_run_id`` and ``actual_run_id`` say which task,
+    which run was asked about and which run the snapshot shows.
+    ``http_status`` is ``None``: the error is raised by the SDK after a
+    successful response.
+    """
+
+    task_id: int | None
+    expected_run_id: str | None
+    actual_run_id: str | None
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        http_status: int | None = None,
+        *,
+        task_id: int | None = None,
+        expected_run_id: str | None = None,
+        actual_run_id: str | None = None,
+    ) -> None:
+        super().__init__(code, message, http_status)
+        self.task_id = task_id
+        self.expected_run_id = expected_run_id
+        self.actual_run_id = actual_run_id
+
+
+def _run_mismatch(task_id: int, expected: str, actual: str | None) -> RunMismatch:
+    """The error for a snapshot of ``task_id`` that shows another run."""
+    shown = "no run" if actual is None else f"run {actual!r}"
+    return RunMismatch(
+        "run_mismatch",
+        f"Task {task_id} shows {shown}, not the expected run {expected!r}: "
+        "another caller's turn replaced it, or the expected run was not "
+        "started (refused, or still queued on a server older than v0.8.5).",
+        task_id=task_id,
+        expected_run_id=expected,
+        actual_run_id=actual,
+    )
+
+
 _CODE_MAP: dict[str, type[XAgentError]] = {
     "invalid_api_key": InvalidAPIKey,
     "agent_not_found": AgentNotFound,

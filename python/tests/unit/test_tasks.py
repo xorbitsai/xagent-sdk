@@ -788,6 +788,7 @@ class TestRun:
                         "error": None,
                         "created_at": "2026-05-10T03:00:00Z",
                         "completed_at": "2026-05-10T03:00:01Z",
+                        "run_id": response("create_task_dispatch_class")["run_id"],
                     },
                 )
             if req.method == "GET" and req.url.path == "/v1/chat/tasks/42/steps":
