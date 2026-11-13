@@ -6,9 +6,11 @@ same canonical JSON a real server sends.
 
 import copy
 import dataclasses
+import inspect
 import json
 import math
 from collections.abc import Callable
+from types import MappingProxyType
 from typing import Any, cast
 
 import httpx
@@ -17,10 +19,14 @@ from pydantic import ValidationError
 
 from xagent_sdk import (
     AgentClient,
+    ConnectorForbidden,
+    ConnectorNameConflict,
+    ConnectorNotEditable,
     ConnectorNotFound,
     ConnectorToolsUnavailable,
     ConnectorUnavailable,
     InternalError,
+    InvalidInput,
     MalformedResponse,
     McpOAuthAuthorizationFailed,
     McpServer,
@@ -59,21 +65,54 @@ _CALLS: dict[str, _Call] = {
     "list": lambda u: u.mcp_servers.list(),
     "get": lambda u: u.mcp_servers.get(7),
     "list_tools": lambda u: u.mcp_servers.list_tools(7),
+    "create": lambda u: u.mcp_servers.create(
+        name="n", transport="streamable_http", url="https://mcp.example.com/mcp"
+    ),
+    "update": lambda u: u.mcp_servers.update(7, description="d"),
+    "delete": lambda u: u.mcp_servers.delete(7),
+    "set_enabled": lambda u: u.mcp_servers.set_enabled(7, False),
 }
 _ROUTES: dict[str, tuple[str, bytes]] = {
     "list": ("GET", b"/v1/mcp-servers"),
     "get": ("GET", b"/v1/mcp-servers/7"),
     "list_tools": ("GET", b"/v1/mcp-servers/7/tools"),
+    "create": ("POST", b"/v1/mcp-servers"),
+    "update": ("PATCH", b"/v1/mcp-servers/7"),
+    "delete": ("DELETE", b"/v1/mcp-servers/7"),
+    "set_enabled": ("PUT", b"/v1/mcp-servers/7/enabled"),
 }
 _EXPECTED_BODIES: dict[str, object] = {
     "list": None,
     "get": None,
     "list_tools": None,
+    "create": {
+        "name": "n",
+        "transport": "streamable_http",
+        "url": "https://mcp.example.com/mcp",
+        "allow_delegated_authorization": False,
+        "enabled": True,
+    },
+    "update": {"description": "d"},
+    "delete": None,
+    "set_enabled": {"enabled": False},
 }
 _OK_FIXTURES: dict[str, str] = {
     "list": "mcp_servers_list",
     "get": "mcp_server_detail",
     "list_tools": "mcp_server_tools",
+    "create": "mcp_server_write",
+    "update": "mcp_server_write",
+    "delete": "mcp_server_delete",
+    "set_enabled": "mcp_server_write",
+}
+_WRITE_METHODS = ["create", "update", "delete", "set_enabled"]
+# Methods that take a connector id as their first argument.
+_ID_CALLS: dict[str, Callable[[UserClient, Any], object]] = {
+    "get": lambda u, i: u.mcp_servers.get(i),
+    "list_tools": lambda u, i: u.mcp_servers.list_tools(i),
+    "update": lambda u, i: u.mcp_servers.update(i, description="d"),
+    "delete": lambda u, i: cast(Any, u.mcp_servers).delete(i),
+    "set_enabled": lambda u, i: u.mcp_servers.set_enabled(i, True),
 }
 
 
@@ -158,6 +197,22 @@ class TestUnexpectedResponses:
             c.mcp_servers.get(7)
         assert type(exc.value) is InternalError
         assert exc.value.http_status == 404
+
+    @pytest.mark.parametrize("method", _WRITE_METHODS)
+    def test_a_server_with_only_the_read_routes_answers_405_as_internal_error(
+        self, method: str
+    ) -> None:
+        # An intermediate server version has the read routes but not the
+        # write ones; the framework's own 405 is not a connector error.
+        with (
+            _make_user(
+                lambda req: httpx.Response(405, json={"detail": "Method Not Allowed"})
+            ) as c,
+            pytest.raises(InternalError) as exc,
+        ):
+            _CALLS[method](c)
+        assert type(exc.value) is InternalError
+        assert exc.value.http_status == 405
 
     def test_connector_not_found_keeps_its_status(self) -> None:
         body = error_envelope("connector_not_found")
@@ -251,6 +306,73 @@ class TestListToolsErrors:
         assert exc.value.details == details
         expected_retry = 3 if cls is RateLimited else None
         assert exc.value.retry_after == expected_retry
+
+
+_WRITE_ERROR_CASES: list[Any] = [
+    (
+        "create",
+        409,
+        "connector_name_conflict",
+        ConnectorNameConflict,
+        {"connector_id": 1},
+    ),
+    ("create", 422, "validation_422", InvalidInput, None),
+    (
+        "update",
+        403,
+        "connector_forbidden",
+        ConnectorForbidden,
+        {"reason": "team_shared"},
+    ),
+    (
+        "update",
+        409,
+        "connector_not_editable",
+        ConnectorNotEditable,
+        {"reason": "catalog"},
+    ),
+    (
+        "delete",
+        409,
+        "connector_not_editable",
+        ConnectorNotEditable,
+        {"reason": "catalog"},
+    ),
+    (
+        "set_enabled",
+        403,
+        "connector_forbidden",
+        ConnectorForbidden,
+        {"reason": "team_shared"},
+    ),
+]
+
+
+class TestWriteErrors:
+    @pytest.mark.parametrize(
+        ("method", "status", "fixture", "cls", "details"),
+        _WRITE_ERROR_CASES,
+        ids=[f"{c[0]}-{c[1]}-{c[3].__name__}" for c in _WRITE_ERROR_CASES],
+    )
+    def test_error_maps_to_its_class_and_keeps_status_and_details(
+        self,
+        method: str,
+        status: int,
+        fixture: str,
+        cls: type[XAgentError],
+        details: dict[str, Any] | None,
+    ) -> None:
+        body = error_envelope(fixture)
+        with (
+            _make_user(lambda req: httpx.Response(status, json=body)) as c,
+            pytest.raises(cls) as exc,
+        ):
+            _CALLS[method](c)
+        assert type(exc.value) is cls
+        assert exc.value.http_status == status
+        assert exc.value.code == body["error"]["code"]
+        assert exc.value.details == details
+        assert exc.value.retry_after is None
 
 
 class TestListParsing:
@@ -484,9 +606,10 @@ class TestListToolsTimeout:
 
 
 class TestServerIdPath:
+    @pytest.mark.parametrize("method", list(_ID_CALLS))
     @pytest.mark.parametrize("server_id", ["5/tools", "1", 1.0, None])
     def test_an_id_that_is_not_an_integer_is_refused_before_sending(
-        self, server_id: object
+        self, method: str, server_id: object
     ) -> None:
         calls: list[httpx.Request] = []
 
@@ -495,7 +618,7 @@ class TestServerIdPath:
             return httpx.Response(200, json=_detail())
 
         with _make_user(handler) as c, pytest.raises(TypeError):
-            c.mcp_servers.get(server_id)  # type: ignore[arg-type]
+            _ID_CALLS[method](c, server_id)
         assert calls == []
 
     @pytest.mark.parametrize(
@@ -516,16 +639,238 @@ class TestServerIdPath:
         assert captured[0].url.raw_path == raw_path
         assert captured[0].url.query == b""
 
-    @pytest.mark.parametrize("server_id", ["5/tools", "1", 1.0, None])
-    def test_list_tools_refuses_a_non_integer_id_before_sending(
-        self, server_id: object
+
+def _capture_write(
+    call: Callable[[UserClient], object], fixture: str = "mcp_server_write"
+) -> httpx.Request:
+    captured: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        return httpx.Response(200, json=response(fixture))
+
+    with _make_user(handler) as c:
+        call(c)
+    assert len(captured) == 1
+    return captured[0]
+
+
+def _body(req: httpx.Request) -> dict[str, Any]:
+    return cast(dict[str, Any], json.loads(req.content))
+
+
+_CREATE_REQUIRED: dict[str, Any] = {
+    "name": "n",
+    "transport": "streamable_http",
+    "url": "https://mcp.example.com/mcp",
+}
+_CREATE_ALWAYS_SENT = {
+    **_CREATE_REQUIRED,
+    "allow_delegated_authorization": False,
+    "enabled": True,
+}
+_NULLABLE_VALUES: dict[str, Any] = {
+    "description": "d",
+    "headers": {"X-A": "b"},
+    "auth": {"type": "bearer", "bearer_token": "t"},
+    "runtime_input_schema": {"type": "object"},
+    "runtime_bindings": [{"k": "v"}],
+    "signed_uploads": [{"u": 1}],
+}
+
+
+class TestCreateBody:
+    @pytest.mark.parametrize("param", list(_NULLABLE_VALUES))
+    def test_a_nullable_parameter_is_sent_only_when_it_has_a_value(
+        self, param: str
     ) -> None:
-        calls: list[httpx.Request] = []
+        none_kwargs: dict[str, Any] = {param: None}
+        none_body = _body(
+            _capture_write(
+                lambda c: c.mcp_servers.create(**_CREATE_REQUIRED, **none_kwargs)
+            )
+        )
+        assert param not in none_body
+        assert none_body == _CREATE_ALWAYS_SENT
 
-        def handler(req: httpx.Request) -> httpx.Response:
-            calls.append(req)
-            return httpx.Response(200, json=response("mcp_server_tools"))
+        value = _NULLABLE_VALUES[param]
+        value_body = _body(
+            _capture_write(
+                lambda c: c.mcp_servers.create(**_CREATE_REQUIRED, **{param: value})
+            )
+        )
+        assert value_body[param] == value
+        assert {k: v for k, v in value_body.items() if k != param} == (
+            _CREATE_ALWAYS_SENT
+        )
 
-        with _make_user(handler) as c, pytest.raises(TypeError):
-            c.mcp_servers.list_tools(server_id)  # type: ignore[arg-type]
-        assert calls == []
+    def test_the_always_sent_keys_are_present_with_non_default_values(self) -> None:
+        body = _body(
+            _capture_write(
+                lambda c: c.mcp_servers.create(
+                    **_CREATE_REQUIRED,
+                    allow_delegated_authorization=True,
+                    enabled=False,
+                )
+            )
+        )
+        assert body == {
+            **_CREATE_REQUIRED,
+            "allow_delegated_authorization": True,
+            "enabled": False,
+        }
+
+    def test_a_read_only_mapping_and_a_tuple_send_the_same_bytes_as_dict_and_list(
+        self,
+    ) -> None:
+        plain = _capture_write(
+            lambda c: c.mcp_servers.create(
+                **_CREATE_REQUIRED,
+                headers={"X-A": "b"},
+                runtime_bindings=[{"k": "v"}],
+            )
+        )
+        wrapped = _capture_write(
+            lambda c: c.mcp_servers.create(
+                **_CREATE_REQUIRED,
+                headers=MappingProxyType({"X-A": "b"}),
+                runtime_bindings=(MappingProxyType({"k": "v"}),),
+            )
+        )
+        assert wrapped.content == plain.content
+        assert _body(wrapped)["headers"] == {"X-A": "b"}
+        assert _body(wrapped)["runtime_bindings"] == [{"k": "v"}]
+
+
+_UPDATE_VALUES: dict[str, Any] = {
+    "name": "n2",
+    "transport": "sse",
+    "url": "https://mcp.example.com/sse",
+    "allow_delegated_authorization": True,
+    **_NULLABLE_VALUES,
+}
+
+
+class TestUpdateBody:
+    def test_the_table_covers_every_update_parameter(self) -> None:
+        params = set(inspect.signature(McpServersAPI.update).parameters) - {
+            "self",
+            "server_id",
+        }
+        assert params == set(_UPDATE_VALUES)
+        assert len(_UPDATE_VALUES) == 10
+
+    @pytest.mark.parametrize("param", list(_UPDATE_VALUES))
+    @pytest.mark.parametrize("state", ["omitted", "value", "none"])
+    def test_only_the_parameters_that_were_passed_are_sent(
+        self, param: str, state: str
+    ) -> None:
+        kwargs: dict[str, Any] = {}
+        if state == "value":
+            kwargs[param] = _UPDATE_VALUES[param]
+        elif state == "none":
+            kwargs[param] = None
+        body = _body(_capture_write(lambda c: c.mcp_servers.update(7, **kwargs)))
+        if state == "omitted":
+            assert body == {}
+        elif state == "value":
+            assert body == {param: _UPDATE_VALUES[param]}
+        else:
+            assert body == {param: None}
+            assert param in body
+
+    def test_passing_nothing_sends_an_empty_object(self) -> None:
+        req = _capture_write(lambda c: c.mcp_servers.update(7))
+        assert req.content == b"{}"
+
+    def test_a_read_only_mapping_and_a_tuple_send_the_same_bytes_as_dict_and_list(
+        self,
+    ) -> None:
+        plain = _capture_write(
+            lambda c: c.mcp_servers.update(
+                7, headers={"X-A": "b"}, runtime_bindings=[{"k": "v"}]
+            )
+        )
+        wrapped = _capture_write(
+            lambda c: c.mcp_servers.update(
+                7,
+                headers=MappingProxyType({"X-A": "b"}),
+                runtime_bindings=(MappingProxyType({"k": "v"}),),
+            )
+        )
+        assert wrapped.content == plain.content
+        assert _body(wrapped) == {
+            "headers": {"X-A": "b"},
+            "runtime_bindings": [{"k": "v"}],
+        }
+
+    def test_the_documented_header_edit_keeps_the_other_headers(self) -> None:
+        stored = _detail()["headers"]
+        req = _capture_write(
+            lambda c: c.mcp_servers.update(
+                7, headers={**(stored or {}), "X-Trace": "1"}
+            )
+        )
+        assert _body(req) == {"headers": {**stored, "X-Trace": "1"}}
+
+
+class TestSetEnabledBody:
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_the_boolean_is_sent_as_given(self, enabled: bool) -> None:
+        req = _capture_write(lambda c: c.mcp_servers.set_enabled(7, enabled))
+        assert _body(req) == {"enabled": enabled}
+
+    def test_the_value_is_not_checked_locally(self) -> None:
+        req = _capture_write(
+            lambda c: c.mcp_servers.set_enabled(7, "true")  # type: ignore[arg-type]
+        )
+        assert _body(req) == {"enabled": "true"}
+
+
+class TestWriteResponseParsing:
+    @pytest.mark.parametrize("method", ["create", "update", "set_enabled"])
+    def test_the_write_fixture_parses_into_a_connector(self, method: str) -> None:
+        body = response("mcp_server_write")
+        with _make_user(lambda req: httpx.Response(200, json=body)) as c:
+            server = cast(McpServer, _CALLS[method](c))
+        assert isinstance(server, McpServer)
+        assert server.id == body["id"]
+        assert set(body) == {f.name for f in dataclasses.fields(McpServer)}
+
+    def test_delete_returns_none_for_the_confirmation(self) -> None:
+        with _make_user(lambda req: httpx.Response(200, json={"id": 3})) as c:
+            assert cast(Any, c.mcp_servers).delete(3) is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [{}, {"id": "3x"}, [], "ok"],
+        ids=["empty-object", "non-numeric-id", "array", "string"],
+    )
+    def test_delete_rejects_a_body_that_is_not_the_confirmation(
+        self, body: object
+    ) -> None:
+        with (
+            _make_user(lambda req: httpx.Response(200, json=body)) as c,
+            pytest.raises(MalformedResponse) as exc,
+        ):
+            c.mcp_servers.delete(3)
+        assert exc.value.http_status is None
+
+    @pytest.mark.parametrize("method", ["create", "update", "set_enabled"])
+    def test_a_write_with_a_bad_body_says_the_server_accepted_the_request(
+        self, method: str
+    ) -> None:
+        with (
+            _make_user(lambda req: httpx.Response(200, json={})) as c,
+            pytest.raises(MalformedResponse) as exc,
+        ):
+            _CALLS[method](c)
+        assert "the server accepted the request" in exc.value.message
+
+    def test_a_read_with_a_bad_body_does_not_say_so(self) -> None:
+        with (
+            _make_user(lambda req: httpx.Response(200, json={})) as c,
+            pytest.raises(MalformedResponse) as exc,
+        ):
+            c.mcp_servers.get(7)
+        assert "the server accepted the request" not in exc.value.message

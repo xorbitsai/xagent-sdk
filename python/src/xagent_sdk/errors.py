@@ -162,7 +162,57 @@ class TransportNotSupported(XAgentError):
 
     Raised by ``UserClient.mcp_servers.list_tools()`` when the connector
     uses a transport the API cannot list tools for: only
-    ``streamable_http`` and ``sse`` are supported. ``details`` is None.
+    ``streamable_http`` and ``sse`` are supported. Also raised by
+    ``create()`` and ``update()`` when the ``transport`` they are given is
+    not one of those two, and by ``update()`` when the connector's stored
+    transport is not. ``details`` is None.
+    """
+
+
+class ConnectorNameConflict(XAgentError):
+    """HTTP 409, code ``connector_name_conflict``.
+
+    Raised by ``UserClient.mcp_servers.create()`` and ``update()`` when the
+    connector name is already in use or reserved. Connector names are unique
+    across all users and are compared case-insensitively, treating spaces,
+    hyphens and underscores as the same character.
+
+    ``details["connector_id"]`` is present only when the name is taken by
+    one of the key holder's own connectors; it is absent when another user
+    has the name. After a ``create()`` that timed out, it can be the
+    connector the first attempt created, but it can also be one that
+    existed before, so read it with ``get()`` first. After an ``update()``
+    that renames a connector it is the key holder's *other* connector with
+    that name: it does not mean the rename went through.
+    """
+
+
+class ConnectorNotEditable(XAgentError):
+    """HTTP 409, code ``connector_not_editable``.
+
+    Raised by ``UserClient.mcp_servers.update()`` and ``delete()`` when the
+    connector cannot be changed through the API. ``details["reason"]`` says
+    why: ``catalog`` (an app connection from the catalog, which can only be
+    changed in the web app), ``managed_elsewhere`` (another account manages
+    its OAuth connection), ``authorized_by_others`` (other accounts hold
+    authorizations that changing ``url``, ``auth.issuer`` or
+    ``auth.resource_metadata_url`` would keep; make that change in the web
+    app) or
+    ``unknown``. Treat any other string as an unknown reason.
+    """
+
+
+class ConnectorForbidden(XAgentError):
+    """HTTP 403, code ``connector_forbidden``.
+
+    Raised by ``UserClient.mcp_servers.update()``, ``delete()`` and
+    ``set_enabled()`` when the key holder may not make the change, and by
+    ``create()`` when the server refuses the holder a new connector.
+    ``details["reason"]`` says why: ``team_shared`` (the connector reaches
+    the holder only through their team, so it is read-only) or
+    ``not_permitted`` (the holder lacks the right to change it, for example
+    deleting a connector owned by the team without being a team
+    administrator). Treat any other string as ``not_permitted``.
     """
 
 
@@ -324,7 +374,13 @@ class MalformedResponse(XAgentError):
 
     ``UserClient.mcp_servers.list()``, ``get()`` and ``list_tools()`` raise it
     in the same three cases. ``list()`` never folds a wrong-shaped body into an
-    empty list.
+    empty list. ``mcp_servers.create()``, ``update()``, ``delete()`` and
+    ``set_enabled()`` raise it in the same three cases as well, and also when
+    a 200 body does not match the expected shape; the server has accepted the
+    write by then. ``update()`` and ``set_enabled()`` can be repeated safely,
+    ``delete()`` raises ``ConnectorNotFound`` (or ``ConnectorForbidden`` while
+    the team still shares the connector) if the first call went through, and
+    a retried ``create()`` raises ``ConnectorNameConflict``.
 
     ``TaskInfo.parsed()`` and ``RunResult.parsed()`` raise it when the
     structured result fields break the server's contract: a ``"ready"``
@@ -597,6 +653,9 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "connector_unavailable": ConnectorUnavailable,
     "connector_tools_unavailable": ConnectorToolsUnavailable,
     "mcp_oauth_authorization_failed": McpOAuthAuthorizationFailed,
+    "connector_name_conflict": ConnectorNameConflict,
+    "connector_not_editable": ConnectorNotEditable,
+    "connector_forbidden": ConnectorForbidden,
 }
 
 

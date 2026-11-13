@@ -40,6 +40,8 @@ row below.
 | `mcp_servers_list.json` | `GET /v1/mcp-servers` (200) | Bare JSON array: the key holder's own connectors first (a switched-off one, an OAuth one with `authorization`, one with masked header and `bearer_token`), then one visible only through the team (`access=team`, `enabled` and `user_env` null) |
 | `mcp_server_detail.json` | `GET /v1/mcp-servers/{id}` (200) | One connector; every one of the 25 fields is present, secret values read `********` |
 | `mcp_server_tools.json` | `GET /v1/mcp-servers/{id}/tools` (200) | The connector's `id`, two `tools` (`name`, `mcp_name`, `description`) and an empty `failures` list |
+| `mcp_server_write.json` | `POST /v1/mcp-servers`, `PATCH /v1/mcp-servers/{id}` or `PUT /v1/mcp-servers/{id}/enabled` (200) | One connector, all 25 fields, in the shape `GET` returns (a bearer-authenticated connector with masked header and `bearer_token`) |
+| `mcp_server_delete.json` | `DELETE /v1/mcp-servers/{id}` (200) | `{"id": ...}` confirmation |
 | `create_task.json` | `POST /v1/chat/tasks` (202) | Older-server shape: initial `status=pending`, no `dispatch_class` |
 | `create_task_dispatch_class.json` | `POST /v1/chat/tasks` (202) | Current queued-server shape: `status=pending`, carries `run_id`, `state_version`, `control_state` and `dispatch_class` |
 | `create_task_response_format.json` | `POST /v1/chat/tasks` (202) | Current-server shape for a request with a `response_format`: also echoes `response_format_type=json_schema` and the format's `response_format_name` |
@@ -110,6 +112,9 @@ Stable backend codes using the V1 envelope shape:
 | `connector_unavailable.json` | 409 | V1 envelope with `details.reason` (`disabled` here; raised by `UserClient.mcp_servers.list_tools()`) |
 | `connector_tools_unavailable.json` | 502 | V1 envelope with `details.reason` and `details.failures` (raised by `UserClient.mcp_servers.list_tools()` when no tools were loaded) |
 | `mcp_oauth_authorization_failed.json` | 409 | V1 envelope with `details.reason` (raised by `UserClient.mcp_servers.list_tools()`; authorization can only be completed in the web app) |
+| `connector_name_conflict.json` | 409 | V1 envelope with `details.connector_id` (raised by `UserClient.mcp_servers.create()` and `update()`; `connector_id` is present only when the name is taken by one of the key holder's own connectors) |
+| `connector_forbidden.json` | 403 | V1 envelope with `details.reason` (`team_shared` here; raised by `UserClient.mcp_servers.update()`, `delete()` and `set_enabled()`) |
+| `connector_not_editable.json` | 409 | V1 envelope with `details.reason` (`catalog` here; raised by `UserClient.mcp_servers.update()` and `delete()`) |
 
 ## Usage from a language client
 

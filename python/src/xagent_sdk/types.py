@@ -921,6 +921,13 @@ class _SkillDeleted:
 
 
 @dataclass(frozen=True)
+class _McpServerDeleted:
+    """``DELETE /v1/mcp-servers/{id}`` body; only used to check its shape."""
+
+    id: int
+
+
+@dataclass(frozen=True)
 class _AgentSkills:
     """``GET /v1/agents/{agent_id}/skills`` body; only ``skills`` reaches the caller."""
 
@@ -937,6 +944,7 @@ _AGENT_SKILLS_UPDATE_ADAPTER = TypeAdapter(AgentSkillsUpdate)
 _MCP_SERVER_ADAPTER = TypeAdapter(McpServer)
 _MCP_SERVER_LIST_ADAPTER = TypeAdapter(list[McpServer])
 _MCP_SERVER_TOOLS_ADAPTER = TypeAdapter(McpServerTools)
+_MCP_SERVER_DELETED_ADAPTER = TypeAdapter(_McpServerDeleted)
 
 
 def _require_mapping(data: Any, what: str) -> dict[str, Any]:
@@ -970,8 +978,10 @@ def _validate_write(adapter: TypeAdapter[T], data: Any, what: str) -> T:
     ``create()`` starts a second task and a retried ``append()``/``reply()``
     can send the message twice, while ``skills.create()``,
     ``skills.upload()`` and ``skills.update()`` are idempotent replays and
-    safe to resend, and so is ``agents.revoke_key()``, which reports an
-    already revoked key with ``revoked=False``.
+    safe to resend, and so are ``agents.revoke_key()``, which reports an
+    already revoked key with ``revoked=False``, and ``mcp_servers.update()``
+    and ``mcp_servers.set_enabled()``; ``mcp_servers.create()`` is not (a
+    repeat gets ``ConnectorNameConflict``).
     ``agents.replace_skills()`` is not: resending can lose the unresolved
     names the first call reported, so call ``agents.get_skills()`` first.
     """
@@ -1251,6 +1261,20 @@ def _parse_mcp_server_list(data: Any) -> list[McpServer]:
 
 def _parse_mcp_server_read(data: Any, what: str) -> McpServer:
     return _validate_read(_MCP_SERVER_ADAPTER, _require_mapping(data, what), what)
+
+
+def _parse_mcp_server_write(data: Any, what: str) -> McpServer:
+    return _validate_write(_MCP_SERVER_ADAPTER, data, what)
+
+
+def _parse_mcp_server_delete(data: Any) -> None:
+    """Check that a delete answered with ``{"id": int}``.
+
+    The body carries nothing the caller needs, but a 200 that is not the
+    server's delete confirmation (for example a proxy's HTML page) must not
+    be reported as a completed delete.
+    """
+    _validate_write(_MCP_SERVER_DELETED_ADAPTER, data, "connector deletion")
 
 
 def _parse_mcp_server_tools(data: Any) -> McpServerTools:
