@@ -31,7 +31,7 @@ Set credentials via environment (recommended) or pass them to the
 constructors:
 
 ```bash
-# personal key — for UserClient (identity, templates, agents, skills, and tasks on any agent you can see)
+# personal key — for UserClient (identity, templates, agents, skills, MCP connectors, and tasks on any agent you can see)
 export XAGENT_PERSONAL_KEY="xag_personal_..."
 
 # runtime key — for AgentClient (chat tasks against a specific agent)
@@ -115,8 +115,9 @@ Persist it to a secret manager before discarding the
   ``UserPrincipal``.
 - **Personal key**: ``xag_personal_<prefix>_<secret>`` — the user's
   long-lived credential, held by ``UserClient``. Authorizes ``/v1/me``,
-  ``/v1/templates*``, ``/v1/agents*``, ``/v1/skills*`` and the
-  ``/v1/chat/tasks*`` task endpoints (``user.tasks``). A task started
+  ``/v1/templates*``, ``/v1/agents*``, ``/v1/skills*``,
+  ``/v1/mcp-servers*`` and the ``/v1/chat/tasks*`` task endpoints
+  (``user.tasks``). A task started
   this way runs as you, not as the agent's owner, and every personal key
   of yours sees the tasks any of them created, until the task's agent is
   deleted.
@@ -336,6 +337,7 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `TaskNotFound` | 404 | `task_not_found` |
 | `TemplateNotFound` | 404 | `template_not_found` |
 | `SkillNotFound` | 404 | `skill_not_found` -- raised by `skills.get()`, `skills.update()` and `skills.delete()` |
+| `ConnectorNotFound` | 404 | `connector_not_found` -- raised by `mcp_servers` methods that take a `server_id` |
 | `TaskBusy` | 409 | `task_busy` |
 | `SkillAlreadyExists` | 409 | `skill_already_exists` -- raised by `skills.create()` / `skills.upload()` |
 | `InteractionResponseRequired` | 409 | `interaction_response_required` -- raised by `append()` on a `WAITING_FOR_USER` task; use `reply()` instead |
@@ -359,7 +361,7 @@ SDK-coined codes:
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `mcp_servers.list()` and `mcp_servers.get()` raise it in the same three cases -- `mcp_servers.list()` never turns a wrong body into an empty list; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
 | `RunMismatch` | `wait()` / `run()` with an expected run: the snapshot about to be returned shows another run or no run (code `run_mismatch`); `TaskInfo.parsed(expected_run_id=...)` and `RunResult.parsed()` for the same reason; a subclass of `StructuredOutputError` |
 | `UnsupportedFeature` | `create()` / `append()` / `run()` with a `response_format`: `GET /v1/features` answered 404 or does not list `structured_output` (raised before the write, `task_id=None`), or the write's response did not echo the format back (`task_id` is the accepted task) |
 | `UnsupportedSchema` | a `response_format` refused before any request: it breaks a server rule checked locally (`rule`, `path` and `message` as the server reports them); a Pydantic model that cannot be converted raises its subclass `UnsupportedModel` |
@@ -690,6 +692,38 @@ Known limitations:
   ignored silently. This SDK detects that through `GET /v1/features` and the
   echoed fields, as described above.
 
+### 13. Manage your MCP connectors
+
+An MCP connector gives agents the tools of an external MCP server. With a
+personal key you can read the connectors you can see: your own, switched on
+or off, and the ones your team shares with you.
+
+```python
+from xagent_sdk import ConnectorNotFound, UserClient
+
+with UserClient() as user:
+    for server in user.mcp_servers.list():
+        print(server.id, server.name, server.transport, server.access, server.enabled)
+
+    try:
+        server = user.mcp_servers.get(42)
+    except ConnectorNotFound:
+        print("no connector 42 that you can see")
+    else:
+        if server.authorization is not None:
+            print("OAuth:", server.authorization.status)
+```
+
+`access` is `"own"` for a connector you are linked to and `"team"` for one
+you only see through your team; a team connector is read-only for you, and
+its `enabled` and `user_env` are `None`. These secret values are masked:
+header values, `env` and `user_env` values, and the `bearer_token`,
+`api_key_value`, `client_secret` and `access_token` entries of `auth` read
+`"********"` when set. Anything else, such as a secret written into `url`
+or `runtime_bindings`, comes back as stored. Fields such as `transport`, `access`, `kind` and
+`authorization.status` are plain strings; the server may add values.
+OAuth authorization can only be completed in the xAgent web app.
+
 ## API reference
 
 All methods are synchronous.
@@ -697,8 +731,9 @@ All methods are synchronous.
 ### `UserClient` — personal key surface
 
 Constructed with a personal key; talks to `/v1/me`, `/v1/templates*`,
-`/v1/agents*`, `/v1/skills*` and `/v1/chat/tasks*`. See the `UserClient` docstring for
-which agents and tasks a personal key can reach.
+`/v1/agents*`, `/v1/skills*`, `/v1/mcp-servers*` and `/v1/chat/tasks*`.
+See the `UserClient` docstring for which agents and tasks a personal key
+can reach.
 
 | Method | Returns | Notes |
 |---|---|---|
@@ -719,6 +754,8 @@ which agents and tasks a personal key can reach.
 | `user.skills.upload(*, filename, content, name=None)` | `SkillSummary` | POST `/v1/skills/upload`; `.zip` or `.md`, chosen by `filename`, which can be a path or a `Path` (only its last part is sent); `content` is `bytes`; the same name with the same content returns 200 again, any other clash → `SkillAlreadyExists`; over the size limit → HTTP 413 (see the upload section); a `filename` with no last part raises `ValueError` before any request |
 | `user.skills.update(name, *, skill_md)` | `SkillSummary` | PUT `/v1/skills/{name}`; replaces the whole SKILL.md of one of your own skills (anything else → `SkillNotFound`); bad content → `InvalidInput`; same `ValueError` rule as `get` |
 | `user.skills.delete(name)` | `None` | DELETE `/v1/skills/{name}`; returns once the server confirms; deleting again → `SkillNotFound`; same `ValueError` rule as `get` |
+| `user.mcp_servers.list()` | `list[McpServer]` | GET `/v1/mcp-servers`; your own connectors first (including ones switched off), then the ones your team shares with you, in server order; a body that is not an array of connectors raises `MalformedResponse` (never `[]`) |
+| `user.mcp_servers.get(server_id)` | `McpServer` | GET `/v1/mcp-servers/{server_id}`; 404 → `ConnectorNotFound` (also for a connector you cannot see); a `server_id` that is not an integer raises `TypeError` before any request |
 | `user.close()` / `with ... as user` | — | release the connection pool |
 
 ### `AgentClient` — runtime surface
@@ -941,6 +978,11 @@ leave the list as it is. Set `E2E_TEMPLATE_ID` to pick which template
 the full-flow test instantiates from (defaults to the first listed
 template), and `E2E_AGENT_NAME` to override the new agent's display
 name.
+
+Set `XAGENT_E2E_MCP_URL` to the URL of a `streamable_http` MCP server the
+backend can reach to run the MCP connector tests. They create a connector
+with a unique name pointing at it and delete it afterwards; without the
+variable they skip.
 
 ## License
 

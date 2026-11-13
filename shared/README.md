@@ -35,6 +35,8 @@ row below.
 | `skill_detail.json` | `GET /v1/skills/{name}` (200) | Single object: the summary fields plus the complete `skill_md` text and the sorted `files` list |
 | `skill_write.json` | `POST /v1/skills`, `POST /v1/skills/upload` or `PUT /v1/skills/{name}` (200) | Skill summary (`name / description / when_to_use / tags / source`) with `source=personal`; a repeat of the same create or upload also answers 200 |
 | `skill_delete.json` | `DELETE /v1/skills/{name}` (200) | `{"name": ...}` confirmation |
+| `mcp_servers_list.json` | `GET /v1/mcp-servers` (200) | Bare JSON array: the key holder's own connectors first (a switched-off one, an OAuth one with `authorization`, one with masked header and `bearer_token`), then one visible only through the team (`access=team`, `enabled` and `user_env` null) |
+| `mcp_server_detail.json` | `GET /v1/mcp-servers/{id}` (200) | One connector; every one of the 25 fields is present, secret values read `********` |
 | `create_task.json` | `POST /v1/chat/tasks` (202) | Older-server shape: initial `status=pending`, no `dispatch_class` |
 | `create_task_dispatch_class.json` | `POST /v1/chat/tasks` (202) | Current queued-server shape: `status=pending`, carries `run_id`, `state_version`, `control_state` and `dispatch_class` |
 | `create_task_response_format.json` | `POST /v1/chat/tasks` (202) | Current-server shape for a request with a `response_format`: also echoes `response_format_type=json_schema` and the format's `response_format_name` |
@@ -90,6 +92,7 @@ Stable backend codes using the V1 envelope shape:
 | `temporarily_unavailable.json` | 503 | V1 envelope (raised by `reply()` on a transient read failure; safe to retry) |
 | `skill_not_found.json` | 404 | V1 envelope (raised by `UserClient.skills.get()`, `update()` and `delete()`) |
 | `skill_already_exists.json` | 409 | V1 envelope (raised by `UserClient.skills.create()` and `upload()` when the name is taken by a different write) |
+| `connector_not_found.json` | 404 | V1 envelope (raised by `UserClient.mcp_servers` methods that take a `server_id`; also for a connector the key holder cannot see) |
 
 ## Usage from a language client
 

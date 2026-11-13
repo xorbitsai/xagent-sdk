@@ -2,6 +2,7 @@ import httpx
 
 from xagent_sdk._agents import AgentsAPI
 from xagent_sdk._base import _BaseClient, _json_body
+from xagent_sdk._mcp_servers import McpServersAPI
 from xagent_sdk._skills import SkillsAPI
 from xagent_sdk._templates import TemplatesAPI
 from xagent_sdk.tasks import TasksAPI
@@ -14,8 +15,9 @@ class UserClient(_BaseClient):
     Authenticates with a **personal key** (``xag_personal_<prefix>_<secret>``)
     issued by the xAgent web UI to an individual user. A personal key
     authorizes ``/v1/me`` (``me()``), ``/v1/templates*`` (``templates``),
-    ``/v1/agents*`` (``agents``), ``/v1/skills*`` (``skills``) and the
-    ``/v1/chat/tasks*`` task endpoints (``tasks``).
+    ``/v1/agents*`` (``agents``), ``/v1/skills*`` (``skills``),
+    ``/v1/mcp-servers*`` (``mcp_servers``) and the ``/v1/chat/tasks*`` task
+    endpoints (``tasks``).
 
     ``tasks`` starts tasks on any agent the key holder can see: the agents
     ``agents.list()`` returns. Whether the agent is published does not
@@ -88,6 +90,7 @@ class UserClient(_BaseClient):
         self.agents = AgentsAPI(self)
         self.tasks = TasksAPI(self)
         self.skills = SkillsAPI(self)
+        self.mcp_servers = McpServersAPI(self)
 
     def me(self) -> UserPrincipal:
         """``GET /v1/me`` -- identity probe for the personal key.

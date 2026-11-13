@@ -1,0 +1,32 @@
+{
+  "id": 1,
+  "name": "my-plain",
+  "description": "A plain connector",
+  "transport": "streamable_http",
+  "url": "https://mcp.example.com/mcp",
+  "headers": {
+    "X-Test-Header": "********"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer_token": "********"
+  },
+  "env": null,
+  "user_env": null,
+  "runtime_input_schema": null,
+  "runtime_bindings": null,
+  "signed_uploads": null,
+  "signed_uploads_error": null,
+  "allow_delegated_authorization": false,
+  "access": "own",
+  "kind": "custom",
+  "enabled": true,
+  "can_edit": true,
+  "can_delete": true,
+  "app_id": null,
+  "provider": null,
+  "connected_account": null,
+  "authorization": null,
+  "created_at": "2026-11-13T06:33:40",
+  "updated_at": "2026-11-13T06:33:40"
+}

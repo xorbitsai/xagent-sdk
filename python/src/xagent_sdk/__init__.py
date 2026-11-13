@@ -3,6 +3,7 @@ from xagent_sdk._version import __version__
 from xagent_sdk.agent_client import AgentClient
 from xagent_sdk.errors import (
     AgentNotFound,
+    ConnectorNotFound,
     InteractionNotResumable,
     InteractionResponseRequired,
     InternalError,
@@ -32,6 +33,8 @@ from xagent_sdk.types import (
     AgentSummary,
     AppendResult,
     CreateTaskResult,
+    McpServer,
+    McpServerAuthorization,
     PendingInteraction,
     RotateKeyResult,
     RunResult,
@@ -59,6 +62,7 @@ __all__ = [
     "AgentSkillsUpdate",
     "AgentSummary",
     "AppendResult",
+    "ConnectorNotFound",
     "CreateTaskResult",
     "InteractionNotResumable",
     "InteractionResponseRequired",
@@ -66,6 +70,8 @@ __all__ = [
     "InvalidAPIKey",
     "InvalidInput",
     "MalformedResponse",
+    "McpServer",
+    "McpServerAuthorization",
     "NoPendingInteraction",
     "PendingInteraction",
     "RateLimited",

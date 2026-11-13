@@ -156,8 +156,8 @@ class _BaseClient:
         """Send a request and map any 4xx/5xx response to an XAgentError.
 
         Protected by package convention: called by API namespace classes
-        within ``xagent_sdk`` (TasksAPI, TemplatesAPI, AgentsAPI, SkillsAPI) but not
-        part of the user-facing API.
+        within ``xagent_sdk`` (TasksAPI, TemplatesAPI, AgentsAPI, SkillsAPI,
+        McpServersAPI) but not part of the user-facing API.
 
         Multipart uploads pass ``files``/``data`` instead of ``json``.
 
