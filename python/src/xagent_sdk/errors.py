@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 import httpx
@@ -19,12 +20,19 @@ class XAgentError(Exception):
             It can be ``{}``, which is not the same as None. Errors the SDK
             raises itself, and responses without the V1 error envelope, have
             None.
+        retry_after: the whole number of seconds the server's ``Retry-After``
+            response header asks the caller to wait, when the error came
+            with the V1 error envelope and a header of that form; otherwise
+            None. ``0`` means the request can be retried at once, which is
+            different from None (no advice), so test it with
+            ``is not None``. Dates and other header forms are not read.
     """
 
     code: str
     message: str
     http_status: int | None
     details: dict[str, Any] | None
+    retry_after: int | None
 
     def __init__(
         self,
@@ -33,12 +41,14 @@ class XAgentError(Exception):
         http_status: int | None = None,
         *,
         details: dict[str, Any] | None = None,
+        retry_after: int | None = None,
     ) -> None:
         super().__init__(f"[{code}] {message}")
         self.code = code
         self.message = message
         self.http_status = http_status
         self.details = details
+        self.retry_after = retry_after
 
 
 # Server-mapped errors (V1 envelope stable codes).
@@ -69,7 +79,15 @@ class TaskBusy(XAgentError):
 
 
 class RateLimited(XAgentError):
-    """HTTP 429, code ``rate_limited``."""
+    """HTTP 429, code ``rate_limited``.
+
+    ``UserClient.mcp_servers.list_tools()`` raises it when your account
+    already has two tool listings in progress on that server process
+    (including ones whose request ended early), or when no free slot for
+    another listing turns up in time (the slots are shared by all key
+    holders). ``retry_after`` is then the number of seconds the server
+    suggests waiting before trying again.
+    """
 
 
 class InternalError(XAgentError):
@@ -127,6 +145,50 @@ class ConnectorNotFound(XAgentError):
     Raised by ``UserClient.mcp_servers`` methods that take a ``server_id``:
     the key holder cannot see a connector with this id. A connector that
     does not exist and one the holder cannot see get the same answer.
+    """
+
+
+class TransportNotSupported(XAgentError):
+    """HTTP 400, code ``transport_not_supported``.
+
+    Raised by ``UserClient.mcp_servers.list_tools()`` when the connector
+    uses a transport the API cannot list tools for: only
+    ``streamable_http`` and ``sse`` are supported. ``details`` is None.
+    """
+
+
+class ConnectorUnavailable(XAgentError):
+    """HTTP 409, code ``connector_unavailable``.
+
+    Raised by ``UserClient.mcp_servers.list_tools()`` when the connector
+    exists but its tools cannot be listed right now.
+    ``details["reason"]`` says why: ``team_shared``, ``disabled``,
+    ``unsupported``, ``client_rejected``, ``unknown``, or a reason string
+    of the connector session itself (lowercase letters and underscores).
+    Treat any other string as an unknown reason.
+    """
+
+
+class ConnectorToolsUnavailable(XAgentError):
+    """HTTP 502, code ``connector_tools_unavailable``.
+
+    Raised by ``UserClient.mcp_servers.list_tools()`` when the connector
+    was started but did not come up -- including when its URL cannot be
+    reached -- or came up with no tools (an empty tool list is never
+    returned as a success). ``details["reason"]`` is a short reason string
+    and ``details["failures"]`` is a list, possibly empty, of
+    ``{"phase": str, "attempts": int}`` objects describing what failed.
+    """
+
+
+class McpOAuthAuthorizationFailed(XAgentError):
+    """HTTP 409, code ``mcp_oauth_authorization_failed``.
+
+    Raised by ``UserClient.mcp_servers.list_tools()`` when the connector's
+    OAuth authorization is missing or no longer works. The SDK cannot
+    complete it: authorization can only be done in the web app.
+    ``details["reason"]`` says what is wrong; the server uses
+    ``authorization_required`` when it gives no other reason.
     """
 
 
@@ -251,8 +313,9 @@ class MalformedResponse(XAgentError):
     empty list. ``replace_skills()`` may already have taken effect when it
     raises this, so call ``get_skills()`` to check what the server stored.
 
-    ``UserClient.mcp_servers.list()`` and ``get()`` raise it in the same three
-    cases. ``list()`` never folds a wrong-shaped body into an empty list.
+    ``UserClient.mcp_servers.list()``, ``get()`` and ``list_tools()`` raise it
+    in the same three cases. ``list()`` never folds a wrong-shaped body into an
+    empty list.
 
     ``TaskInfo.parsed()`` and ``RunResult.parsed()`` raise it when the
     structured result fields break the server's contract: a ``"ready"``
@@ -520,6 +583,10 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "skill_not_found": SkillNotFound,
     "skill_already_exists": SkillAlreadyExists,
     "connector_not_found": ConnectorNotFound,
+    "transport_not_supported": TransportNotSupported,
+    "connector_unavailable": ConnectorUnavailable,
+    "connector_tools_unavailable": ConnectorToolsUnavailable,
+    "mcp_oauth_authorization_failed": McpOAuthAuthorizationFailed,
 }
 
 
@@ -531,7 +598,9 @@ def from_response(resp: httpx.Response) -> XAgentError:
     Recognizes:
       - V1 envelope: ``{"error": {"code": ..., "message": ...}}``, with an
         optional ``details`` object that is kept on the exception (a
-        ``details`` value that is not an object is dropped)
+        ``details`` value that is not an object is dropped); the
+        ``Retry-After`` response header is kept as ``retry_after`` when it
+        is a whole number of seconds
       - Legacy FastAPI validation fallback: HTTP 422 with ``{"detail": [...]}``
         -> InvalidInput
       - Anything else (non-JSON body, missing ``error`` key, unknown ``code``)
@@ -563,7 +632,19 @@ def from_response(resp: httpx.Response) -> XAgentError:
         message,
         status,
         details=details if isinstance(details, dict) else None,
+        retry_after=_parse_retry_after(resp.headers.get("retry-after")),
     )
+
+
+def _parse_retry_after(value: str | None) -> int | None:
+    """Read a ``Retry-After`` header given as whole seconds.
+
+    Only one to nine ASCII digits count; HTTP dates, signs, fractions and
+    lists are ignored (None). ``0`` is a valid answer.
+    """
+    if value is None or re.fullmatch(r"[0-9]{1,9}", value) is None:
+        return None
+    return int(value)
 
 
 def _fallback_message(value: Any) -> str:

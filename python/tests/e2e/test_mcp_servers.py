@@ -61,6 +61,18 @@ def test_list_and_get_a_connector(
     assert server.enabled is True
 
 
+def test_list_the_tools_of_a_connector(
+    user_client: UserClient, seeded_connector: dict[str, object]
+) -> None:
+    server_id = seeded_connector["id"]
+    assert isinstance(server_id, int)
+
+    result = user_client.mcp_servers.list_tools(server_id)
+    assert result.id == server_id
+    assert result.tools
+    assert all(tool.mcp_name for tool in result.tools)
+
+
 def test_get_a_connector_that_does_not_exist(user_client: UserClient) -> None:
     with pytest.raises(ConnectorNotFound) as exc:
         user_client.mcp_servers.get(2**31 - 1)

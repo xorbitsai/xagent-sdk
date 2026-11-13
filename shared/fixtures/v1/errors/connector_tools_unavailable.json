@@ -1,0 +1,15 @@
+{
+  "error": {
+    "code": "connector_tools_unavailable",
+    "message": "The connector could not be started or returned no tools.",
+    "details": {
+      "reason": "no_tools",
+      "failures": [
+        {
+          "phase": "initialize",
+          "attempts": 3
+        }
+      ]
+    }
+  }
+}

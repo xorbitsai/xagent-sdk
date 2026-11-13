@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "mcp_oauth_authorization_failed",
+    "message": "Authorization can only be completed in the xagent web app, not with an API key. Open Connectors and select this connector; if it offers Connect, choose it, otherwise ask the connector's owner.",
+    "details": {
+      "reason": "authorization_required"
+    }
+  }
+}

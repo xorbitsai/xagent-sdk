@@ -328,7 +328,7 @@ is a partial mitigation, not a guarantee.
 ### 7. Error handling
 
 All SDK exceptions inherit from `XAgentError` and carry `code`,
-`message`, `http_status`, and `details`. Server-mapped codes:
+`message`, `http_status`, `details`, and `retry_after`. Server-mapped codes:
 
 | Exception | HTTP | Server code |
 |---|---|---|
@@ -338,13 +338,17 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `TemplateNotFound` | 404 | `template_not_found` |
 | `SkillNotFound` | 404 | `skill_not_found` -- raised by `skills.get()`, `skills.update()` and `skills.delete()` |
 | `ConnectorNotFound` | 404 | `connector_not_found` -- raised by `mcp_servers` methods that take a `server_id` |
+| `TransportNotSupported` | 400 | `transport_not_supported` -- raised by `mcp_servers.list_tools()` for a connector whose transport is not `streamable_http` or `sse` |
+| `ConnectorUnavailable` | 409 | `connector_unavailable` -- raised by `mcp_servers.list_tools()`; `details["reason"]` says why (`team_shared`, `disabled`, `unsupported`, `client_rejected`, `unknown`, or another lowercase reason string) |
+| `McpOAuthAuthorizationFailed` | 409 | `mcp_oauth_authorization_failed` -- raised by `mcp_servers.list_tools()` when the connector's OAuth authorization is missing or no longer works; it can only be fixed in the web app; `details["reason"]` says what is wrong |
+| `ConnectorToolsUnavailable` | 502 | `connector_tools_unavailable` -- raised by `mcp_servers.list_tools()` when no tools were loaded; `details["reason"]` and `details["failures"]` (a list of `{"phase", "attempts"}`) say what failed |
 | `TaskBusy` | 409 | `task_busy` |
 | `SkillAlreadyExists` | 409 | `skill_already_exists` -- raised by `skills.create()` / `skills.upload()` |
 | `InteractionResponseRequired` | 409 | `interaction_response_required` -- raised by `append()` on a `WAITING_FOR_USER` task; use `reply()` instead |
 | `NoPendingInteraction` | 409 | `no_pending_interaction` -- raised by `reply()` when the task is not `WAITING_FOR_USER` |
 | `InteractionNotResumable` | 409 | `interaction_not_resumable` -- raised by `reply()` when the task's execution state could not be restored; do not retry |
 | `InvalidInput` | 400 / 413 / 422 | `invalid_input` |
-| `RateLimited` | 429 | `rate_limited` |
+| `RateLimited` | 429 | `rate_limited` -- also raised by `mcp_servers.list_tools()` when your account already has two listings in progress on that server process, or no free slot turns up in time; `retry_after` is the suggested wait in seconds |
 | `InternalError` | 500 | `internal_error` |
 | `TemporarilyUnavailable` | 503 | `temporarily_unavailable` -- raised by `reply()` on a transient read failure; safe to retry |
 
@@ -379,12 +383,18 @@ except InternalError as e:
         ...  # the reply was taken; read the task instead of sending it again
 ```
 
+`retry_after` is the number of seconds the server's `Retry-After` header
+asks you to wait, when the error came with the V1 envelope and the header
+is a whole number of seconds; otherwise it is `None`. `0` means you can
+retry at once, so test it with `is not None`, not by truthiness. Dates
+and other header forms are not read.
+
 SDK-coined codes:
 
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `mcp_servers.list()` and `mcp_servers.get()` raise it in the same three cases -- `mcp_servers.list()` never turns a wrong body into an empty list; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `mcp_servers.list()`, `mcp_servers.get()` and `mcp_servers.list_tools()` raise it in the same three cases -- `mcp_servers.list()` never turns a wrong body into an empty list; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
 | `RunMismatch` | `wait()` / `run()` with an expected run: the snapshot about to be returned shows another run or no run (code `run_mismatch`); `TaskInfo.parsed(expected_run_id=...)` and `RunResult.parsed()` for the same reason; a subclass of `StructuredOutputError` |
 | `UnsupportedFeature` | `create()` / `append()` / `run()` with a `response_format`: `GET /v1/features` answered 404 or does not list `structured_output` (raised before the write, `task_id=None`), or the write's response did not echo the format back (`task_id` is the accepted task) |
 | `UnsupportedSchema` | a `response_format` refused before any request: it breaks a server rule checked locally (`rule`, `path` and `message` as the server reports them); a Pydantic model that cannot be converted raises its subclass `UnsupportedModel` |
@@ -792,11 +802,19 @@ Known limitations:
 ### 13. Manage your MCP connectors
 
 An MCP connector gives agents the tools of an external MCP server. With a
-personal key you can read the connectors you can see: your own, switched on
-or off, and the ones your team shares with you.
+personal key you can read the connectors you can see (your own, switched on
+or off, and the ones your team shares with you) and list the tools of one.
 
 ```python
-from xagent_sdk import ConnectorNotFound, UserClient
+import time
+
+from xagent_sdk import (
+    ConnectorNotFound,
+    ConnectorUnavailable,
+    RateLimited,
+    UserClient,
+    XAgentTransportError,
+)
 
 with UserClient() as user:
     for server in user.mcp_servers.list():
@@ -809,6 +827,25 @@ with UserClient() as user:
     else:
         if server.authorization is not None:
             print("OAuth:", server.authorization.status)
+
+    try:
+        listing = user.mcp_servers.list_tools(42)
+    except RateLimited as e:
+        # Your account already has two listings in progress, or the
+        # server's shared tool-listing slots stayed taken.
+        if e.retry_after is not None:
+            time.sleep(e.retry_after)
+    except ConnectorUnavailable as e:
+        print("cannot list its tools:", (e.details or {}).get("reason"))
+    except XAgentTransportError:
+        # The client gave up first; the server may still be working, so
+        # wait before trying again.
+        pass
+    else:
+        for tool in listing.tools:
+            print(tool.mcp_name, "-", tool.description)
+        if listing.failures:
+            print("some tools may be missing:", listing.failures)
 ```
 
 `access` is `"own"` for a connector you are linked to and `"team"` for one
@@ -820,6 +857,20 @@ header values, `env` and `user_env` values, and the `bearer_token`,
 or `runtime_bindings`, comes back as stored. Fields such as `transport`, `access`, `kind` and
 `authorization.status` are plain strings; the server may add values.
 OAuth authorization can only be completed in the xAgent web app.
+
+`list_tools()` makes the server connect to the connector, so it can take much
+longer than the other calls: a few seconds at most waiting for a free slot,
+then up to the server's initialization timeout to start the connector -- over
+60 seconds in the worst case with the default configuration, and without a
+limit on a server configured with no timeout. By default it waits for at least 150 seconds; pass `timeout=` (seconds, greater
+than 0) to change that for one call. If your client times out first the server
+keeps loading the tools, keeps its slot and keeps counting the listing against
+your account, so do not retry at once. Each account may have at most two
+listings in progress per server process, across all of its keys and
+connectors; a third one, or one that finds no free slot in time, gets
+`RateLimited`, and `retry_after` is the suggested wait in seconds. A listing is never empty: a connector that yields no tools raises
+`ConnectorToolsUnavailable`. Refer to a tool by `mcp_name`; `name` is the web
+app's display name and can change.
 
 ## API reference
 
@@ -853,6 +904,7 @@ can reach.
 | `user.skills.delete(name)` | `None` | DELETE `/v1/skills/{name}`; returns once the server confirms; deleting again → `SkillNotFound`; same `ValueError` rule as `get` |
 | `user.mcp_servers.list()` | `list[McpServer]` | GET `/v1/mcp-servers`; your own connectors first (including ones switched off), then the ones your team shares with you, in server order; a body that is not an array of connectors raises `MalformedResponse` (never `[]`) |
 | `user.mcp_servers.get(server_id)` | `McpServer` | GET `/v1/mcp-servers/{server_id}`; 404 → `ConnectorNotFound` (also for a connector you cannot see); a `server_id` that is not an integer raises `TypeError` before any request |
+| `user.mcp_servers.list_tools(server_id, *, timeout=None)` | `McpServerTools` | GET `/v1/mcp-servers/{server_id}/tools`; the server connects to the connector, so this is slow (a few seconds for a free slot plus up to the server's initialization timeout, over 60 seconds by default in the worst case, and without a limit when the server is configured with no timeout); `timeout` is this call's read timeout in seconds (finite, greater than 0, else `ValueError`), and when not given the larger of the client's read timeout and 150 seconds is used (no limit if the client has none); if the client times out first (`XAgentTransportError`) the server keeps working, keeps its slot and keeps counting the listing against your account, so do not retry at once; two listings of your account already in progress, or no free slot in time → `RateLimited` with `retry_after`; no tools loaded → `ConnectorToolsUnavailable` (an empty `tools` list never comes back as a success); a non-empty `failures` means part of the loading failed; refer to a tool by `McpTool.mcp_name`, not `name` |
 | `user.close()` / `with ... as user` | — | release the connection pool |
 
 ### `AgentClient` — runtime surface

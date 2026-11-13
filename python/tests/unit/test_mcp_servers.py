@@ -7,6 +7,7 @@ same canonical JSON a real server sends.
 import copy
 import dataclasses
 import json
+import math
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -17,11 +18,19 @@ from pydantic import ValidationError
 from xagent_sdk import (
     AgentClient,
     ConnectorNotFound,
+    ConnectorToolsUnavailable,
+    ConnectorUnavailable,
     InternalError,
     MalformedResponse,
+    McpOAuthAuthorizationFailed,
     McpServer,
+    McpServerTools,
+    RateLimited,
+    TransportNotSupported,
     UserClient,
+    XAgentError,
 )
+from xagent_sdk._http import _DEFAULT_CONNECT_TIMEOUT
 from xagent_sdk._mcp_servers import McpServersAPI
 from xagent_sdk.cloud import WorkspaceClient
 
@@ -49,18 +58,22 @@ def _detail() -> dict[str, Any]:
 _CALLS: dict[str, _Call] = {
     "list": lambda u: u.mcp_servers.list(),
     "get": lambda u: u.mcp_servers.get(7),
+    "list_tools": lambda u: u.mcp_servers.list_tools(7),
 }
 _ROUTES: dict[str, tuple[str, bytes]] = {
     "list": ("GET", b"/v1/mcp-servers"),
     "get": ("GET", b"/v1/mcp-servers/7"),
+    "list_tools": ("GET", b"/v1/mcp-servers/7/tools"),
 }
 _EXPECTED_BODIES: dict[str, object] = {
     "list": None,
     "get": None,
+    "list_tools": None,
 }
 _OK_FIXTURES: dict[str, str] = {
     "list": "mcp_servers_list",
     "get": "mcp_server_detail",
+    "list_tools": "mcp_server_tools",
 }
 
 
@@ -155,6 +168,89 @@ class TestUnexpectedResponses:
             c.mcp_servers.get(7)
         assert exc.value.code == "connector_not_found"
         assert exc.value.http_status == 404
+
+
+def _error_cases() -> list[Any]:
+    # (status, fixture, expected class, expected details, response headers).
+    # The 429 body and header are what a server at its tool-listing limit
+    # sends: the V1 envelope without ``details`` and ``Retry-After: 3``.
+    return [
+        (404, error_envelope("connector_not_found"), ConnectorNotFound, None, {}),
+        (
+            400,
+            error_envelope("transport_not_supported"),
+            TransportNotSupported,
+            None,
+            {},
+        ),
+        (
+            409,
+            error_envelope("connector_unavailable"),
+            ConnectorUnavailable,
+            {"reason": "disabled"},
+            {},
+        ),
+        (
+            409,
+            error_envelope("mcp_oauth_authorization_failed"),
+            McpOAuthAuthorizationFailed,
+            {"reason": "authorization_required"},
+            {},
+        ),
+        (
+            502,
+            error_envelope("connector_tools_unavailable"),
+            ConnectorToolsUnavailable,
+            {
+                "reason": "no_tools",
+                "failures": [{"phase": "initialize", "attempts": 3}],
+            },
+            {},
+        ),
+        (
+            429,
+            {
+                "error": {
+                    "code": "rate_limited",
+                    "message": (
+                        "Too many connector tool listings are running; retry shortly."
+                    ),
+                }
+            },
+            RateLimited,
+            None,
+            {"Retry-After": "3"},
+        ),
+    ]
+
+
+class TestListToolsErrors:
+    @pytest.mark.parametrize(
+        ("status", "body", "cls", "details", "headers"),
+        _error_cases(),
+        ids=[c[2].__name__ for c in _error_cases()],
+    )
+    def test_error_maps_to_its_class_and_keeps_status_and_details(
+        self,
+        status: int,
+        body: dict[str, Any],
+        cls: type[XAgentError],
+        details: dict[str, Any] | None,
+        headers: dict[str, str],
+    ) -> None:
+        with (
+            _make_user(
+                lambda req: httpx.Response(status, json=body, headers=headers)
+            ) as c,
+            pytest.raises(cls) as exc,
+        ):
+            c.mcp_servers.list_tools(7)
+        assert type(exc.value) is cls
+        assert exc.value.http_status == status
+        assert exc.value.code == body["error"]["code"]
+        assert exc.value.details == details
+        expected_retry = 3 if cls is RateLimited else None
+        assert exc.value.retry_after == expected_retry
 
 
 class TestListParsing:
@@ -258,6 +354,135 @@ class TestDetailParsing:
         assert cause.errors()[0]["loc"] == (field,)
 
 
+class TestListToolsParsing:
+    @pytest.mark.parametrize("body", [[], "x"], ids=["array", "string"])
+    def test_a_body_that_is_not_an_object_is_malformed(self, body: object) -> None:
+        with (
+            _make_user(lambda req: httpx.Response(200, json=body)) as c,
+            pytest.raises(MalformedResponse, match="expected a JSON object") as exc,
+        ):
+            c.mcp_servers.list_tools(7)
+        assert exc.value.http_status is None
+
+    def test_fixture_parses_field_for_field(self) -> None:
+        body = response("mcp_server_tools")
+        with _make_user(lambda req: httpx.Response(200, json=body)) as c:
+            result = c.mcp_servers.list_tools(7)
+        assert isinstance(result, McpServerTools)
+        assert result.id == body["id"]
+        assert [(t.name, t.mcp_name, t.description) for t in result.tools] == [
+            (t["name"], t["mcp_name"], t["description"]) for t in body["tools"]
+        ]
+        assert result.failures == []
+
+    def test_unknown_phase_and_extra_keys_pass_through(self) -> None:
+        body = copy.deepcopy(response("mcp_server_tools"))
+        body["future_field"] = 1
+        body["tools"][0]["future_field"] = 1
+        body["failures"].append(
+            {"phase": "future_value", "attempts": 1, "future_field": 1}
+        )
+        with _make_user(lambda req: httpx.Response(200, json=body)) as c:
+            result = c.mcp_servers.list_tools(7)
+        assert result.failures[0].phase == "future_value"
+        assert result.failures[0].attempts == 1
+
+    @pytest.mark.parametrize("key", ["id", "tools", "failures"])
+    def test_every_top_level_field_is_required(self, key: str) -> None:
+        body = copy.deepcopy(response("mcp_server_tools"))
+        del body[key]
+        with (
+            _make_user(lambda req: httpx.Response(200, json=body)) as c,
+            pytest.raises(MalformedResponse),
+        ):
+            c.mcp_servers.list_tools(7)
+
+
+def _timeout_user(
+    client_timeout: float | None, seen: list[httpx.Request]
+) -> UserClient:
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return httpx.Response(
+            200,
+            json=_detail()
+            if req.url.path.endswith("/7")
+            else response("mcp_server_tools"),
+        )
+
+    return UserClient(
+        personal_key="xag_personal_p_s",
+        base_url="https://test.example",
+        timeout=client_timeout,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+    )
+
+
+class TestListToolsTimeout:
+    @pytest.mark.parametrize(
+        ("client_timeout", "argument", "expected_read"),
+        [
+            (30.0, None, 150.0),
+            (300.0, None, 300.0),
+            (150.0, None, 150.0),
+            (None, None, None),
+            (30.0, 5.0, 5.0),
+            (None, 5.0, 5.0),
+            (300.0, 5.0, 5.0),
+        ],
+        ids=[
+            "client-30-default",
+            "client-300-default",
+            "client-150-default",
+            "client-none-default",
+            "client-30-explicit-5",
+            "client-none-explicit-5",
+            "client-300-explicit-5",
+        ],
+    )
+    def test_this_request_gets_the_expected_timeout_and_the_client_keeps_its_own(
+        self,
+        client_timeout: float | None,
+        argument: float | None,
+        expected_read: float | None,
+    ) -> None:
+        seen: list[httpx.Request] = []
+        with _timeout_user(client_timeout, seen) as c:
+            if argument is None:
+                c.mcp_servers.list_tools(7)
+            else:
+                c.mcp_servers.list_tools(7, timeout=argument)
+            c.mcp_servers.get(7)
+        tools_timeout = seen[0].extensions["timeout"]
+        assert tools_timeout == {
+            "connect": _DEFAULT_CONNECT_TIMEOUT,
+            "read": expected_read,
+            "write": expected_read,
+            "pool": expected_read,
+        }
+        # The next call on the same client is back to the client's own value.
+        assert seen[1].extensions["timeout"] == {
+            "connect": _DEFAULT_CONNECT_TIMEOUT,
+            "read": client_timeout,
+            "write": client_timeout,
+            "pool": client_timeout,
+        }
+
+    @pytest.mark.parametrize("bad", [0, 0.0, -1, -0.5, math.nan, math.inf, -math.inf])
+    def test_a_timeout_that_is_not_a_positive_finite_number_is_refused(
+        self, bad: float
+    ) -> None:
+        seen: list[httpx.Request] = []
+        with (
+            _timeout_user(30.0, seen) as c,
+            pytest.raises(
+                ValueError, match="timeout must be a finite number greater than 0"
+            ),
+        ):
+            c.mcp_servers.list_tools(7, timeout=bad)
+        assert seen == []
+
+
 class TestServerIdPath:
     @pytest.mark.parametrize("server_id", ["5/tools", "1", 1.0, None])
     def test_an_id_that_is_not_an_integer_is_refused_before_sending(
@@ -290,3 +515,17 @@ class TestServerIdPath:
             c.mcp_servers.get(server_id)
         assert captured[0].url.raw_path == raw_path
         assert captured[0].url.query == b""
+
+    @pytest.mark.parametrize("server_id", ["5/tools", "1", 1.0, None])
+    def test_list_tools_refuses_a_non_integer_id_before_sending(
+        self, server_id: object
+    ) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            calls.append(req)
+            return httpx.Response(200, json=response("mcp_server_tools"))
+
+        with _make_user(handler) as c, pytest.raises(TypeError):
+            c.mcp_servers.list_tools(server_id)  # type: ignore[arg-type]
+        assert calls == []

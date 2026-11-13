@@ -15,11 +15,14 @@ import pytest
 
 from xagent_sdk import (
     AgentNotFound,
+    ConnectorToolsUnavailable,
+    ConnectorUnavailable,
     InteractionNotResumable,
     InteractionResponseRequired,
     InternalError,
     InvalidAPIKey,
     InvalidInput,
+    McpOAuthAuthorizationFailed,
     NoPendingInteraction,
     RateLimited,
     SkillAlreadyExists,
@@ -28,6 +31,7 @@ from xagent_sdk import (
     TaskNotFound,
     TemplateNotFound,
     TemporarilyUnavailable,
+    TransportNotSupported,
     XAgentError,
 )
 from xagent_sdk.errors import _CODE_MAP, from_response
@@ -54,6 +58,10 @@ class TestXAgentError:
 
     def test_details_optional(self) -> None:
         assert XAgentError("c", "m", 500).details is None
+
+    def test_retry_after_optional(self) -> None:
+        assert XAgentError("c", "m", 500).retry_after is None
+        assert XAgentError("c", "m", 429, retry_after=0).retry_after == 0
 
 
 def _envelope(details: object) -> dict[str, object]:
@@ -118,10 +126,86 @@ class TestFromResponseDetails:
         assert err.details is None
 
     @pytest.mark.parametrize("code", sorted(_CODE_MAP))
-    def test_every_mapped_class_accepts_details(self, code: str) -> None:
-        err = _CODE_MAP[code]("c", "m", 400, details={"a": 1})
+    def test_every_mapped_class_accepts_details_and_retry_after(
+        self, code: str
+    ) -> None:
+        err = _CODE_MAP[code]("c", "m", 400, details={"a": 1}, retry_after=1)
         assert err.details == {"a": 1}
+        assert err.retry_after == 1
         assert err.http_status == 400
+
+
+def _rate_limited_resp(headers: dict[str, str]) -> httpx.Response:
+    return httpx.Response(
+        429,
+        json=error_envelope("rate_limited"),
+        headers=headers,
+        request=_req(),
+    )
+
+
+class TestFromResponseRetryAfter:
+    @pytest.mark.parametrize(
+        ("header", "expected"),
+        [("7", 7), ("0", 0), ("000000007", 7), ("999999999", 999999999)],
+    )
+    def test_whole_seconds_are_read(self, header: str, expected: int) -> None:
+        err = from_response(_rate_limited_resp({"Retry-After": header}))
+        assert isinstance(err, RateLimited)
+        assert err.retry_after == expected
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "",
+            "-1",
+            "+7",
+            "1.5",
+            "Wed, 21 Oct 2015 07:28:00 GMT",
+            "1234567890",
+            "7, 7",
+            " 7",
+            "7\n",
+        ],
+        ids=[
+            "empty",
+            "negative",
+            "plus",
+            "fraction",
+            "http-date",
+            "ten-digits",
+            "list",
+            "leading-space",
+            "trailing-newline",
+        ],
+    )
+    def test_other_forms_read_as_none(self, header: str) -> None:
+        resp = _rate_limited_resp({})
+        resp.headers["Retry-After"] = header
+        assert from_response(resp).retry_after is None
+
+    def test_missing_header_reads_as_none(self) -> None:
+        assert from_response(_rate_limited_resp({})).retry_after is None
+
+    @pytest.mark.parametrize(
+        ("status", "kwargs"),
+        [
+            (429, {"text": "<html>slow down</html>"}),
+            (429, {"json": {"detail": "Too Many Requests"}}),
+            (422, {"json": {"detail": [{"loc": ["body", "x"], "msg": "bad"}]}}),
+        ],
+        ids=["not-json", "no-envelope", "legacy-422"],
+    )
+    def test_responses_without_the_envelope_ignore_the_header(
+        self, status: int, kwargs: dict[str, object]
+    ) -> None:
+        resp = httpx.Response(
+            status,
+            headers={"Retry-After": "7"},
+            request=_req(),
+            **kwargs,  # type: ignore[arg-type]
+        )
+        assert from_response(resp).retry_after is None
 
 
 class TestFromResponseStableCodes:
@@ -146,6 +230,10 @@ class TestFromResponseStableCodes:
             (409, "no_pending_interaction", NoPendingInteraction),
             (409, "interaction_not_resumable", InteractionNotResumable),
             (503, "temporarily_unavailable", TemporarilyUnavailable),
+            (400, "transport_not_supported", TransportNotSupported),
+            (409, "connector_unavailable", ConnectorUnavailable),
+            (502, "connector_tools_unavailable", ConnectorToolsUnavailable),
+            (409, "mcp_oauth_authorization_failed", McpOAuthAuthorizationFailed),
         ],
     )
     def test_envelope_maps_to_subclass(
@@ -173,7 +261,7 @@ class TestCodeMapFixtures:
             for path in errors_dir.glob("*.json")
         }
         assert fixture_codes == set(_CODE_MAP)
-        assert len(_CODE_MAP) == 15
+        assert len(_CODE_MAP) == 19
 
 
 class TestFromResponseFallback:
