@@ -52,6 +52,77 @@ class TestXAgentError:
     def test_http_status_optional(self) -> None:
         assert XAgentError("c", "m").http_status is None
 
+    def test_details_optional(self) -> None:
+        assert XAgentError("c", "m", 500).details is None
+
+
+def _envelope(details: object) -> dict[str, object]:
+    return {"error": {"code": "task_busy", "message": "m", "details": details}}
+
+
+class TestFromResponseDetails:
+    def test_object_details_are_kept_as_sent(self) -> None:
+        sent = {"accepted": False, "task_id": 7, "nested": {"a": [1]}}
+        err = from_response(httpx.Response(409, json=_envelope(sent), request=_req()))
+        assert isinstance(err, TaskBusy)
+        assert err.details == sent
+
+    def test_empty_object_is_kept_and_differs_from_none(self) -> None:
+        err = from_response(httpx.Response(409, json=_envelope({}), request=_req()))
+        assert err.details == {}
+        assert err.details is not None
+
+    def test_unknown_code_keeps_details(self) -> None:
+        body = {
+            "error": {
+                "code": "reply_outcome_unknown",
+                "message": "m",
+                "details": {"accepted": True},
+            }
+        }
+        err = from_response(httpx.Response(504, json=body, request=_req()))
+        assert type(err) is InternalError
+        assert err.details == {"accepted": True}
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"error": {"code": "task_busy", "message": "m"}},
+            _envelope(None),
+            _envelope([1]),
+            _envelope("x"),
+            _envelope(3),
+        ],
+        ids=["missing", "null", "list", "string", "number"],
+    )
+    def test_details_that_are_not_an_object_read_as_none(
+        self, body: dict[str, object]
+    ) -> None:
+        err = from_response(httpx.Response(409, json=body, request=_req()))
+        assert isinstance(err, TaskBusy)
+        assert err.details is None
+
+    @pytest.mark.parametrize(
+        ("status", "kwargs"),
+        [
+            (404, {"json": {"detail": "Not Found"}}),
+            (422, {"json": {"detail": [{"loc": ["body", "x"], "msg": "bad"}]}}),
+            (502, {"text": "<html>bad gateway</html>"}),
+        ],
+        ids=["no-envelope", "legacy-422", "not-json"],
+    )
+    def test_responses_without_the_envelope_have_no_details(
+        self, status: int, kwargs: dict[str, object]
+    ) -> None:
+        err = from_response(httpx.Response(status, request=_req(), **kwargs))  # type: ignore[arg-type]
+        assert err.details is None
+
+    @pytest.mark.parametrize("code", sorted(_CODE_MAP))
+    def test_every_mapped_class_accepts_details(self, code: str) -> None:
+        err = _CODE_MAP[code]("c", "m", 400, details={"a": 1})
+        assert err.details == {"a": 1}
+        assert err.http_status == 400
+
 
 class TestFromResponseStableCodes:
     @pytest.mark.parametrize(

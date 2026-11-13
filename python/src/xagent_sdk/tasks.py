@@ -347,10 +347,13 @@ class TasksAPI:
             TemporarilyUnavailable: the execution state could not be
                 read due to a transient failure. The task stays
                 ``WAITING_FOR_USER``; safe to retry after a short
-                backoff.
+                backoff. ``details["accepted"]`` is ``False`` when the
+                server could not take the answer at all.
             TaskBusy: the task is currently ``RUNNING``, or another
                 caller's reply/turn is already claiming this task.
-                Retryable.
+                Retryable. ``details["accepted"]`` is ``False`` when the
+                server did not take the answer; ``details`` is None when
+                the task is simply busy.
             TaskNotFound: unknown ``task_id``, or this key cannot see
                 it.
             InternalError: falls back here for any response code the
@@ -359,7 +362,11 @@ class TasksAPI:
                 surfaces as this (FastAPI's 404 carries no V1 error
                 envelope, so it cannot map to a more specific type).
                 This happens whenever the SDK is upgraded ahead of the
-                server it talks to.
+                server it talks to. A reply whose outcome the server
+                could not determine (code ``reply_outcome_unknown``,
+                HTTP 504) also arrives as this, with
+                ``details["accepted"]`` ``True``: the answer was taken,
+                so do not send it again; read the task with ``get()``.
         """
         body: dict[str, Any] = {
             "agent_id": agent_id,
