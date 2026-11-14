@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "connector_name_conflict",
+    "message": "This connector name is already in use or reserved. Connector names are unique across all users and are compared case-insensitively, treating spaces, hyphens and underscores as the same character.",
+    "details": {
+      "connector_id": 1
+    }
+  }
+}

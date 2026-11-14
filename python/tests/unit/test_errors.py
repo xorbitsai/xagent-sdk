@@ -16,6 +16,9 @@ import pytest
 from xagent_sdk import (
     AgentNotFound,
     APIKeyNotFound,
+    ConnectorForbidden,
+    ConnectorNameConflict,
+    ConnectorNotEditable,
     ConnectorToolsUnavailable,
     ConnectorUnavailable,
     InteractionNotResumable,
@@ -236,6 +239,9 @@ class TestFromResponseStableCodes:
             (409, "connector_unavailable", ConnectorUnavailable),
             (502, "connector_tools_unavailable", ConnectorToolsUnavailable),
             (409, "mcp_oauth_authorization_failed", McpOAuthAuthorizationFailed),
+            (409, "connector_name_conflict", ConnectorNameConflict),
+            (409, "connector_not_editable", ConnectorNotEditable),
+            (403, "connector_forbidden", ConnectorForbidden),
         ],
     )
     def test_envelope_maps_to_subclass(

@@ -339,9 +339,12 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `APIKeyNotFound` | 404 | `api_key_not_found` -- raised by `agents.revoke_key()` when the agent has no runtime key with that id |
 | `SkillNotFound` | 404 | `skill_not_found` -- raised by `skills.get()`, `skills.update()` and `skills.delete()` |
 | `ConnectorNotFound` | 404 | `connector_not_found` -- raised by `mcp_servers` methods that take a `server_id` |
-| `TransportNotSupported` | 400 | `transport_not_supported` -- raised by `mcp_servers.list_tools()` for a connector whose transport is not `streamable_http` or `sse` |
+| `TransportNotSupported` | 400 | `transport_not_supported` -- raised by `mcp_servers.list_tools()` for a connector whose transport is not `streamable_http` or `sse`; also raised by `mcp_servers.create()` and `update()` when the `transport` they are given is not one of those, and by `update()` when the connector's stored transport is not |
 | `ConnectorUnavailable` | 409 | `connector_unavailable` -- raised by `mcp_servers.list_tools()`; `details["reason"]` says why (`team_shared`, `disabled`, `unsupported`, `client_rejected`, `unknown`, or another lowercase reason string) |
 | `McpOAuthAuthorizationFailed` | 409 | `mcp_oauth_authorization_failed` -- raised by `mcp_servers.list_tools()` when the connector's OAuth authorization is missing or no longer works; it can only be fixed in the web app; `details["reason"]` says what is wrong |
+| `ConnectorNameConflict` | 409 | `connector_name_conflict` -- raised by `mcp_servers.create()` and `update()` when the name is already in use (names are unique across all users); `details["connector_id"]` is present only when the name is taken by one of your own connectors: after a timed-out `create()` it can be the connector that attempt made or one that existed before, so check it with `get()`, and after a rename in `update()` it is your *other* connector with that name |
+| `ConnectorNotEditable` | 409 | `connector_not_editable` -- raised by `mcp_servers.update()` and `delete()`; `details["reason"]` is `catalog` (an app connection from the catalog, changed only in the web app), `managed_elsewhere` (another account manages its OAuth connection), `authorized_by_others` (other accounts hold authorizations that changing `url`, `auth.issuer` or `auth.resource_metadata_url` would keep; make that change in the web app) or `unknown` |
+| `ConnectorForbidden` | 403 | `connector_forbidden` -- raised by `mcp_servers.update()`, `delete()` and `set_enabled()`, and by `create()` when the server refuses you a new connector; `details["reason"]` is `team_shared` (you see the connector only through your team, so it is read-only) or `not_permitted` (for example deleting a team-owned connector without being a team administrator) |
 | `ConnectorToolsUnavailable` | 502 | `connector_tools_unavailable` -- raised by `mcp_servers.list_tools()` when no tools were loaded; `details["reason"]` and `details["failures"]` (a list of `{"phase", "attempts"}`) say what failed |
 | `TaskBusy` | 409 | `task_busy` |
 | `SkillAlreadyExists` | 409 | `skill_already_exists` -- raised by `skills.create()` / `skills.upload()` |
@@ -395,7 +398,7 @@ SDK-coined codes:
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `mcp_servers.list()`, `mcp_servers.get()` and `mcp_servers.list_tools()` raise it in the same three cases -- `mcp_servers.list()` never turns a wrong body into an empty list; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `mcp_servers.list()`, `mcp_servers.get()` and `mcp_servers.list_tools()` raise it in the same three cases -- `mcp_servers.list()` never turns a wrong body into an empty list -- and `mcp_servers.create()`, `update()`, `delete()` and `set_enabled()` raise it in those cases too, after the server may already have applied the write: `update()` and `set_enabled()` can be repeated safely, a repeated `delete()` raises `ConnectorNotFound` (or `ConnectorForbidden` while your team still shares the connector), and a repeated `create()` raises `ConnectorNameConflict`; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
 | `RunMismatch` | `wait()` / `run()` with an expected run: the snapshot about to be returned shows another run or no run (code `run_mismatch`); `TaskInfo.parsed(expected_run_id=...)` and `RunResult.parsed()` for the same reason; a subclass of `StructuredOutputError` |
 | `UnsupportedFeature` | `create()` / `append()` / `run()` with a `response_format`: `GET /v1/features` answered 404 or does not list `structured_output` (raised before the write, `task_id=None`), or the write's response did not echo the format back (`task_id` is the accepted task) |
 | `UnsupportedSchema` | a `response_format` refused before any request: it breaks a server rule checked locally (`rule`, `path` and `message` as the server reports them); a Pydantic model that cannot be converted raises its subclass `UnsupportedModel` |
@@ -804,12 +807,14 @@ Known limitations:
 
 An MCP connector gives agents the tools of an external MCP server. With a
 personal key you can read the connectors you can see (your own, switched on
-or off, and the ones your team shares with you) and list the tools of one.
+or off, and the ones your team shares with you), list the tools of one, and
+create, change, switch on or off and delete your own.
 
 ```python
 import time
 
 from xagent_sdk import (
+    ConnectorNameConflict,
     ConnectorNotFound,
     ConnectorUnavailable,
     RateLimited,
@@ -847,11 +852,43 @@ with UserClient() as user:
             print(tool.mcp_name, "-", tool.description)
         if listing.failures:
             print("some tools may be missing:", listing.failures)
+
+    # Create a connector. This is not idempotent: after a timeout, sending it
+    # again raises ConnectorNameConflict if the first attempt went through.
+    try:
+        server = user.mcp_servers.create(
+            name="my-tools",
+            transport="streamable_http",
+            url="https://mcp.example.com/mcp",
+            headers={"X-Team": "blue"},
+        )
+    except ConnectorNameConflict as e:
+        # connector_id is present only when the name is one of your own
+        # connectors; read it with get() before relying on it.
+        print("name taken:", (e.details or {}).get("connector_id"))
+    else:
+        # Change only what you pass. headers and auth are replaced as a
+        # whole, so start from the value you read to change one entry.
+        server = user.mcp_servers.update(
+            server.id,
+            description="Tools for the blue team",
+            headers={**(server.headers or {}), "X-Trace": "1"},
+        )
+        # Switch it off and on again; list_tools() raises ConnectorUnavailable
+        # (reason "disabled") while it is off.
+        user.mcp_servers.set_enabled(server.id, False)
+        user.mcp_servers.set_enabled(server.id, True)
+        user.mcp_servers.delete(server.id)
 ```
 
 `access` is `"own"` for a connector you are linked to and `"team"` for one
 you only see through your team; a team connector is read-only for you, and
-its `enabled` and `user_env` are `None`. These secret values are masked:
+its `enabled` and `user_env` are `None`. `update()` sends only the fields you
+pass; `name`, `transport`, `url`, `description`, `headers`, `auth` and
+`allow_delegated_authorization` cannot be `None` (to clear `description` pass
+`""`), while `runtime_input_schema`, `runtime_bindings` and `signed_uploads`
+are cleared with `None`. A header value or secret `auth` field of
+`"********"` keeps the stored value. These secret values are masked:
 header values, `env` and `user_env` values, and the `bearer_token`,
 `api_key_value`, `client_secret` and `access_token` entries of `auth` read
 `"********"` when set. Anything else, such as a secret written into `url`
@@ -908,6 +945,10 @@ can reach.
 | `user.mcp_servers.list()` | `list[McpServer]` | GET `/v1/mcp-servers`; your own connectors first (including ones switched off), then the ones your team shares with you, in server order; a body that is not an array of connectors raises `MalformedResponse` (never `[]`) |
 | `user.mcp_servers.get(server_id)` | `McpServer` | GET `/v1/mcp-servers/{server_id}`; 404 → `ConnectorNotFound` (also for a connector you cannot see); a `server_id` that is not an integer raises `TypeError` before any request |
 | `user.mcp_servers.list_tools(server_id, *, timeout=None)` | `McpServerTools` | GET `/v1/mcp-servers/{server_id}/tools`; the server connects to the connector, so this is slow (a few seconds for a free slot plus up to the server's initialization timeout, over 60 seconds by default in the worst case, and without a limit when the server is configured with no timeout); `timeout` is this call's read timeout in seconds (finite, greater than 0, else `ValueError`), and when not given the larger of the client's read timeout and 150 seconds is used (no limit if the client has none); if the client times out first (`XAgentTransportError`) the server keeps working, keeps its slot and keeps counting the listing against your account, so do not retry at once; two listings of your account already in progress, or no free slot in time → `RateLimited` with `retry_after`; no tools loaded → `ConnectorToolsUnavailable` (an empty `tools` list never comes back as a success); a non-empty `failures` means part of the loading failed; refer to a tool by `McpTool.mcp_name`, not `name` |
+| `user.mcp_servers.create(*, name, transport, url, description=None, headers=None, auth=None, runtime_input_schema=None, runtime_bindings=None, signed_uploads=None, allow_delegated_authorization=False, enabled=True)` | `McpServer` | POST `/v1/mcp-servers`; `name`, `transport`, `url`, `allow_delegated_authorization` and `enabled` are always sent, the other parameters only when not `None`; not idempotent: after a timeout, a repeat raises `ConnectorNameConflict` if the first attempt went through (`details["connector_id"]` then names one of your connectors, which may also be one that already existed, so check it with `get()`); `transport` other than `streamable_http` or `sse` → `TransportNotSupported`; OAuth authorization can only be completed in the web app |
+| `user.mcp_servers.update(server_id, *, name=..., transport=..., url=..., description=..., headers=..., auth=..., runtime_input_schema=..., runtime_bindings=..., signed_uploads=..., allow_delegated_authorization=...)` | `McpServer` | PATCH `/v1/mcp-servers/{server_id}`; only the parameters you pass are sent, and passing none returns the current state of a remote connector you are linked to; `None` is not allowed for `name`, `transport`, `url`, `description`, `headers`, `auth` and `allow_delegated_authorization`, and clears `runtime_input_schema`, `runtime_bindings` and `signed_uploads`; `headers` and `auth` replace the whole value (`{}` clears it); safe to repeat; team-shared → `ConnectorForbidden` (`team_shared`), catalog → `ConnectorNotEditable` (`catalog`), changing `url`, `auth.issuer` or `auth.resource_metadata_url` while other accounts hold authorizations it would keep → `ConnectorNotEditable` (`authorized_by_others`), and otherwise such a change removes the authorizations your team members made for themselves; name taken → `ConnectorNameConflict` |
+| `user.mcp_servers.delete(server_id)` | `None` | DELETE `/v1/mcp-servers/{server_id}`; removes your own connector and returns once the server confirms; if your team still shares it, it stays in `list()` with `access="team"` and a repeated delete → `ConnectorForbidden` (`team_shared`), otherwise a repeat → `ConnectorNotFound`; catalog or managed by another account → `ConnectorNotEditable`; a team-owned connector deleted by a non-administrator → `ConnectorForbidden` (`not_permitted`) |
+| `user.mcp_servers.set_enabled(server_id, enabled)` | `McpServer` | PUT `/v1/mcp-servers/{server_id}/enabled`; switches only your own switch, works for catalog connectors too, and setting the current value is not an error; team-shared → `ConnectorForbidden` (`team_shared`); safe to repeat |
 | `user.close()` / `with ... as user` | — | release the connection pool |
 
 ### `AgentClient` — runtime surface

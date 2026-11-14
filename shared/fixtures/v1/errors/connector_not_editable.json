@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "connector_not_editable",
+    "message": "This connector is a catalog app connection, or cannot be shown not to be one, so it can only be changed in the web app.",
+    "details": {
+      "reason": "catalog"
+    }
+  }
+}

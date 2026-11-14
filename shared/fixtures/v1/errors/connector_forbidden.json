@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "connector_forbidden",
+    "message": "This connector is shared with your team and is read-only through the API.",
+    "details": {
+      "reason": "team_shared"
+    }
+  }
+}
