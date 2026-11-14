@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "connector_unavailable",
+    "message": "This connector cannot be started from the API; details.reason says why.",
+    "details": {
+      "reason": "disabled"
+    }
+  }
+}

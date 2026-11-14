@@ -282,6 +282,48 @@ class McpServer:
 
 
 @dataclass(frozen=True)
+class McpTool:
+    """One tool an MCP connector offers.
+
+    ``mcp_name`` is the tool's name on the MCP server; it is the stable
+    identifier. ``name`` is the display name the web app shows, which is not
+    stable -- do not use it to refer to the tool.
+    """
+
+    name: str
+    mcp_name: str
+    description: str
+
+
+@dataclass(frozen=True)
+class McpToolLoadFailure:
+    """One failed step while the server loaded a connector's tools.
+
+    ``phase`` names the step and ``attempts`` is how many times the server
+    tried it. ``phase`` is a plain ``str`` because the server may add values;
+    it is passed through unchanged.
+    """
+
+    phase: str
+    attempts: int
+
+
+@dataclass(frozen=True)
+class McpServerTools:
+    """The tools of one MCP connector (``GET /v1/mcp-servers/{id}/tools``).
+
+    ``id`` is the connector id. ``tools`` is never empty in a success
+    response: the server answers 502 (``ConnectorToolsUnavailable``) when it
+    loaded no tools. A non-empty ``failures`` means some part of the loading
+    failed even though tools were returned, so the list may be incomplete.
+    """
+
+    id: int
+    tools: list[McpTool]
+    failures: list[McpToolLoadFailure]
+
+
+@dataclass(frozen=True)
 class CreateTaskResult:
     """``POST /v1/chat/tasks`` 202 payload.
 
@@ -857,6 +899,7 @@ _AGENT_SKILLS_ADAPTER = TypeAdapter(_AgentSkills)
 _AGENT_SKILLS_UPDATE_ADAPTER = TypeAdapter(AgentSkillsUpdate)
 _MCP_SERVER_ADAPTER = TypeAdapter(McpServer)
 _MCP_SERVER_LIST_ADAPTER = TypeAdapter(list[McpServer])
+_MCP_SERVER_TOOLS_ADAPTER = TypeAdapter(McpServerTools)
 
 
 def _require_mapping(data: Any, what: str) -> dict[str, Any]:
@@ -1133,6 +1176,11 @@ def _parse_mcp_server_list(data: Any) -> list[McpServer]:
 
 def _parse_mcp_server_read(data: Any, what: str) -> McpServer:
     return _validate_read(_MCP_SERVER_ADAPTER, _require_mapping(data, what), what)
+
+
+def _parse_mcp_server_tools(data: Any) -> McpServerTools:
+    what = "connector tools"
+    return _validate_read(_MCP_SERVER_TOOLS_ADAPTER, _require_mapping(data, what), what)
 
 
 def _parse_features(data: Any) -> list[str]:

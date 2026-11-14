@@ -37,6 +37,7 @@ row below.
 | `skill_delete.json` | `DELETE /v1/skills/{name}` (200) | `{"name": ...}` confirmation |
 | `mcp_servers_list.json` | `GET /v1/mcp-servers` (200) | Bare JSON array: the key holder's own connectors first (a switched-off one, an OAuth one with `authorization`, one with masked header and `bearer_token`), then one visible only through the team (`access=team`, `enabled` and `user_env` null) |
 | `mcp_server_detail.json` | `GET /v1/mcp-servers/{id}` (200) | One connector; every one of the 25 fields is present, secret values read `********` |
+| `mcp_server_tools.json` | `GET /v1/mcp-servers/{id}/tools` (200) | The connector's `id`, two `tools` (`name`, `mcp_name`, `description`) and an empty `failures` list |
 | `create_task.json` | `POST /v1/chat/tasks` (202) | Older-server shape: initial `status=pending`, no `dispatch_class` |
 | `create_task_dispatch_class.json` | `POST /v1/chat/tasks` (202) | Current queued-server shape: `status=pending`, carries `run_id`, `state_version`, `control_state` and `dispatch_class` |
 | `create_task_response_format.json` | `POST /v1/chat/tasks` (202) | Current-server shape for a request with a `response_format`: also echoes `response_format_type=json_schema` and the format's `response_format_name` |
@@ -93,7 +94,7 @@ Stable backend codes using the V1 envelope shape:
 | `task_busy.json` | 409 | V1 envelope |
 | `template_not_found.json` | 404 | V1 envelope (raised by `UserClient.templates.get()` and `UserClient.agents.create_from_template()` on unknown `template_id`) |
 | `validation_422.json` | 422 | V1 envelope (`invalid_input`) |
-| `rate_limited.json` | 429 | V1 envelope |
+| `rate_limited.json` | 429 | V1 envelope (`UserClient.mcp_servers.list_tools()` also gets this status, with a `Retry-After` header that the SDK reads into `retry_after`; the header is not part of the fixture) |
 | `internal_error.json` | 500 | V1 envelope |
 | `interaction_response_required.json` | 409 | V1 envelope (raised by `append()` on a `WAITING_FOR_USER` task; use `reply()` instead) |
 | `no_pending_interaction.json` | 409 | V1 envelope (raised by `reply()` when the task is not `WAITING_FOR_USER`) |
@@ -102,6 +103,10 @@ Stable backend codes using the V1 envelope shape:
 | `skill_not_found.json` | 404 | V1 envelope (raised by `UserClient.skills.get()`, `update()` and `delete()`) |
 | `skill_already_exists.json` | 409 | V1 envelope (raised by `UserClient.skills.create()` and `upload()` when the name is taken by a different write) |
 | `connector_not_found.json` | 404 | V1 envelope (raised by `UserClient.mcp_servers` methods that take a `server_id`; also for a connector the key holder cannot see) |
+| `transport_not_supported.json` | 400 | V1 envelope (raised by `UserClient.mcp_servers.list_tools()` for a connector whose transport is not `streamable_http` or `sse`) |
+| `connector_unavailable.json` | 409 | V1 envelope with `details.reason` (`disabled` here; raised by `UserClient.mcp_servers.list_tools()`) |
+| `connector_tools_unavailable.json` | 502 | V1 envelope with `details.reason` and `details.failures` (raised by `UserClient.mcp_servers.list_tools()` when no tools were loaded) |
+| `mcp_oauth_authorization_failed.json` | 409 | V1 envelope with `details.reason` (raised by `UserClient.mcp_servers.list_tools()`; authorization can only be completed in the web app) |
 
 ## Usage from a language client
 

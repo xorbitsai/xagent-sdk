@@ -30,7 +30,7 @@ from typing import Any, ClassVar, Self
 
 import httpx
 
-from xagent_sdk._http import HTTPClient
+from xagent_sdk._http import _USE_CLIENT, HTTPClient, _UseClient
 from xagent_sdk.errors import MalformedResponse, from_response
 
 
@@ -103,7 +103,7 @@ class _BaseClient:
         api_key: str | None = None,
         base_url: str | None = None,
         *,
-        timeout: float = 30.0,
+        timeout: float | None = 30.0,
         max_connections: int = 10,
         user_agent: str | None = None,
         transport: httpx.BaseTransport | None = None,
@@ -152,6 +152,7 @@ class _BaseClient:
         json: dict[str, object] | None = None,
         files: Mapping[str, tuple[str, bytes]] | None = None,
         data: Mapping[str, str] | None = None,
+        timeout: float | None | _UseClient = _USE_CLIENT,
     ) -> httpx.Response:
         """Send a request and map any 4xx/5xx response to an XAgentError.
 
@@ -160,13 +161,17 @@ class _BaseClient:
         McpServersAPI) but not part of the user-facing API.
 
         Multipart uploads pass ``files``/``data`` instead of ``json``.
+        ``timeout`` replaces the client's timeout for this one request
+        only (``None`` means no limit); see ``HTTPClient.request``.
 
         Transport-level failures are already wrapped in
         ``XAgentTransportError`` by ``HTTPClient.request``; this helper
         only adds the V1-envelope-to-exception mapping for HTTP error
         responses that do have a body.
         """
-        resp = self._http.request(method, path, json=json, files=files, data=data)
+        resp = self._http.request(
+            method, path, json=json, files=files, data=data, timeout=timeout
+        )
         if resp.is_error:
             raise from_response(resp)
         return resp

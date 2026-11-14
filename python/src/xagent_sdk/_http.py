@@ -1,6 +1,7 @@
 import io
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from enum import Enum
 from types import TracebackType
 from typing import Any, Self
 
@@ -27,6 +28,19 @@ _STREAM_WRITE_TIMEOUT = 10.0
 _STREAM_POOL_TIMEOUT = 10.0
 
 
+class _UseClient(Enum):
+    """Type of the sentinel meaning "use the client's own timeout".
+
+    A plain ``None`` cannot play that part: ``None`` is a real value for a
+    per-request timeout (no limit).
+    """
+
+    USE_CLIENT = "USE_CLIENT"
+
+
+_USE_CLIENT = _UseClient.USE_CLIENT
+
+
 def _build_user_agent() -> str:
     return f"xagent-sdk-python/{__version__} (httpx/{httpx.__version__})"
 
@@ -45,7 +59,7 @@ class HTTPClient:
         base_url: str,
         api_key: str,
         *,
-        timeout: float = _DEFAULT_TIMEOUT,
+        timeout: float | None = _DEFAULT_TIMEOUT,
         max_connections: int = _DEFAULT_MAX_CONNECTIONS,
         user_agent: str | None = None,
         transport: httpx.BaseTransport | None = None,
@@ -67,6 +81,15 @@ class HTTPClient:
             transport=transport,
         )
 
+    def effective_timeout(self, floor: float) -> float | None:
+        """The read timeout for a request that needs at least ``floor`` seconds.
+
+        ``None`` when the client has no read timeout (no limit); otherwise
+        the larger of the client's read timeout and ``floor``.
+        """
+        read = self._client.timeout.read
+        return None if read is None else max(read, floor)
+
     def request(
         self,
         method: str,
@@ -75,7 +98,16 @@ class HTTPClient:
         json: dict[str, Any] | None = None,
         files: Mapping[str, tuple[str, bytes]] | None = None,
         data: Mapping[str, str] | None = None,
+        timeout: float | None | _UseClient = _USE_CLIENT,
     ) -> httpx.Response:
+        """Send one request and return the raw response.
+
+        ``timeout`` applies to this request only and leaves the client's own
+        setting untouched. Omitted, the client's timeout is used. A number
+        sets the read, write and pool limits to that many seconds (the
+        connect limit stays ``_DEFAULT_CONNECT_TIMEOUT``); ``None`` removes
+        the read, write and pool limits.
+        """
         if json is not None and (files is not None or data is not None):
             # httpx silently drops ``json`` when ``files`` is given.
             raise ValueError("json and multipart fields cannot be sent together")
@@ -86,9 +118,12 @@ class HTTPClient:
             if files is not None
             else None
         )
+        extra: dict[str, Any] = {}
+        if timeout is not _USE_CLIENT:
+            extra["timeout"] = httpx.Timeout(timeout, connect=_DEFAULT_CONNECT_TIMEOUT)
         try:
             return self._client.request(
-                method, path, json=json, files=wrapped, data=data
+                method, path, json=json, files=wrapped, data=data, **extra
             )
         except httpx.HTTPError as exc:
             raise XAgentTransportError(

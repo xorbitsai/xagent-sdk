@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "transport_not_supported",
+    "message": "Only the streamable_http and sse transports are supported through the API."
+  }
+}

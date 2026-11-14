@@ -1,0 +1,16 @@
+{
+  "id": 1,
+  "tools": [
+    {
+      "name": "server_1_user_plain_echo",
+      "mcp_name": "echo",
+      "description": "Echo the given text back."
+    },
+    {
+      "name": "server_1_user_plain_add",
+      "mcp_name": "add",
+      "description": "Add two integers."
+    }
+  ],
+  "failures": []
+}
