@@ -59,7 +59,7 @@ class HTTPClient:
         base_url: str,
         api_key: str,
         *,
-        timeout: float = _DEFAULT_TIMEOUT,
+        timeout: float | None = _DEFAULT_TIMEOUT,
         max_connections: int = _DEFAULT_MAX_CONNECTIONS,
         user_agent: str | None = None,
         transport: httpx.BaseTransport | None = None,

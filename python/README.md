@@ -1019,7 +1019,7 @@ The minted runtime key is an ordinary agent key — drive it with
 UserClient(
     personal_key=None,       # or env XAGENT_PERSONAL_KEY
     base_url=None,           # or env XAGENT_BASE_URL
-    timeout=30.0,            # max seconds for any single wait (connect is fixed at 10); not a deadline for the whole request
+    timeout=30.0,            # max seconds for any single wait, None for no limit (connect is fixed at 10); not a deadline for the whole request
     max_connections=10,      # httpx connection pool size
     user_agent=None,         # override the default "xagent-sdk-python/..."
     transport=None,          # custom httpx.BaseTransport (proxy / TLS / tests)

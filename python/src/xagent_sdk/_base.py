@@ -103,7 +103,7 @@ class _BaseClient:
         api_key: str | None = None,
         base_url: str | None = None,
         *,
-        timeout: float = 30.0,
+        timeout: float | None = 30.0,
         max_connections: int = 10,
         user_agent: str | None = None,
         transport: httpx.BaseTransport | None = None,

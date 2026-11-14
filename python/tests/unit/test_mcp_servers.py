@@ -413,7 +413,7 @@ def _timeout_user(
     return UserClient(
         personal_key="xag_personal_p_s",
         base_url="https://test.example",
-        timeout=client_timeout,  # type: ignore[arg-type]
+        timeout=client_timeout,
         transport=httpx.MockTransport(handler),
     )
 
