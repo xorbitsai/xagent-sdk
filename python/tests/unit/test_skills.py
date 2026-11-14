@@ -354,7 +354,14 @@ class TestErrorMapping:
 
 
 _LEGACY_AGENT_METHODS = frozenset(
-    {"list", "create", "create_from_template", "rotate_key"}
+    {
+        "list",
+        "create",
+        "create_from_template",
+        "rotate_key",
+        "list_keys",
+        "revoke_key",
+    }
 )
 
 

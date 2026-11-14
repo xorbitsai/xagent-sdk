@@ -120,6 +120,15 @@ class TemplateNotFound(XAgentError):
     """
 
 
+class APIKeyNotFound(XAgentError):
+    """HTTP 404, code ``api_key_not_found``.
+
+    Raised by ``agents.revoke_key()``: the agent is one the caller can
+    manage, but it has no runtime key with this id. A key that belongs to
+    another agent is reported the same way as an id that does not exist.
+    """
+
+
 class SkillNotFound(XAgentError):
     """HTTP 404, code ``skill_not_found``.
 
@@ -580,6 +589,7 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "no_pending_interaction": NoPendingInteraction,
     "interaction_not_resumable": InteractionNotResumable,
     "temporarily_unavailable": TemporarilyUnavailable,
+    "api_key_not_found": APIKeyNotFound,
     "skill_not_found": SkillNotFound,
     "skill_already_exists": SkillAlreadyExists,
     "connector_not_found": ConnectorNotFound,

@@ -336,6 +336,7 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `AgentNotFound` | 404 | `agent_not_found` |
 | `TaskNotFound` | 404 | `task_not_found` |
 | `TemplateNotFound` | 404 | `template_not_found` |
+| `APIKeyNotFound` | 404 | `api_key_not_found` -- raised by `agents.revoke_key()` when the agent has no runtime key with that id |
 | `SkillNotFound` | 404 | `skill_not_found` -- raised by `skills.get()`, `skills.update()` and `skills.delete()` |
 | `ConnectorNotFound` | 404 | `connector_not_found` -- raised by `mcp_servers` methods that take a `server_id` |
 | `TransportNotSupported` | 400 | `transport_not_supported` -- raised by `mcp_servers.list_tools()` for a connector whose transport is not `streamable_http` or `sse` |
@@ -894,6 +895,8 @@ can reach.
 | `user.agents.create_from_template(template_id, *, overrides=None, generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/agents/from-template`; 404 → `TemplateNotFound` |
 | `user.agents.rotate_key(agent_id)` | `RotateKeyResult` | POST `/v1/agents/{agent_id}/api-key`; revokes the previous runtime key atomically |
 | `user.agents.get_skills(agent_id)` | `list[str]` | GET `/v1/agents/{agent_id}/skills`; 404 → `AgentNotFound`; a body that is not the expected object raises `MalformedResponse` (never `[]`) |
+| `user.agents.list_keys(agent_id, *, include_revoked=False)` | `list[RuntimeKeyInfo]` | GET `/v1/agents/{agent_id}/api-keys`; newest first, never includes a secret; revoked keys only with `include_revoked=True`, paused keys always; 404 → `AgentNotFound`; a body that is not the expected array → `MalformedResponse`, never an empty list; a server without this route answers 404 → `InternalError` |
+| `user.agents.revoke_key(agent_id, key_id)` | `RevokeKeyResult` | DELETE `/v1/agents/{agent_id}/api-keys/{key_id}`; revokes that one key and leaves the agent's other keys working; cannot be undone; calling again is safe and returns `revoked=False`; unknown agent → `AgentNotFound`, a key id the agent does not have → `APIKeyNotFound`; a server without this route answers 404 or 405 → `InternalError` |
 | `user.agents.replace_skills(agent_id, skills)` | `AgentSkillsUpdate` | PUT `/v1/agents/{agent_id}/skills`; 404 → `AgentNotFound`; replaces the whole list, `[]` clears it, and the later of two writers wins; a single string raises `TypeError` before any request; a new name that is neither visible nor valid → `InvalidInput` (400); `unresolved_for_caller` lists added names you cannot see, stored anyway |
 | `user.tasks.create / append / reply / get / steps / events / wait / run` | as in the `AgentClient` table | Any agent you can see (`user.agents.list()`); the task runs as you, not as the agent's owner. Every personal key of yours sees the tasks any of them created, until the task's agent is deleted. An older server answers `InvalidAPIKey` (401) here. |
 | `user.skills.list()` | `list[SkillSummary]` | GET `/v1/skills`; your own skills first, in server order; a body that is not an array of skills raises `MalformedResponse` (never `[]`) |
@@ -981,6 +984,8 @@ with AgentClient(api_key=runtime_key, base_url=region.base_url) as agent:
 | `ws.agents.create(*, name, instructions, description=None, execution_mode=None, models=None, knowledge_bases=None, skills=None, tool_categories=None, suggested_prompts=None, generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/workspace/agents` |
 | `ws.agents.create_from_template(template_id, *, name=None, ..., generate_runtime_key=True)` | `AgentCreateResult` | POST `/v1/workspace/agents/from-template`; override fields spread flat |
 | `ws.agents.rotate_key(agent_id)` | `RotateKeyResult` | POST `/v1/workspace/agents/{id}/api-key`; mints the agent's runtime key |
+| `ws.agents.list_keys(agent_id, *, include_revoked=False)` | `list[RuntimeKeyInfo]` | GET `/v1/workspace/agents/{id}/api-keys`; same result and errors as `user.agents.list_keys()` |
+| `ws.agents.revoke_key(agent_id, key_id)` | `RevokeKeyResult` | DELETE `/v1/workspace/agents/{id}/api-keys/{key_id}`; same result and errors as `user.agents.revoke_key()` |
 
 The minted runtime key is an ordinary agent key — drive it with
 `AgentClient` against `/v1/chat/tasks*`, exactly as above.

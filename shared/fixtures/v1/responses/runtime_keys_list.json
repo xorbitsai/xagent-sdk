@@ -1,0 +1,22 @@
+[
+  {
+    "id": 12,
+    "label": null,
+    "key_prefix": "newabc",
+    "masked_key": "xag_newabc_••••••••",
+    "status": "active",
+    "created_at": "2026-05-02T09:00:00Z",
+    "last_used_at": "2026-05-03T10:30:00Z",
+    "revoked_at": null
+  },
+  {
+    "id": 7,
+    "label": "ci",
+    "key_prefix": "oldxyz",
+    "masked_key": "xag_oldxyz_••••••••",
+    "status": "paused",
+    "created_at": "2026-04-01T08:00:00Z",
+    "last_used_at": null,
+    "revoked_at": null
+  }
+]

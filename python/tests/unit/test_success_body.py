@@ -44,6 +44,8 @@ _CASES: list[tuple[str, str, Call, int]] = [
         200,
     ),
     ("agents.rotate_key", "user", lambda c: c.agents.rotate_key(1), 200),
+    ("agents.list_keys", "user", lambda c: c.agents.list_keys(1), 200),
+    ("agents.revoke_key", "user", lambda c: c.agents.revoke_key(1, 2), 200),
     ("templates.list", "user", lambda c: c.templates.list(), 200),
     ("templates.get", "user", lambda c: c.templates.get("t"), 200),
     (
@@ -97,6 +99,18 @@ _CASES: list[tuple[str, str, Call, int]] = [
         "workspace agents.rotate_key",
         "workspace",
         lambda c: c.agents.rotate_key(1),
+        200,
+    ),
+    (
+        "workspace agents.list_keys",
+        "workspace",
+        lambda c: c.agents.list_keys(1),
+        200,
+    ),
+    (
+        "workspace agents.revoke_key",
+        "workspace",
+        lambda c: c.agents.revoke_key(1, 2),
         200,
     ),
     ("workspace templates.list", "workspace", lambda c: c.templates.list(), 200),

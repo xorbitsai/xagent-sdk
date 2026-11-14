@@ -158,6 +158,41 @@ class RotateKeyResult:
 
 
 @dataclass(frozen=True)
+class RuntimeKeyInfo:
+    """One runtime key of an agent, as listed by ``agents.list_keys()``.
+
+    Never carries the secret. ``key_prefix`` is the public middle segment of
+    the full key (``xag_<key_prefix>_<secret>``), so a key you hold can be
+    matched to its entry. ``status`` is ``"active"``, ``"paused"`` or
+    ``"revoked"``; only an active key is accepted by the server.
+    """
+
+    key_id: int
+    label: str | None
+    key_prefix: str
+    masked_key: str
+    status: str
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+
+@dataclass(frozen=True)
+class RevokeKeyResult:
+    """``DELETE /v1/agents/{agent_id}/api-keys/{key_id}`` payload.
+
+    ``revoked`` is ``True`` when this call revoked the key and ``False`` when
+    it had already been revoked; ``revoked_at`` is when it was revoked either
+    way. ``key_prefix`` identifies the secret that was revoked.
+    """
+
+    key_id: int
+    key_prefix: str
+    revoked: bool
+    revoked_at: datetime
+
+
+@dataclass(frozen=True)
 class AgentSkillsUpdate:
     """``PUT /v1/agents/{agent_id}/skills`` payload.
 
@@ -869,6 +904,8 @@ _TEMPLATE_DETAIL_ADAPTER = TypeAdapter(TemplateDetail)
 _AGENT_LIST_ADAPTER = TypeAdapter(list[AgentSummary])
 _AGENT_CREATE_ADAPTER = TypeAdapter(AgentCreateResult)
 _ROTATE_KEY_ADAPTER = TypeAdapter(RotateKeyResult)
+_RUNTIME_KEY_LIST_ADAPTER = TypeAdapter(list[RuntimeKeyInfo])
+_REVOKE_KEY_ADAPTER = TypeAdapter(RevokeKeyResult)
 _CREATE_ADAPTER = TypeAdapter(CreateTaskResult)
 _APPEND_ADAPTER = TypeAdapter(AppendResult)
 _TASK_INFO_ADAPTER = TypeAdapter(TaskInfo)
@@ -933,7 +970,8 @@ def _validate_write(adapter: TypeAdapter[T], data: Any, what: str) -> T:
     ``create()`` starts a second task and a retried ``append()``/``reply()``
     can send the message twice, while ``skills.create()``,
     ``skills.upload()`` and ``skills.update()`` are idempotent replays and
-    safe to resend.
+    safe to resend, and so is ``agents.revoke_key()``, which reports an
+    already revoked key with ``revoked=False``.
     ``agents.replace_skills()`` is not: resending can lose the unresolved
     names the first call reported, so call ``agents.get_skills()`` first.
     """
@@ -1071,6 +1109,43 @@ def _agent_summary_dict(item: dict[str, Any]) -> dict[str, Any]:
 
 def _parse_rotate_key(data: Any) -> RotateKeyResult:
     return _ROTATE_KEY_ADAPTER.validate_python(_require_mapping(data, "key rotation"))
+
+
+def _key_id_dict(item: Any) -> Any:
+    """Rename the server's ``id`` to the SDK's ``key_id``.
+
+    Anything that is not an object, or has no ``id``, is passed through
+    unchanged so validation reports it instead of this helper hiding it.
+    """
+    if not isinstance(item, dict) or "id" not in item:
+        return item
+    renamed = dict(item)
+    renamed["key_id"] = renamed.pop("id")
+    return renamed
+
+
+def _parse_runtime_key_list(data: Any) -> list[RuntimeKeyInfo]:
+    """Parse ``GET /v1/agents/{agent_id}/api-keys`` strictly.
+
+    The result decides which keys a caller revokes or keeps, so a body of the
+    wrong shape must raise rather than read as "this agent has no keys".
+    """
+    what = "runtime key list"
+    if type(data) is not list:
+        raise MalformedResponse(
+            "malformed_response",
+            f"{what} response did not match the expected shape (<root>)",
+            http_status=None,
+        )
+    return _validate_read(
+        _RUNTIME_KEY_LIST_ADAPTER, [_key_id_dict(item) for item in data], what
+    )
+
+
+def _parse_revoke_key(data: Any) -> RevokeKeyResult:
+    return _validate_write(
+        _REVOKE_KEY_ADAPTER, _key_id_dict(data), "runtime key revocation"
+    )
 
 
 def _parse_create_task(data: Any) -> CreateTaskResult:

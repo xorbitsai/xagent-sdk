@@ -3,6 +3,7 @@ from xagent_sdk._version import __version__
 from xagent_sdk.agent_client import AgentClient
 from xagent_sdk.errors import (
     AgentNotFound,
+    APIKeyNotFound,
     ConnectorNotFound,
     ConnectorToolsUnavailable,
     ConnectorUnavailable,
@@ -43,8 +44,10 @@ from xagent_sdk.types import (
     McpTool,
     McpToolLoadFailure,
     PendingInteraction,
+    RevokeKeyResult,
     RotateKeyResult,
     RunResult,
+    RuntimeKeyInfo,
     SkillDetail,
     SkillSummary,
     Step,
@@ -63,6 +66,7 @@ from xagent_sdk.types import (
 from xagent_sdk.user_client import UserClient
 
 __all__ = [
+    "APIKeyNotFound",
     "AgentClient",
     "AgentCreateResult",
     "AgentNotFound",
@@ -88,9 +92,11 @@ __all__ = [
     "NoPendingInteraction",
     "PendingInteraction",
     "RateLimited",
+    "RevokeKeyResult",
     "RotateKeyResult",
     "RunMismatch",
     "RunResult",
+    "RuntimeKeyInfo",
     "SkillAlreadyExists",
     "SkillDetail",
     "SkillNotFound",

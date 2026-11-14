@@ -1,10 +1,11 @@
 """The ``workspace.agents`` namespace exposed on ``WorkspaceClient``.
 
 Agent lifecycle for a workspace-key caller: list the workspace's agents,
-create new ones (structured or from a template), and mint an agent's
-runtime key. Reaches the workspace-scoped ``/v1/workspace/agents*``
-endpoints; the response shapes are the same as the personal-key surface,
-so the shared parsers and dataclasses in ``xagent_sdk.types`` are reused.
+create new ones (structured or from a template), mint an agent's
+runtime key, and list or revoke an agent's runtime keys. Reaches the
+workspace-scoped ``/v1/workspace/agents*`` endpoints; the response shapes
+are the same as the personal-key surface, so the shared parsers and
+dataclasses in ``xagent_sdk.types`` are reused.
 
 ``create()`` and ``create_from_template()`` default to
 ``generate_runtime_key=True``; the returned
@@ -16,16 +17,21 @@ carried none, via the shared ``_require_runtime_key`` guard.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from xagent_sdk._agents import _require_runtime_key
 from xagent_sdk._base import _json_body
 from xagent_sdk.types import (
     AgentCreateResult,
     AgentSummary,
+    RevokeKeyResult,
     RotateKeyResult,
+    RuntimeKeyInfo,
     _parse_agent_create,
     _parse_agent_list,
+    _parse_revoke_key,
     _parse_rotate_key,
+    _parse_runtime_key_list,
 )
 
 if TYPE_CHECKING:
@@ -37,6 +43,7 @@ if TYPE_CHECKING:
 # (Do not switch these to ``Sequence[str]``: a bare ``str`` satisfies
 # ``Sequence[str]`` and would slip through type checking onto the wire.)
 _StrList = list[str]
+_KeyList = list[RuntimeKeyInfo]
 
 
 def _drop_none(values: dict[str, Any]) -> dict[str, Any]:
@@ -186,3 +193,65 @@ class WorkspaceAgentsAPI:
         """
         resp = self._client._request("POST", f"/v1/workspace/agents/{agent_id}/api-key")
         return _parse_rotate_key(_json_body(resp, "runtime key rotation"))
+
+    def list_keys(self, agent_id: int, *, include_revoked: bool = False) -> _KeyList:
+        """``GET /v1/workspace/agents/{agent_id}/api-keys`` -- list an
+        agent's runtime keys.
+
+        Returns the keys newest first, without their secrets. Revoked keys are
+        left out unless ``include_revoked=True``; paused keys are always
+        listed. An empty list means the server answered that the agent has no
+        matching key. Parsing is strict: a body that is not the expected
+        array raises ``MalformedResponse`` and is never read as an empty list.
+
+        Args:
+            agent_id: An agent of this workspace. Pass an ``int``: the SDK
+                does not check it, only percent-encodes it into the path.
+            include_revoked: Also return revoked keys.
+
+        Raises:
+            AgentNotFound: the agent is not in this workspace.
+            InvalidInput: ``agent_id`` is out of range (HTTP 422).
+            InternalError: a server without this route answers 404
+                (``http_status=404``), which is not ``AgentNotFound``.
+            InvalidAPIKey: the key is not accepted by this endpoint.
+            MalformedResponse: the response status is not 200, the body is not
+                JSON, or it is not a runtime key list.
+        """
+        path = f"/v1/workspace/agents/{quote(str(agent_id), safe='')}/api-keys"
+        if include_revoked:
+            path += "?include_revoked=true"
+        resp = self._client._request("GET", path)
+        return _parse_runtime_key_list(_json_body(resp, "runtime key list"))
+
+    def revoke_key(self, agent_id: int, key_id: int) -> RevokeKeyResult:
+        """``DELETE /v1/workspace/agents/{agent_id}/api-keys/{key_id}`` -- revoke one
+        runtime key.
+
+        Only the named key stops working; the agent's other keys are left
+        alone. A task the key already started keeps running, but any later
+        request made with the key is refused with ``InvalidAPIKey`` and an
+        event stream opened with it is closed. Revocation cannot be undone.
+        Calling this again for the same key is safe: it returns
+        ``revoked=False`` with the original ``revoked_at``.
+
+        Args:
+            agent_id: An agent of this workspace.
+            key_id: ``RuntimeKeyInfo.key_id`` from ``list_keys()``.
+
+        Raises:
+            AgentNotFound: the agent is not in this workspace.
+            APIKeyNotFound: the agent has no key with this id.
+            InvalidInput: an id is out of range (HTTP 422).
+            InternalError: a server without this route answers 404 or 405,
+                which is neither ``AgentNotFound`` nor ``APIKeyNotFound``.
+            InvalidAPIKey: the key is not accepted by this endpoint.
+            MalformedResponse: the server accepted the call but the body is
+                not the expected object. Calling again is safe.
+        """
+        resp = self._client._request(
+            "DELETE",
+            f"/v1/workspace/agents/{quote(str(agent_id), safe='')}"
+            f"/api-keys/{quote(str(key_id), safe='')}",
+        )
+        return _parse_revoke_key(_json_body(resp, "runtime key revocation"))
