@@ -57,6 +57,10 @@ row below.
 | `task_info_structured_agent_blocked.json` | `GET /v1/chat/tasks/{id}` (200) | The same switch, with the agent's own rating `blocked`: `code=agent_blocked`, `structured_output` holds values, `structured_output_reason` carries `missing_fields`; `completion_outcome="blocked"` |
 | `task_info_waiting_plain.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with `pending_interaction.interactions=null` (question asked with no structured controls) |
 | `reply_task.json` | `POST /v1/chat/tasks/{id}/reply` (202) | Same shape as `append_task.json`: `status=running`, `accepted_at` |
+| `cancel_task.json` | `POST /v1/chat/tasks/{id}/cancel` (200) | The task is cancelled: `status=failed`, `error_code=task_cancelled`, `cancelled_run_id` equal to `run_id` |
+| `cancel_task_accepted.json` | `POST /v1/chat/tasks/{id}/cancel` (202) | The cancel is recorded but not applied yet: `status` is still the task's own, `cancelled_run_id` and `error_code` are null |
+| `cancel_task_queued_turn.json` | `POST /v1/chat/tasks/{id}/cancel` (200) | A turn appended to a finished task was withdrawn before it started: `cancelled_run_id` differs from `run_id`, and `status` / `error_code` are those of the turn before it |
+| `task_info_cancelled.json` | `GET /v1/chat/tasks/{id}` (200) | A cancelled task: `status=failed` with `error_code=task_cancelled` |
 | `steps_full.json` | `GET /v1/chat/tasks/{id}/steps` (200) | Wrapper with all four `Step` types present (`message`, `thinking`, `tool_call`, `agent_delegation`) |
 | `task_events_stream.json` | `GET /v1/chat/tasks/{id}/events` (200, `text/event-stream`) | Not a single response body -- `frames` is the ordered sequence of one connection: status, a `tool_call` step's start/complete pair, a `message.delta` sequence, `message.completed`, then the `task.completed` closing frame. `closing_frame_variants` is a separate, unordered list -- one connection cannot end three different ways, so `task.input_required` and `stream.error` live outside `frames` rather than pretending to follow it. Each client's test loader turns these into its own SSE wire bytes rather than storing the raw text directly, so the fixture stays language-agnostic; the server actually emits `event: <name>\ndata: <json>\n\n` (LF-terminated), and `\r\n` is equally legal SSE -- the Python suite exercises both wire forms against the same fixture data. |
 
@@ -96,6 +100,7 @@ Stable backend codes using the V1 envelope shape:
 | `agent_not_found.json` | 404 | V1 envelope |
 | `task_not_found.json` | 404 | V1 envelope |
 | `task_busy.json` | 409 | V1 envelope |
+| `task_not_cancellable.json` | 409 | V1 envelope (raised by `cancel()` when the task already ended without being cancelled; do not retry) |
 | `template_not_found.json` | 404 | V1 envelope (raised by `UserClient.templates.get()` and `UserClient.agents.create_from_template()` on unknown `template_id`) |
 | `validation_422.json` | 422 | V1 envelope (`invalid_input`) |
 | `rate_limited.json` | 429 | V1 envelope (`UserClient.mcp_servers.list_tools()` also gets this status, with a `Retry-After` header that the SDK reads into `retry_after`; the header is not part of the fixture) |

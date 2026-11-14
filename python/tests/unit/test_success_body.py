@@ -72,6 +72,7 @@ _CASES: list[tuple[str, str, Call, int]] = [
         lambda c: c.tasks.reply(1, agent_id=1, message="hi"),
         202,
     ),
+    ("tasks.cancel", "agent", lambda c: c.tasks.cancel(1), 200),
     ("tasks.get", "agent", lambda c: c.tasks.get(1), 200),
     (
         "tasks features",
@@ -174,6 +175,9 @@ def test_other_success_status_raises_malformed_response(
     name: str, kind: str, call: Call, ok: int
 ) -> None:
     other = 202 if ok == 200 else 200
+    if name == "tasks.cancel":
+        # Both 200 (applied) and 202 (accepted) are its success statuses.
+        other = 204
     exc = _run(kind, call, httpx.Response(other, json={}))
     assert exc.http_status == other
 

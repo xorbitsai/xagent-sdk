@@ -69,8 +69,12 @@ class TaskBusy(XAgentError):
 
     Raised when the task is currently ``RUNNING`` or has an earlier turn
     still queued, and cannot accept a new turn or a reply yet, or when a
-    concurrent ``reply()`` already claimed it. ``TemporarilyUnavailable``
-    is the other retryable code in this hierarchy.
+    concurrent ``reply()`` already claimed it. ``cancel()`` raises it when
+    the task cannot be cancelled in its current state yet -- for example an
+    answer is queued or being applied, or a queued turn has no run of its
+    own yet -- or when it changed state while the cancel was being applied.
+    ``TemporarilyUnavailable`` is the other retryable code in this
+    hierarchy.
 
     When ``reply()`` raises it because the server did not take the answer,
     ``details["accepted"]`` is ``False``: nothing was written and the reply
@@ -258,6 +262,16 @@ class InteractionResponseRequired(XAgentError):
     the task has a pending question and cannot accept a new turn through
     the append channel. Call ``reply()`` instead -- inspect
     ``TaskInfo.pending_interaction`` first to see the question.
+    """
+
+
+class TaskNotCancellable(XAgentError):
+    """HTTP 409, code ``task_not_cancellable``.
+
+    Raised by ``cancel()`` when the task already ended without being
+    cancelled, or another turn replaced the one the cancel was aimed at.
+    Do not retry; a task that only cannot be cancelled *yet* raises
+    ``TaskBusy`` instead.
     """
 
 
@@ -637,6 +651,7 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "agent_not_found": AgentNotFound,
     "task_not_found": TaskNotFound,
     "task_busy": TaskBusy,
+    "task_not_cancellable": TaskNotCancellable,
     "invalid_input": InvalidInput,
     "template_not_found": TemplateNotFound,
     "rate_limited": RateLimited,

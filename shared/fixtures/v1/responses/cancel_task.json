@@ -1,0 +1,8 @@
+{
+  "task_id": 10,
+  "status": "failed",
+  "run_id": "0b9f4f0e-6f0c-4a55-9d2a-2f7a1c9e4b10",
+  "state_version": 3,
+  "cancelled_run_id": "0b9f4f0e-6f0c-4a55-9d2a-2f7a1c9e4b10",
+  "error_code": "task_cancelled"
+}

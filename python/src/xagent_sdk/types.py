@@ -1,5 +1,5 @@
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Generic, overload
@@ -417,6 +417,46 @@ class AppendResult:
     run_id: str | None = None
 
 
+@dataclass(frozen=True)
+class CancelResult:
+    """``POST /v1/chat/tasks/{id}/cancel`` payload.
+
+    ``cancelled`` is ``True`` when the server answered that the task is
+    cancelled (HTTP 200), whether this call did it or an earlier one already
+    had. It is ``False`` when the cancel was recorded but not applied within
+    the server's wait (HTTP 202): ``status`` is still the task's current one,
+    ``cancelled_run_id`` and ``error_code`` are ``None``, and calling
+    ``cancel()`` again reaches the same cancel, as long as no turn is
+    appended to the task in between. A paused task whose automatic resume
+    gave up meanwhile reads ``FAILED`` here, and the cancel still applies
+    to it.
+
+    The other fields describe the task as ``get()`` reads it now. Once
+    cancelled it reads ``TaskStatus.FAILED`` with
+    ``error_code == "task_cancelled"``, unless a later turn followed: while
+    a turn appended after the cancelled run is still queued to start it
+    reads ``PENDING`` with ``error_code`` ``None``, as ``get()`` does
+    (``run_id`` is still the cancelled run), and once one has started
+    ``status``, ``run_id``, ``state_version`` and ``error_code`` describe
+    that turn.
+
+    ``cancelled_run_id`` is the run that was cancelled, so it differs from
+    ``run_id`` once a later turn has started, and when a turn was withdrawn
+    while it was still queued to start: a new task then has no ``run_id``
+    at all, and a task you appended to keeps showing the turn before it --
+    its ``status`` and ``error_code`` are that turn's, not the withdrawn
+    one's.
+    """
+
+    task_id: int
+    status: TaskStatus
+    state_version: int
+    run_id: str | None = None
+    cancelled_run_id: str | None = None
+    error_code: str | None = None
+    cancelled: bool = False
+
+
 class StructuredOutputStatus:
     """The values of ``TaskInfo.structured_output_status`` known to this SDK.
 
@@ -573,6 +613,15 @@ class TaskInfo:
     rating. A missing key and a null both read as ``None``. Whether the
     structured result is complete is told by ``structured_output_status``, not
     by this field.
+
+    ``error_code`` is a machine-readable reason for a ``FAILED`` status when
+    the server defines one: ``"task_cancelled"`` for a task stopped with
+    ``client.tasks.cancel()``. ``None`` for every other failure and status,
+    including while a turn appended after a cancelled run is queued to
+    start or running,
+    and on a server that predates the field. Kept as a plain ``str``. The
+    closing ``task.completed`` frame of ``events()`` carries the same value
+    under ``data["error_code"]``.
     """
 
     task_id: int
@@ -589,6 +638,7 @@ class TaskInfo:
     structured_output_status: str | None = None
     structured_output_reason: StructuredOutputReason | None = None
     completion_outcome: str | None = None
+    error_code: str | None = None
 
     @overload
     def parsed(
@@ -909,6 +959,7 @@ _REVOKE_KEY_ADAPTER = TypeAdapter(RevokeKeyResult)
 _CREATE_ADAPTER = TypeAdapter(CreateTaskResult)
 _APPEND_ADAPTER = TypeAdapter(AppendResult)
 _TASK_INFO_ADAPTER = TypeAdapter(TaskInfo)
+_CANCEL_ADAPTER = TypeAdapter(CancelResult)
 _STEP_LIST_ADAPTER = TypeAdapter(list[Step])
 _STEP_ADAPTER: TypeAdapter[Step] = TypeAdapter(Step)
 
@@ -1164,6 +1215,15 @@ def _parse_create_task(data: Any) -> CreateTaskResult:
 
 def _parse_append(data: Any) -> AppendResult:
     return _validate_write(_APPEND_ADAPTER, data, "task append")
+
+
+def _parse_cancel(data: Any, *, cancelled: bool) -> CancelResult:
+    """Parse a cancel body; ``cancelled`` comes from the HTTP status, which
+    is where the server says whether the cancel was applied."""
+    body = dict(_require_mapping(data, "task cancel"))
+    body.pop("cancelled", None)
+    result = _validate_write(_CANCEL_ADAPTER, body, "task cancel")
+    return replace(result, cancelled=cancelled)
 
 
 def _parse_task_info(data: Any) -> TaskInfo:

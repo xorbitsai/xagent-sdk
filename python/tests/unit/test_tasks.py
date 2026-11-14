@@ -13,6 +13,7 @@ from xagent_sdk import (
     AgentClient,
     AgentNotFound,
     AppendResult,
+    CancelResult,
     CreateTaskResult,
     InteractionNotResumable,
     InteractionResponseRequired,
@@ -24,6 +25,7 @@ from xagent_sdk import (
     StepType,
     TaskBusy,
     TaskInfo,
+    TaskNotCancellable,
     TaskNotFound,
     TaskStatus,
     TaskTimeout,
@@ -248,6 +250,150 @@ class TestReply:
         assert set(body.keys()) == {"agent_id", "message"}
 
 
+class TestCancel:
+    def test_url_and_applied_result(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(200, json=response("cancel_task"))
+
+        with make_client(handler) as c:
+            result = c.tasks.cancel(10)
+
+        assert captured[0].method == "POST"
+        assert captured[0].url.path == "/v1/chat/tasks/10/cancel"
+        assert captured[0].content == b""
+        assert isinstance(result, CancelResult)
+        assert result.cancelled is True
+        assert result.status is TaskStatus.FAILED
+        assert result.error_code == "task_cancelled"
+        assert result.cancelled_run_id == result.run_id is not None
+        assert result.state_version == 3
+
+    def test_accepted_is_not_cancelled_yet(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        def handler(_req: httpx.Request) -> httpx.Response:
+            return httpx.Response(202, json=response("cancel_task_accepted"))
+
+        with make_client(handler) as c:
+            result = c.tasks.cancel(10)
+
+        assert result.cancelled is False
+        assert result.status is TaskStatus.RUNNING
+        assert result.cancelled_run_id is None
+        assert result.error_code is None
+
+    def test_withdrawn_queued_turn_keeps_the_previous_turn(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        def handler(_req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=response("cancel_task_queued_turn"))
+
+        with make_client(handler) as c:
+            result = c.tasks.cancel(10)
+
+        # The appended turn was withdrawn; the task still shows the turn
+        # before it, so only cancelled_run_id says what was cancelled.
+        assert result.cancelled is True
+        assert result.status is TaskStatus.COMPLETED
+        assert result.error_code is None
+        assert result.cancelled_run_id != result.run_id
+
+    def test_the_http_status_decides_cancelled_not_the_body(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        body = {**response("cancel_task_accepted"), "cancelled": True}
+
+        def handler(_req: httpx.Request) -> httpx.Response:
+            return httpx.Response(202, json=body)
+
+        with make_client(handler) as c:
+            assert c.tasks.cancel(10).cancelled is False
+
+    def test_a_later_queued_turn_reads_pending_without_an_error_code(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        # The cancelled run is followed by a turn still queued to start: the
+        # task reads pending, as get() reads it, and run_id is still the
+        # cancelled run until that turn starts.
+        body = {**response("cancel_task"), "status": "pending", "error_code": None}
+
+        def handler(_req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=body)
+
+        with make_client(handler) as c:
+            result = c.tasks.cancel(10)
+
+        assert result.cancelled is True
+        assert result.status is TaskStatus.PENDING
+        assert result.error_code is None
+        assert result.cancelled_run_id == result.run_id is not None
+
+    def test_a_new_task_cancelled_before_it_started_has_no_run_id(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        body = {**response("cancel_task"), "run_id": None}
+
+        def handler(_req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=body)
+
+        with make_client(handler) as c:
+            result = c.tasks.cancel(10)
+
+        assert result.cancelled is True
+        assert result.status is TaskStatus.FAILED
+        assert result.error_code == "task_cancelled"
+        assert result.run_id is None
+        assert result.cancelled_run_id is not None
+
+    @pytest.mark.parametrize("status", ["waiting_for_user", "paused", "failed"])
+    def test_accepted_keeps_the_status_the_cancel_is_applied_to(
+        self, make_client: Callable[..., AgentClient], status: str
+    ) -> None:
+        # 202 reports the task's current status; "failed" is a paused task
+        # whose automatic resume gave up while the cancel waited, which the
+        # recorded cancel still applies to.
+        body = {**response("cancel_task_accepted"), "status": status}
+
+        def handler(_req: httpx.Request) -> httpx.Response:
+            return httpx.Response(202, json=body)
+
+        with make_client(handler) as c:
+            result = c.tasks.cancel(10)
+
+        assert result.cancelled is False
+        assert result.status is TaskStatus(status)
+        assert result.error_code is None
+        assert result.cancelled_run_id is None
+
+    def test_unknown_response_keys_are_ignored(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        body = {**response("cancel_task"), "future_field": {"nested": True}}
+
+        def handler(_req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=body)
+
+        with make_client(handler) as c:
+            result = c.tasks.cancel(10)
+
+        assert result.cancelled is True
+        assert not hasattr(result, "future_field")
+
+    def test_a_body_that_does_not_validate_is_malformed(
+        self, make_client: Callable[..., AgentClient]
+    ) -> None:
+        def handler(_req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"task_id": 10, "status": "stopped"})
+
+        with make_client(handler) as c, pytest.raises(MalformedResponse):
+            c.tasks.cancel(10)
+
+
 class TestMalformedWriteResponse:
     """A 202 body that does not validate surfaces as MalformedResponse."""
 
@@ -436,6 +582,18 @@ class TestErrorMappingPerEndpoint:
                 "no_pending_interaction",
                 NoPendingInteraction,
                 lambda c: c.tasks.reply(10, agent_id=1, message="x"),
+            ),
+            (
+                409,
+                "task_not_cancellable",
+                TaskNotCancellable,
+                lambda c: c.tasks.cancel(10),
+            ),
+            (
+                409,
+                "task_busy",
+                TaskBusy,
+                lambda c: c.tasks.cancel(10),
             ),
             (
                 409,
