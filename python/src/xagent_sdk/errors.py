@@ -292,13 +292,18 @@ class StructuredOutputError(XAgentError):
     ``status`` is the ``structured_output_status`` the error comes from, or
     ``None`` when it does not come from one. ``missing_fields`` and
     ``unexpressible_fields`` copy the server's lists and are empty when the
-    server sent none. ``http_status`` is ``None``: the error is raised by the
-    SDK after a successful response.
+    server sent none. ``partial_output`` is a copy of the values the server
+    extracted, with ``None`` where a value is missing or cannot be written,
+    when ``status`` is ``"incomplete"`` and the snapshot holds such values (the
+    task's ``response_format`` sets ``accept_partial``); otherwise ``None``.
+    ``http_status`` is ``None``: the error is raised by the SDK after a
+    successful response.
     """
 
     status: str | None
     missing_fields: list[str]
     unexpressible_fields: list[str]
+    partial_output: dict[str, Any] | None
 
     def __init__(
         self,
@@ -309,11 +314,13 @@ class StructuredOutputError(XAgentError):
         status: str | None = None,
         missing_fields: list[str] | None = None,
         unexpressible_fields: list[str] | None = None,
+        partial_output: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(code, message, http_status)
         self.status = status
         self.missing_fields = list(missing_fields or [])
         self.unexpressible_fields = list(unexpressible_fields or [])
+        self.partial_output = partial_output
 
 
 class RunMismatch(StructuredOutputError):

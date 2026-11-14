@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from xagent_sdk import (
     MalformedResponse,
@@ -199,3 +200,104 @@ def test_structured_output_error_accepts_http_status_like_its_siblings() -> None
     exc = StructuredOutputError("schema_mismatch", "m", 500, status="failed")
     assert exc.http_status == 500
     assert exc.status == "failed"
+
+
+# The task-info fixtures of a task whose format sets accept_partial, with the
+# completion_outcome each one carries. Every other task_info fixture stands for
+# a task without the switch and has no such key.
+_SWITCH_ON_FIXTURES = {
+    "task_info_structured_partial": "completed",
+    "task_info_structured_agent_partial": "partial",
+    "task_info_structured_agent_blocked": "blocked",
+}
+
+
+class TestCompletionOutcome:
+    def test_switch_on_fixtures_are_the_only_ones_with_the_key(self) -> None:
+        responses = _SHARED_V1 / "responses"
+        with_key = {
+            path.stem: json.loads(path.read_text("utf-8"))["completion_outcome"]
+            for path in sorted(responses.glob("task_info_*.json"))
+            if "completion_outcome" in json.loads(path.read_text("utf-8"))
+        }
+        assert with_key == _SWITCH_ON_FIXTURES
+        assert len(_SWITCH_ON_FIXTURES) == 3
+        for name in _SWITCH_ON_FIXTURES:
+            body = json.loads((responses / f"{name}.json").read_text("utf-8"))
+            assert list(body)[-1] == "completion_outcome"
+        stream = (responses / "task_events_stream.json").read_text("utf-8")
+        assert "completion_outcome" not in stream
+
+    @pytest.mark.parametrize("name", list(_SWITCH_ON_FIXTURES))
+    def test_switch_on_fixtures_parse_with_their_outcome(self, name: str) -> None:
+        info = _parse_task_info(response(name))
+        assert info.completion_outcome == _SWITCH_ON_FIXTURES[name]
+        assert (
+            RunResult(info, [], info.run_id).completion_outcome
+            == (_SWITCH_ON_FIXTURES[name])
+        )
+
+    @pytest.mark.parametrize(
+        ("fields", "expected"),
+        [
+            ({}, None),
+            ({"completion_outcome": None}, None),
+            ({"completion_outcome": "a_later_value"}, "a_later_value"),
+        ],
+        ids=["key absent", "key null", "unknown value"],
+    )
+    def test_missing_null_and_unknown_values_read_as_sent(
+        self, fields: dict[str, Any], expected: str | None
+    ) -> None:
+        assert _info(**fields).completion_outcome == expected
+
+
+class _Strict(BaseModel):
+    invoice_number: int
+
+
+def _raised(info: TaskInfo, model: type[BaseModel] | None = None) -> Any:
+    with pytest.raises(StructuredOutputError) as exc:
+        info.parsed(model)
+    return exc.value
+
+
+class TestPartialOutput:
+    @pytest.mark.parametrize("name", list(_SWITCH_ON_FIXTURES))
+    def test_incomplete_with_values_is_a_deep_copy(self, name: str) -> None:
+        info = _parse_task_info(response(name))
+        error = _raised(info)
+        assert error.partial_output == info.structured_output
+        assert error.partial_output is not info.structured_output
+        error.partial_output["items"][0]["key"] = "changed"
+        assert info.structured_output is not None
+        assert info.structured_output["items"][0]["key"] == "a"
+
+    @pytest.mark.parametrize(
+        "info",
+        [
+            _parse_task_info(response("task_info_structured_incomplete")),
+            _info(
+                structured_output_status="failed",
+                structured_output={"summary": "x"},
+                structured_output_reason={"code": "model_error", "message": "m"},
+            ),
+            _info(
+                structured_output_status="a_later_status",
+                structured_output={"summary": "x"},
+                structured_output_reason={"code": "a_later_code", "message": "m"},
+            ),
+            _parse_task_info(response("task_info_structured_ready")),
+        ],
+        ids=[
+            "incomplete without values",
+            "failed with values",
+            "unknown status with values",
+            "ready",
+        ],
+    )
+    def test_other_errors_carry_none(self, info: TaskInfo) -> None:
+        error = _raised(
+            info, _Strict if info.structured_output_status == "ready" else None
+        )
+        assert error.partial_output is None

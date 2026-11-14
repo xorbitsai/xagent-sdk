@@ -28,11 +28,12 @@ _CORPUS_PATH = (
     / "v1"
     / "structured_schema_corpus.json"
 )
-_CORPUS_SHA256 = "5f8ef162f956483be8d2d5e32a40c9ae0765b61bdee3ea5dff1748201cbdbe9d"
+_CORPUS_SHA256 = "a5ba545a1031f39ec50a1232350c7ee6c2be9ac383acd1e81b376ae4cf49139c"
 _CORPUS: dict[str, Any] = json.loads(_CORPUS_PATH.read_text(encoding="utf-8"))
 
 # Rules decided locally. The rest are size rules (S2, S11, S12b and the size
-# limit of S1) or outer-shape rules (N1 to N4, N7), which only the server checks.
+# limit of S1) or outer-shape rules (N1 to N4, N7, N9), which only the server
+# checks.
 _LOCAL_RULES = frozenset(
     {"N5", "N6", "S1", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S12a", "S13"}
 )
@@ -53,7 +54,7 @@ _SERVER_RULE_TEXTS: dict[str, str] = {
     "N2": 'type must be "text" or "json_schema".',
     "N3": (
         "A response_format may only have the key type, plus "
-        'json_schema when type is "json_schema".'
+        'json_schema and accept_partial when type is "json_schema".'
     ),
     "N4": (
         "json_schema must be an object with a schema key and no "
@@ -69,6 +70,7 @@ _SERVER_RULE_TEXTS: dict[str, str] = {
         "structured output is not supported."
     ),
     "N8": "Structured output is not supported for workforce keys.",
+    "N9": "accept_partial, when present, must be true or false.",
     "S1": (
         "The schema must be JSON of at most 16384 bytes, with no "
         "NaN or Infinity, no NUL or surrogate characters, and no "
@@ -248,15 +250,15 @@ def test_violation_message_format(rule: str, path: tuple[str, ...], where: str) 
 
 
 def test_rule_texts_cover_every_rule() -> None:
-    expected = {f"N{i}" for i in range(1, 9)} | {f"S{i}" for i in range(1, 14)}
+    expected = {f"N{i}" for i in range(1, 10)} | {f"S{i}" for i in range(1, 14)}
     expected = (expected - {"S12"}) | {"S12a", "S12b"}
     assert set(RULE_TEXTS) == expected
-    assert len(RULE_TEXTS) == 22
+    assert len(RULE_TEXTS) == 23
 
 
 def test_rule_texts_are_the_servers_wording() -> None:
     assert RULE_TEXTS == _SERVER_RULE_TEXTS
-    assert len(_SERVER_RULE_TEXTS) == 22
+    assert len(_SERVER_RULE_TEXTS) == 23
 
 
 # Each schema breaks two rules; the server reports the rule that runs first

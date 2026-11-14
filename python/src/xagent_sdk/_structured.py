@@ -6,6 +6,8 @@ Pydantic model class converted by :func:`convert_model`) into the JSON that
 will be sent, and refuses with :class:`UnsupportedSchema` a value that breaks
 one of the server's rules checked locally (see ``_schema_rules``), or with
 its subclass :class:`UnsupportedModel` a model that cannot be converted.
+:func:`prepare_task_format` is what task requests call: it applies the
+``accept_partial`` switch to that value.
 :func:`expected_echo` is the ``(response_format_type, response_format_name)``
 pair a server that honored the value reports back. :func:`parse_with_model`
 validates a ready structured result against the model it was requested with.
@@ -66,6 +68,62 @@ def prepare_response_format(value: dict[str, Any] | type[BaseModel]) -> Any:
     found = local_violation(sent)
     if found is not None:
         raise _rule_violation(*found)
+    return sent
+
+
+def prepare_task_format(
+    response_format: dict[str, Any] | type[BaseModel] | None,
+    accept_partial: bool | None,
+) -> Any:
+    """The JSON value ``create()`` and ``append()`` send as ``response_format``,
+    or ``None`` when ``response_format`` is ``None`` (nothing is sent).
+
+    ``accept_partial`` is the caller's switch for keeping partial results:
+
+    * ``None`` leaves the value exactly as :func:`prepare_response_format`
+      returns it, including an ``accept_partial`` key the caller wrote into a
+      dict.
+    * Anything else that is not a ``bool`` raises ``TypeError``.
+    * A ``bool`` needs a format to belong to: with ``response_format=None`` it
+      raises ``ValueError``, and so it does for a format whose ``type`` is not
+      ``"json_schema"`` (the server refuses the key there).
+    * A dict that already holds an ``accept_partial`` key must hold exactly the
+      same ``bool``; any other value raises ``ValueError``.
+    * ``True`` writes ``"accept_partial": true``. ``False`` writes nothing: an
+      absent key and ``false`` mean the same to the server.
+
+    Raises:
+        TypeError: ``accept_partial`` is neither ``None`` nor a ``bool``.
+        ValueError: ``accept_partial`` is a ``bool`` and there is no
+            ``json_schema`` format to apply it to, or it contradicts the key in
+            the dict.
+        UnsupportedModel, UnsupportedSchema: as :func:`prepare_response_format`.
+    """
+    if accept_partial is not None and type(accept_partial) is not bool:
+        raise TypeError(
+            "accept_partial must be a bool or None, "
+            f"not {type(accept_partial).__name__}"
+        )
+    if response_format is None:
+        if accept_partial is not None:
+            raise ValueError("accept_partial needs a response_format to apply to")
+        return None
+    sent = prepare_response_format(response_format)
+    if accept_partial is None:
+        return sent
+    if type(sent) is not dict or sent.get("type") != "json_schema":
+        raise ValueError(
+            'accept_partial applies only to a response_format of type "json_schema"'
+        )
+    if "accept_partial" in sent:
+        existing = sent["accept_partial"]
+        if type(existing) is not bool or existing is not accept_partial:
+            raise ValueError(
+                "accept_partial conflicts with the accept_partial key in "
+                "response_format; set it in one place"
+            )
+    elif accept_partial:
+        sent["accept_partial"] = True
     return sent
 
 
