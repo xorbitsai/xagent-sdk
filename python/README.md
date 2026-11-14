@@ -364,7 +364,7 @@ SDK-coined codes:
 | `UnsupportedFeature` | `create()` / `append()` / `run()` with a `response_format`: `GET /v1/features` answered 404 or does not list `structured_output` (raised before the write, `task_id=None`), or the write's response did not echo the format back (`task_id` is the accepted task) |
 | `UnsupportedSchema` | a `response_format` refused before any request: it breaks a server rule checked locally (`rule`, `path` and `message` as the server reports them); a Pydantic model that cannot be converted raises its subclass `UnsupportedModel` |
 | `UnsupportedModel` | a Pydantic model that cannot be converted into the schema subset, passed as `response_format` (raised before any request) or to `parsed(model)`; a subclass of `UnsupportedSchema` whose `rule` is always `"model"` (not a server rule id) and whose `path` is the position the `message` names, such as `/properties/data` |
-| `StructuredOutputError` | `parsed()` could not return a structured result: `code` is the server's reason code with its `message`, `missing_fields` and `unexpressible_fields`, or `client_validation_failed` (the ready result does not validate with the model passed to `parsed(model)`), or `no_structured_output`; a run that does not match raises its subclass `RunMismatch` (code `run_mismatch`, also raised by `wait()` / `run()`), so `except StructuredOutputError` catches both |
+| `StructuredOutputError` | `parsed()` could not return a structured result: `code` is the server's reason code with its `message`, `missing_fields`, `unexpressible_fields` and `partial_output`, or `client_validation_failed` (the ready result does not validate with the model passed to `parsed(model)`), or `no_structured_output`; a run that does not match raises its subclass `RunMismatch` (code `run_mismatch`, also raised by `wait()` / `run()`), so `except StructuredOutputError` catches both |
 | `TaskTimeout` | `wait()` / `run()` deadline elapsed, or `events()`'s own `timeout` budget -- which covers every read the stream still owes, including time spent between frames, and hands over to a bounded post-close drain once a closing frame has arrived, which ends the stream cleanly rather than raising -- ran out first |
 
 The SDK does **not** retry automatically. Wrap calls with your own
@@ -564,8 +564,9 @@ fields: `structured_output_status` is `"ready"`, `"incomplete"` or `"failed"`
 with `code` (`StructuredOutputReasonCode`), `message`, and up to 20 JSON
 Pointers in `missing_fields` (values the answer did not state) and
 `unexpressible_fields` (values it stated in a form the schema cannot hold).
-They are `None` while the task runs, when it has no format, and on a server
-that predates them. `parsed()` returns the result as a dict (a copy), or
+The three fields are `None` while the task runs, when it has no format, and on
+a server that predates them. Without `accept_partial`, `structured_output` is
+`None` unless the status is `"ready"`. `parsed()` returns the result as a dict (a copy), or
 validated as the model you pass (on a `RunResult`, by default the model
 `run()` was given), and raises `StructuredOutputError` otherwise:
 with the server's reason code, or with one of the codes only the SDK raises --
@@ -578,6 +579,79 @@ instead, as it does from `run()`. The run is compared first:
 run or of no run raises `RunMismatch` (code `run_mismatch`), a subclass of
 `StructuredOutputError`, so the `except StructuredOutputError` above
 catches it too.
+
+#### Partial results
+
+By default an `incomplete` result gives you nothing but the reason. Pass
+`accept_partial=True` to `create()`, `append()` or `run()`, together with a
+`response_format` of type `json_schema` (a `dict` or a Pydantic model), to
+also get what the server could extract:
+
+```python
+from pydantic import BaseModel
+
+from xagent_sdk import AgentClient, StructuredOutputError
+
+
+class Entry(BaseModel):
+    key: str
+    level: str
+
+
+class Review(BaseModel):
+    summary: str
+    items: list[Entry]
+
+
+with AgentClient() as agent:
+    result = agent.tasks.run(
+        agent_id=42,
+        message="Review every entry in the attached list ...",
+        response_format=Review,
+        accept_partial=True,
+    )
+    try:
+        review = result.parsed()
+    except StructuredOutputError as exc:
+        if exc.partial_output is not None:
+            print(exc.code, exc.partial_output)  # values, `None` at each gap
+```
+
+- `accept_partial` is `None` (leave the request as it is), `True` (write
+  `"accept_partial": true` into the format) or `False` (write nothing, the
+  server treats an absent key as false). A value that is neither `None` nor a
+  `bool` raises `TypeError`. A `bool` with no `response_format`, with
+  `{"type": "text"}`, or contradicting an `accept_partial` key you wrote into
+  the dict yourself raises `ValueError`; all of these are raised before any
+  request.
+- When `structured_output_status` is `"incomplete"`, `structured_output` holds
+  the extracted values with `None` where a value is missing or cannot be
+  written. It is still `None` when nothing could be kept, so check it first.
+  `parsed()` keeps raising `StructuredOutputError` for such a task; its
+  `partial_output` is a copy of those values (`None` in every other case).
+- The status and reason `code` do not depend on the switch. What changes is
+  that a run the agent rated partial or blocked is extracted too: it reads
+  `incomplete` with `agent_partial` or `agent_blocked`, and its reason may then
+  carry `missing_fields` and `unexpressible_fields` as well. The server runs
+  one more extraction for each such run.
+- A `None` at a position the schema does not allow to be `None` is always a
+  gap. A `None` at a position that allows it may mean the answer did not state
+  the value, or stated one that cannot be written. The two lists name at most
+  20 positions each and may be incomplete; how to treat these values is up to
+  you. The server does not check the quality of the values either.
+- `completion_outcome` on `TaskInfo` and `RunResult` is how the agent rated
+  the run: `"completed"`, `"partial"` or `"blocked"`. It is `None` when the
+  task's format does not set `accept_partial` (the server then omits the key),
+  or when the run is not completed or recorded no rating; a missing key and a
+  null both read as `None`. Whether the result is complete is told by
+  `structured_output_status`, not by this field.
+- `append()` with a `response_format` replaces the stored format as a whole,
+  including `accept_partial`: send `accept_partial` again to keep it. The
+  response does not echo the switch and the SDK sends no warning when it is
+  dropped. `run()` only calls `create()`, so its `accept_partial` is passed to
+  `create()` unchanged.
+- A server that predates the switch answers `InvalidInput` (422) when you
+  send it.
 
 Before the request, the SDK checks the format:
 
@@ -729,14 +803,14 @@ only.
 | Method | Returns | Notes |
 |---|---|---|
 | `AgentClient(api_key, base_url, ...)` | `AgentClient` | env-var fallback: `XAGENT_API_KEY` / `XAGENT_BASE_URL` |
-| `agent.tasks.create(*, agent_id, message, metadata=None, dispatch_class=None, priority=None, prompt_context=None, response_format=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` when the server queues the task for its dispatcher or `'running'` when it runs the task in-process; `dispatch_class` (`'interactive'`/`'batch'`) and `priority` (-10..10) apply to the new task only, the server validates them (422 → `InvalidInput`) and an older server ignores them; the result's `dispatch_class` shows the class the server gave the start command (`None` if not dispatched through a queue or on an older server); `run_id` names the run it started; `response_format` (a `dict` or a Pydantic model) asks for a structured result, see [Example 12](#12-structured-output) (`UnsupportedSchema` / `UnsupportedFeature`) |
-| `agent.tasks.append(task_id, *, agent_id, message, metadata=None, prompt_context=None, response_format=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='pending'` (queued) or `'running'` (in-process); raises `TaskBusy` if the prior turn is still queued or running, `InteractionResponseRequired` if `WAITING_FOR_USER`; `run_id` names the new run; `response_format` replaces the task's format (`{"type": "text"}` removes it, `None` keeps it) |
+| `agent.tasks.create(*, agent_id, message, metadata=None, dispatch_class=None, priority=None, prompt_context=None, response_format=None, accept_partial=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` when the server queues the task for its dispatcher or `'running'` when it runs the task in-process; `dispatch_class` (`'interactive'`/`'batch'`) and `priority` (-10..10) apply to the new task only, the server validates them (422 → `InvalidInput`) and an older server ignores them; the result's `dispatch_class` shows the class the server gave the start command (`None` if not dispatched through a queue or on an older server); `run_id` names the run it started; `response_format` (a `dict` or a Pydantic model) asks for a structured result, see [Example 12](#12-structured-output) (`UnsupportedSchema` / `UnsupportedFeature`); `accept_partial=True` also keeps the values extracted from an incomplete result (see [Partial results](#partial-results)) |
+| `agent.tasks.append(task_id, *, agent_id, message, metadata=None, prompt_context=None, response_format=None, accept_partial=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='pending'` (queued) or `'running'` (in-process); raises `TaskBusy` if the prior turn is still queued or running, `InteractionResponseRequired` if `WAITING_FOR_USER`; `run_id` names the new run; `response_format` replaces the task's format as a whole, including `accept_partial` (`{"type": "text"}` removes it, `None` keeps it) |
 | `agent.tasks.reply(task_id, *, agent_id, message)` | `AppendResult` | POST `/v1/chat/tasks/{id}/reply`; answers a `WAITING_FOR_USER` task's pending question and resumes its server-side run (the result's `run_id` is that run, not a new one); not idempotent |
-| `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER`; `run_id` and the `structured_output*` fields; `TaskInfo.parsed(model=None, *, expected_run_id=None)` reads the structured result |
+| `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER`; `run_id`, the `structured_output*` fields and `completion_outcome`; `TaskInfo.parsed(model=None, *, expected_run_id=None)` reads the structured result |
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
 | `agent.tasks.events(task_id, *, timeout=None)` | `TaskEventStream` | GET `/v1/chat/tasks/{id}/events` (SSE); iterate decoded `StreamEvent` frames as the task runs; `closed_by` tells how the stream ended |
 | `agent.tasks.wait(task_id, *, timeout=120, poll_interval=1.0, expected_run_id=None)` | `TaskInfo` | poll `get()` until `COMPLETED`/`FAILED` or `WAITING_FOR_USER`; raises `TaskTimeout` on deadline; with `expected_run_id`, a returnable snapshot of another run or of no run raises `RunMismatch` (`run_mismatch`) |
-| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None, response_format=None)` | `RunResult` | `create` + `wait(expected_run_id=created.run_id)` + `steps`; `RunResult.run_id`, `RunResult.model` (the model passed as `response_format`, which `parsed()` uses when called without one), the `structured_output*` properties and `parsed(model=None)`; raises `RunMismatch` if the snapshot shows another run or no run |
+| `agent.tasks.run(*, agent_id, message, timeout=120, poll_interval=1.0, metadata=None, dispatch_class=None, priority=None, prompt_context=None, response_format=None, accept_partial=None)` | `RunResult` | `create` + `wait(expected_run_id=created.run_id)` + `steps`; `RunResult.run_id`, `RunResult.model` (the model passed as `response_format`, which `parsed()` uses when called without one), the `structured_output*` properties, `completion_outcome` and `parsed(model=None)`; raises `RunMismatch` if the snapshot shows another run or no run |
 | `agent.close()` / `with ... as agent` | — | release the connection pool |
 
 **Prompt context**: `create()`, `append()` and `run()` take
