@@ -29,6 +29,8 @@ row below.
 | `agents_list.json` | `GET /v1/agents` | Bare JSON array; each entry keys its id under `id` (SDKs surface it as `agent_id`); covers `active`, `draft`, `paused` status values |
 | `agents_create.json` | `POST /v1/agents` or `POST /v1/agents/from-template` | Nested `{agent: {id, name, ...}, api_key: {full_key, key_prefix, created_at}}`; the `api_key` block is present only when `generate_runtime_key=True` |
 | `rotate_key.json` | `POST /v1/agents/{id}/api-key` | Rotation result with one-time `full_key` and public-safe `key_prefix` |
+| `runtime_keys_list.json` | `GET /v1/agents/{id}/api-keys` (200) | Bare array of an agent's runtime keys, newest first, without secrets; `status` is `active`, `paused` or `revoked` |
+| `runtime_key_revoke.json` | `DELETE /v1/agents/{id}/api-keys/{key_id}` (200) | `{id, key_prefix, revoked, revoked_at}`; `revoked` is `false` when the key had already been revoked |
 | `agent_skills.json` | `GET /v1/agents/{id}/skills` (200) | `{agent_id, skills}`: the agent's skill names, in order |
 | `agent_skills_update.json` | `PUT /v1/agents/{id}/skills` (200) | The same plus `unresolved_for_caller`: names this request added that the key holder cannot see |
 | `skills_list.json` | `GET /v1/skills` (200) | Bare JSON array, no id rename; one entry for each `source` value (`personal`, `builtin`, `team`, `external`), personal skills first |
@@ -100,6 +102,7 @@ Stable backend codes using the V1 envelope shape:
 | `no_pending_interaction.json` | 409 | V1 envelope (raised by `reply()` when the task is not `WAITING_FOR_USER`) |
 | `interaction_not_resumable.json` | 409 | V1 envelope (raised by `reply()` when the task's execution state could not be restored; do not retry) |
 | `temporarily_unavailable.json` | 503 | V1 envelope (raised by `reply()` on a transient read failure; safe to retry) |
+| `api_key_not_found.json` | 404 | V1 envelope (raised by `agents.revoke_key()` when the agent has no key with that id) |
 | `skill_not_found.json` | 404 | V1 envelope (raised by `UserClient.skills.get()`, `update()` and `delete()`) |
 | `skill_already_exists.json` | 409 | V1 envelope (raised by `UserClient.skills.create()` and `upload()` when the name is taken by a different write) |
 | `connector_not_found.json` | 404 | V1 envelope (raised by `UserClient.mcp_servers` methods that take a `server_id`; also for a connector the key holder cannot see) |

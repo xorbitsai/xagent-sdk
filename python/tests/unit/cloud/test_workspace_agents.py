@@ -2,6 +2,7 @@
 
 import inspect
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -10,7 +11,10 @@ from xagent_sdk import (
     AgentCreateResult,
     AgentNotFound,
     AgentSummary,
+    APIKeyNotFound,
     MalformedResponse,
+    RevokeKeyResult,
+    RuntimeKeyInfo,
     TemplateNotFound,
 )
 from xagent_sdk.cloud import WorkspaceClient
@@ -187,3 +191,112 @@ class TestRotateKey:
 
         with _make_ws(handler) as c, pytest.raises(AgentNotFound):
             c.agents.rotate_key(99999999)
+
+
+class TestRuntimeKeys:
+    @pytest.mark.parametrize(
+        ("include_revoked", "query"),
+        [(False, b""), (True, b"include_revoked=true")],
+    )
+    def test_list_keys_url_and_parse(self, include_revoked: bool, query: bytes) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(200, json=response("runtime_keys_list"))
+
+        with _make_ws(handler) as c:
+            keys = c.agents.list_keys(42, include_revoked=include_revoked)
+
+        assert captured[0].method == "GET"
+        assert captured[0].url.path == "/v1/workspace/agents/42/api-keys"
+        assert captured[0].url.query == query
+        assert [type(key) for key in keys] == [RuntimeKeyInfo, RuntimeKeyInfo]
+        assert [(k.key_id, k.status, k.label) for k in keys] == [
+            (12, "active", None),
+            (7, "paused", "ci"),
+        ]
+        assert keys[0].key_prefix == "newabc"
+        assert keys[0].masked_key.startswith("xag_newabc_")
+        assert keys[0].created_at.year == 2026
+        assert keys[0].last_used_at is not None
+        assert keys[1].last_used_at is None
+        assert keys[1].revoked_at is None
+
+    def test_list_keys_empty(self) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=[])
+
+        with _make_ws(handler) as c:
+            assert c.agents.list_keys(42) == []
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({}, id="object"),
+            pytest.param({"keys": []}, id="wrapped"),
+            pytest.param(None, id="null"),
+            pytest.param(["xag_newabc"], id="item-not-object"),
+            pytest.param([{"key_prefix": "newabc"}], id="item-missing-fields"),
+        ],
+    )
+    def test_list_keys_never_reads_a_wrong_body_as_empty(self, body: Any) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=body)
+
+        with _make_ws(handler) as c, pytest.raises(MalformedResponse):
+            c.agents.list_keys(42)
+
+    def test_revoke_key_url_and_parse(self) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return httpx.Response(200, json=response("runtime_key_revoke"))
+
+        with _make_ws(handler) as c:
+            result = c.agents.revoke_key(42, 12)
+
+        assert captured[0].method == "DELETE"
+        assert captured[0].url.path == "/v1/workspace/agents/42/api-keys/12"
+        assert captured[0].content == b""
+        assert isinstance(result, RevokeKeyResult)
+        assert (result.key_id, result.key_prefix, result.revoked) == (
+            12,
+            "newabc",
+            True,
+        )
+        assert result.revoked_at.year == 2026
+
+    def test_revoke_key_reports_an_already_revoked_key(self) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, json={**response("runtime_key_revoke"), "revoked": False}
+            )
+
+        with _make_ws(handler) as c:
+            assert c.agents.revoke_key(42, 12).revoked is False
+
+    def test_revoke_key_wrong_body_is_malformed(self) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"deleted": True})
+
+        with _make_ws(handler) as c, pytest.raises(MalformedResponse):
+            c.agents.revoke_key(42, 12)
+
+    @pytest.mark.parametrize(
+        ("fixture", "expected"),
+        [("agent_not_found", AgentNotFound), ("api_key_not_found", APIKeyNotFound)],
+    )
+    def test_not_found_codes_map_to_distinct_errors(
+        self, fixture: str, expected: type[Exception]
+    ) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, json=error_envelope(fixture))
+
+        with _make_ws(handler) as c:
+            with pytest.raises(expected):
+                c.agents.revoke_key(42, 12)
+            if expected is AgentNotFound:
+                with pytest.raises(AgentNotFound):
+                    c.agents.list_keys(42)

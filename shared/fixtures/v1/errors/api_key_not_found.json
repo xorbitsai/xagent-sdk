@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "api_key_not_found",
+    "message": "API key not found for this agent."
+  }
+}

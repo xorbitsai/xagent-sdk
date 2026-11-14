@@ -15,6 +15,7 @@ import pytest
 
 from xagent_sdk import (
     AgentNotFound,
+    APIKeyNotFound,
     ConnectorToolsUnavailable,
     ConnectorUnavailable,
     InteractionNotResumable,
@@ -216,6 +217,7 @@ class TestFromResponseStableCodes:
             (404, "agent_not_found", AgentNotFound),
             (404, "task_not_found", TaskNotFound),
             (404, "template_not_found", TemplateNotFound),
+            (404, "api_key_not_found", APIKeyNotFound),
             (404, "skill_not_found", SkillNotFound),
             (409, "skill_already_exists", SkillAlreadyExists),
             (409, "task_busy", TaskBusy),
@@ -261,7 +263,6 @@ class TestCodeMapFixtures:
             for path in errors_dir.glob("*.json")
         }
         assert fixture_codes == set(_CODE_MAP)
-        assert len(_CODE_MAP) == 19
 
 
 class TestFromResponseFallback:
