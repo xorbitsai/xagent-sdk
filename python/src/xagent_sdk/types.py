@@ -433,7 +433,8 @@ class CancelResult:
     The other fields describe the task as ``get()`` reads it now. Once
     cancelled it reads ``TaskStatus.FAILED`` with
     ``error_code == "task_cancelled"``, unless a later turn followed: while
-    one is queued to start it reads ``PENDING`` with ``error_code`` ``None``
+    a turn appended after the cancelled run is still queued to start it
+    reads ``PENDING`` with ``error_code`` ``None``, as ``get()`` does
     (``run_id`` is still the cancelled run), and once one has started
     ``status``, ``run_id``, ``state_version`` and ``error_code`` describe
     that turn.
@@ -615,7 +616,8 @@ class TaskInfo:
     ``error_code`` is a machine-readable reason for a ``FAILED`` status when
     the server defines one: ``"task_cancelled"`` for a task stopped with
     ``client.tasks.cancel()``. ``None`` for every other failure and status,
-    including once a later turn of a cancelled task is queued or running,
+    including while a turn appended after a cancelled run is queued to
+    start or running,
     and on a server that predates the field. Kept as a plain ``str``. The
     closing ``task.completed`` frame of ``events()`` carries the same value
     under ``data["error_code"]``.

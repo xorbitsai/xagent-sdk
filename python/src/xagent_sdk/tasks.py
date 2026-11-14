@@ -450,11 +450,10 @@ class TasksAPI:
             TaskNotFound: (404) the task does not exist or is not this
                 key's.
             TaskNotCancellable: (409) the task already ended without being
-                cancelled: it completed or failed on its own, also while
-                the cancel was being applied, or another turn replaced the
-                one the cancel was aimed at. Do not retry.
+                cancelled, or another turn replaced the one the cancel was
+                aimed at. Do not retry.
             TaskBusy: (409) the task cannot be cancelled in its current
-                state yet -- an answer to its question is queued or being
+                state yet -- for example an answer is queued or being
                 applied, or a queued turn has no run of its own yet -- or
                 it changed state while the cancel was applied. Retry.
             InternalError: (503) the server could not apply the cancel;
