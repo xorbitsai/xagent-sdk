@@ -345,6 +345,8 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `ConnectorNameConflict` | 409 | `connector_name_conflict` -- raised by `mcp_servers.create()` and `update()` when the name is already in use (names are unique across all users); `details["connector_id"]` is present only when the name is taken by one of your own connectors: after a timed-out `create()` it can be the connector that attempt made or one that existed before, so check it with `get()`, and after a rename in `update()` it is your *other* connector with that name |
 | `ConnectorNotEditable` | 409 | `connector_not_editable` -- raised by `mcp_servers.update()` and `delete()`; `details["reason"]` is `catalog` (an app connection from the catalog, changed only in the web app), `managed_elsewhere` (another account manages its OAuth connection), `authorized_by_others` (other accounts hold authorizations that changing `url`, `auth.issuer` or `auth.resource_metadata_url` would keep; make that change in the web app) or `unknown` |
 | `ConnectorForbidden` | 403 | `connector_forbidden` -- raised by `mcp_servers.update()`, `delete()` and `set_enabled()`, and by `create()` when the server refuses you a new connector; `details["reason"]` is `team_shared` (you see the connector only through your team, so it is read-only) or `not_permitted` (for example deleting a team-owned connector without being a team administrator) |
+| `ConnectorNotShared` | 400 | `connector_not_shared` -- raised by `agents.replace_connectors()` when the agent belongs to a team and the team cannot use the new selection; the team's deployment decides, and it checks the whole new list, so `details["connectors"]` (a list of `{"name", "reason"}`) can name connectors you did not send; `reason` is `not_shared`, `disabled` or `unresolved` today, treat any other string as `not_shared`; `name` can be an empty string; nothing was written |
+| `AgentToolsUnconfigured` | 409 | `agent_tools_unconfigured` -- raised by `agents.replace_connectors()` when the agent uses the default tool set and has no selection of its own; choose its tools in the web app first; `get_connectors()` never raises it |
 | `ConnectorToolsUnavailable` | 502 | `connector_tools_unavailable` -- raised by `mcp_servers.list_tools()` when no tools were loaded; `details["reason"]` and `details["failures"]` (a list of `{"phase", "attempts"}`) say what failed |
 | `TaskBusy` | 409 | `task_busy` |
 | `TaskNotCancellable` | 409 | `task_not_cancellable` -- raised by `cancel()` when the task already ended without being cancelled, or another turn replaced the one the cancel was aimed at; do not retry |
@@ -399,7 +401,7 @@ SDK-coined codes:
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `mcp_servers.list()`, `mcp_servers.get()` and `mcp_servers.list_tools()` raise it in the same three cases -- `mcp_servers.list()` never turns a wrong body into an empty list -- and `mcp_servers.create()`, `update()`, `delete()` and `set_enabled()` raise it in those cases too, after the server may already have applied the write: `update()` and `set_enabled()` can be repeated safely, a repeated `delete()` raises `ConnectorNotFound` (or `ConnectorForbidden` while your team still shares the connector), and a repeated `create()` raises `ConnectorNameConflict`; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `agents.get_connectors()` and `agents.replace_connectors()` raise it in the same three cases -- `get_connectors()` never turns a wrong body into an empty selection -- and after it on `replace_connectors()` the replacement may already have been applied, and calling it again declares the same selection once more (nothing is written if nobody changed the agent in the meantime; a change someone else made in the meantime is overwritten); `mcp_servers.list()`, `mcp_servers.get()` and `mcp_servers.list_tools()` raise it in the same three cases -- `mcp_servers.list()` never turns a wrong body into an empty list -- and `mcp_servers.create()`, `update()`, `delete()` and `set_enabled()` raise it in those cases too, after the server may already have applied the write: `update()` and `set_enabled()` can be repeated safely, a repeated `delete()` raises `ConnectorNotFound` (or `ConnectorForbidden` while your team still shares the connector), and a repeated `create()` raises `ConnectorNameConflict`; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
 | `RunMismatch` | `wait()` / `run()` with an expected run: the snapshot about to be returned shows another run or no run (code `run_mismatch`); `TaskInfo.parsed(expected_run_id=...)` and `RunResult.parsed()` for the same reason; a subclass of `StructuredOutputError` |
 | `UnsupportedFeature` | `create()` / `append()` / `run()` with a `response_format`: `GET /v1/features` answered 404 or does not list `structured_output` (raised before the write, `task_id=None`), or the write's response did not echo the format back (`task_id` is the accepted task) |
 | `UnsupportedSchema` | a `response_format` refused before any request: it breaks a server rule checked locally (`rule`, `path` and `message` as the server reports them); a Pydantic model that cannot be converted raises its subclass `UnsupportedModel` |
@@ -911,6 +913,49 @@ connectors; a third one, or one that finds no free slot in time, gets
 `ConnectorToolsUnavailable`. Refer to a tool by `mcp_name`; `name` is the web
 app's display name and can change.
 
+### 14. Choose which connectors an agent uses
+
+An agent stores the names of the connectors it uses, and whether it also
+selects every MCP connector. `replace_connectors()` replaces the whole
+selection, so read it first and send it back with your change. `all_connectors`
+has no default: pass the value you read, unless you mean to change it.
+
+```python
+from xagent_sdk import AgentToolsUnconfigured, ConnectorNotShared, UserClient
+
+AGENT_ID = 42
+
+with UserClient() as user:
+    current = user.agents.get_connectors(AGENT_ID)
+    names = [*current.connectors]
+    if "crm" not in names:
+        names.append("crm")
+    try:
+        result = user.agents.replace_connectors(
+            AGENT_ID, names, all_connectors=current.all_connectors
+        )
+    except AgentToolsUnconfigured:
+        print("This agent uses the default tool set; choose its tools in the web app.")
+    except ConnectorNotShared as e:
+        print(e.details)  # {"connectors": [{"name": ..., "reason": ...}]}
+    else:
+        print(result.connectors)
+        print(result.unresolved)  # names on the agent that you cannot see
+```
+
+A name you add must be one you can see; otherwise the call raises
+`InvalidInput` (HTTP 400). Names already on the agent are kept even if you
+cannot see them, and `unresolved` lists them. A name can also be a Custom API,
+which `mcp_servers.list()` does not list; `all_connectors=True` selects every
+MCP connector but not Custom APIs, which are selected only by name. For an
+agent that belongs to a team, the team's deployment checks the whole new list,
+so `ConnectorNotShared` can name connectors you did not send. Reading
+`connectors=[]` with `all_connectors=True` can mean the agent uses the default
+tool set, and then every write raises `AgentToolsUnconfigured`. There is no
+conflict detection: of two concurrent replacements the later one wins. New
+tasks use the new selection at once; an existing task can keep using the
+previous one for a while.
+
 ## API reference
 
 All methods are synchronous.
@@ -936,6 +981,8 @@ can reach.
 | `user.agents.list_keys(agent_id, *, include_revoked=False)` | `list[RuntimeKeyInfo]` | GET `/v1/agents/{agent_id}/api-keys`; newest first, never includes a secret; revoked keys only with `include_revoked=True`, paused keys always; 404 → `AgentNotFound`; a body that is not the expected array → `MalformedResponse`, never an empty list; a server without this route answers 404 → `InternalError` |
 | `user.agents.revoke_key(agent_id, key_id)` | `RevokeKeyResult` | DELETE `/v1/agents/{agent_id}/api-keys/{key_id}`; revokes that one key and leaves the agent's other keys working; no call reverses it; calling again is safe and returns `revoked=False`; a key that a still-settling rotation had already revoked is such a no-op and can be restored if that rotation's new key cannot be delivered, so list the keys again once the rotation settles and revoke the key if it is active; unknown agent → `AgentNotFound`, a key id the agent does not have → `APIKeyNotFound`; a server without this route answers 404 or 405 → `InternalError` |
 | `user.agents.replace_skills(agent_id, skills)` | `AgentSkillsUpdate` | PUT `/v1/agents/{agent_id}/skills`; 404 → `AgentNotFound`; replaces the whole list, `[]` clears it, and the later of two writers wins; a single string raises `TypeError` before any request; a new name that is neither visible nor valid → `InvalidInput` (400); `unresolved_for_caller` lists added names you cannot see, stored anyway |
+| `user.agents.get_connectors(agent_id)` | `AgentConnectors` | GET `/v1/agents/{agent_id}/connectors`; `agent_id` must be an `int` (anything else raises `TypeError` before any request); 404 → `AgentNotFound`; a body that is not the expected object, or lacks any of its four fields, raises `MalformedResponse` (never an empty selection); `connectors=[]` with `all_connectors=True` can also be an agent that uses the default tool set |
+| `user.agents.replace_connectors(agent_id, connectors, *, all_connectors)` | `AgentConnectors` | PUT `/v1/agents/{agent_id}/connectors`; replaces the whole selection, `[]` clears it, and the later of two writers wins; `all_connectors` is required and has no default; a single string, or an `agent_id` that is not an `int`, raises `TypeError` before any request; 404 → `AgentNotFound`; an added name you cannot see → `InvalidInput` (400); a team that cannot use the selection → `ConnectorNotShared`; an agent on the default tool set → `AgentToolsUnconfigured`; `unresolved` lists names on the agent that you cannot see |
 | `user.tasks.create / append / reply / cancel / get / steps / events / wait / run` | as in the `AgentClient` table | Any agent you can see (`user.agents.list()`); the task runs as you, not as the agent's owner. Every personal key of yours sees the tasks any of them created, until the task's agent is deleted. An older server answers `InvalidAPIKey` (401) here. |
 | `user.skills.list()` | `list[SkillSummary]` | GET `/v1/skills`; your own skills first, in server order; a body that is not an array of skills raises `MalformedResponse` (never `[]`) |
 | `user.skills.get(name)` | `SkillDetail` | GET `/v1/skills/{name}`; includes `skill_md` and `files`; 404 → `SkillNotFound`; `""`, `"."`, `".."` or a name containing `/` raises `ValueError` before any request |

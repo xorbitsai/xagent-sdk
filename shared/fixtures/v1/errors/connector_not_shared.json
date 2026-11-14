@@ -1,0 +1,12 @@
+{
+  "error": {
+    "code": "connector_not_shared",
+    "message": "The agent's team cannot use these connectors: 'x', 'y'. Share them with the team in the web app; a connector you disabled must be enabled first.",
+    "details": {
+      "connectors": [
+        { "name": "x", "reason": "not_shared" },
+        { "name": "y", "reason": "unresolved" }
+      ]
+    }
+  }
+}

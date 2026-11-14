@@ -6,7 +6,9 @@ example a browser entry host in front of the API) reaches the success path.
 Every method decodes its success body through ``_json_body``, so none of
 these cases escapes as ``json.JSONDecodeError``, which is not an
 ``XAgentError``. The ``skills.*``, ``agents.get_skills()`` and
-``agents.replace_skills()`` methods are covered in ``test_skills.py``.
+``agents.replace_skills()`` methods are covered in ``test_skills.py``, and
+``agents.get_connectors()`` and ``agents.replace_connectors()`` in
+``test_agent_connectors.py``.
 """
 
 import pathlib
@@ -20,6 +22,7 @@ import pytest
 from xagent_sdk import AgentClient, MalformedResponse, UserClient, XAgentError
 from xagent_sdk.cloud import WorkspaceClient
 
+from .test_agent_connectors import _ROUTES as AGENT_CONNECTOR_ROUTES
 from .test_mcp_servers import _ROUTES as MCP_SERVER_ROUTES
 from .test_skills import _ROUTES as SKILL_ROUTES
 
@@ -210,4 +213,10 @@ def test_case_list_covers_every_helper_call() -> None:
         for path in _SRC.rglob("*.py")
     )
     # tasks.create is one call site shared by the user and agent clients.
-    assert calls == len(_CASES) - 1 + len(SKILL_ROUTES) + len(MCP_SERVER_ROUTES)
+    assert calls == (
+        len(_CASES)
+        - 1
+        + len(SKILL_ROUTES)
+        + len(MCP_SERVER_ROUTES)
+        + len(AGENT_CONNECTOR_ROUTES)
+    )

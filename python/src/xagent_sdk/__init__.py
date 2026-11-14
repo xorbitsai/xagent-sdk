@@ -3,11 +3,13 @@ from xagent_sdk._version import __version__
 from xagent_sdk.agent_client import AgentClient
 from xagent_sdk.errors import (
     AgentNotFound,
+    AgentToolsUnconfigured,
     APIKeyNotFound,
     ConnectorForbidden,
     ConnectorNameConflict,
     ConnectorNotEditable,
     ConnectorNotFound,
+    ConnectorNotShared,
     ConnectorToolsUnavailable,
     ConnectorUnavailable,
     InteractionNotResumable,
@@ -37,6 +39,7 @@ from xagent_sdk.errors import (
     XAgentTransportError,
 )
 from xagent_sdk.types import (
+    AgentConnectors,
     AgentCreateResult,
     AgentSkillsUpdate,
     AgentSummary,
@@ -73,16 +76,19 @@ from xagent_sdk.user_client import UserClient
 __all__ = [
     "APIKeyNotFound",
     "AgentClient",
+    "AgentConnectors",
     "AgentCreateResult",
     "AgentNotFound",
     "AgentSkillsUpdate",
     "AgentSummary",
+    "AgentToolsUnconfigured",
     "AppendResult",
     "CancelResult",
     "ConnectorForbidden",
     "ConnectorNameConflict",
     "ConnectorNotEditable",
     "ConnectorNotFound",
+    "ConnectorNotShared",
     "ConnectorToolsUnavailable",
     "ConnectorUnavailable",
     "CreateTaskResult",

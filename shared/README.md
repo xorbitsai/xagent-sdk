@@ -33,6 +33,7 @@ row below.
 | `runtime_key_revoke.json` | `DELETE /v1/agents/{id}/api-keys/{key_id}` (200) | `{id, key_prefix, revoked, revoked_at}`; `revoked` is `false` when the key had already been revoked |
 | `agent_skills.json` | `GET /v1/agents/{id}/skills` (200) | `{agent_id, skills}`: the agent's skill names, in order |
 | `agent_skills_update.json` | `PUT /v1/agents/{id}/skills` (200) | The same plus `unresolved_for_caller`: names this request added that the key holder cannot see |
+| `agent_connectors.json` | `GET /v1/agents/{id}/connectors` (200), and the same shape for `PUT` | `{agent_id, connectors, all_connectors, unresolved}`: the stored names in order, whether every MCP connector is also selected, and the stored names the key holder cannot see. Captured from a local backend (xorbitsai/xagent main at the commit that merged #3778) with throwaway connectors `crm` and `ops`, after `ops` was deleted, so `unresolved` is not empty |
 | `skills_list.json` | `GET /v1/skills` (200) | Bare JSON array, no id rename; one entry for each `source` value (`personal`, `builtin`, `team`, `external`), personal skills first |
 | `skill_detail.json` | `GET /v1/skills/{name}` (200) | Single object: the summary fields plus the complete `skill_md` text and the sorted `files` list |
 | `skill_write.json` | `POST /v1/skills`, `POST /v1/skills/upload` or `PUT /v1/skills/{name}` (200) | Skill summary (`name / description / when_to_use / tags / source`) with `source=personal`; a repeat of the same create or upload also answers 200 |
@@ -120,6 +121,8 @@ Stable backend codes using the V1 envelope shape:
 | `connector_name_conflict.json` | 409 | V1 envelope with `details.connector_id` (raised by `UserClient.mcp_servers.create()` and `update()`; `connector_id` is present only when the name is taken by one of the key holder's own connectors) |
 | `connector_forbidden.json` | 403 | V1 envelope with `details.reason` (`team_shared` here; raised by `UserClient.mcp_servers.update()`, `delete()` and `set_enabled()`) |
 | `connector_not_editable.json` | 409 | V1 envelope with `details.reason` (`catalog` here; raised by `UserClient.mcp_servers.update()` and `delete()`) |
+| `connector_not_shared.json` | 400 | V1 envelope with `details.connectors`, a list of `{name, reason}` (raised by `UserClient.agents.replace_connectors()` for a team agent). Built by hand, not captured: it is the `each_connector_gets_a_reason` case of the server's `tests/web/api/v1/test_agent_connectors.py` (names `x` and `y`, message from its `_refusal(...)` helper), because a local backend has no team validator to produce it |
+| `agent_tools_unconfigured.json` | 409 | V1 envelope (raised by `UserClient.agents.replace_connectors()` for an agent that uses the default tool set). Built by hand, not captured: the message is the server's default for this code in `src/xagent/web/api/v1/errors.py` |
 
 ## Usage from a language client
 

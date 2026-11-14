@@ -207,6 +207,30 @@ class AgentSkillsUpdate:
 
 
 @dataclass(frozen=True)
+class AgentConnectors:
+    """``GET`` and ``PUT /v1/agents/{agent_id}/connectors`` payload.
+
+    ``connectors`` holds the connector names stored on the agent, in the
+    agent's order. A name can be a connector or a Custom API. ``all_connectors``
+    is ``True`` when the agent also selects every MCP connector (a Custom API
+    is still selected only by name). ``unresolved`` lists the names in
+    ``connectors`` that the key holder cannot see through this API; they stay
+    on the agent.
+
+    ``connectors=[]`` with ``all_connectors=True`` is also what the server
+    reports for an agent that uses the default tool set, because it has no
+    selection of its own, so the two cannot be told apart from this object.
+    Writing to an agent on the default tool set raises
+    ``AgentToolsUnconfigured``, whatever selection is sent.
+    """
+
+    agent_id: int
+    connectors: list[str]
+    all_connectors: bool
+    unresolved: list[str]
+
+
+@dataclass(frozen=True)
 class SkillSummary:
     """``GET /v1/skills`` list entry and the body of every skill write.
 
@@ -992,6 +1016,7 @@ _SKILL_DETAIL_ADAPTER = TypeAdapter(SkillDetail)
 _SKILL_DELETED_ADAPTER = TypeAdapter(_SkillDeleted)
 _AGENT_SKILLS_ADAPTER = TypeAdapter(_AgentSkills)
 _AGENT_SKILLS_UPDATE_ADAPTER = TypeAdapter(AgentSkillsUpdate)
+_AGENT_CONNECTORS_ADAPTER = TypeAdapter(AgentConnectors)
 _MCP_SERVER_ADAPTER = TypeAdapter(McpServer)
 _MCP_SERVER_LIST_ADAPTER = TypeAdapter(list[McpServer])
 _MCP_SERVER_TOOLS_ADAPTER = TypeAdapter(McpServerTools)
@@ -1035,6 +1060,13 @@ def _validate_write(adapter: TypeAdapter[T], data: Any, what: str) -> T:
     repeat gets ``ConnectorNameConflict``).
     ``agents.replace_skills()`` is not: resending can lose the unresolved
     names the first call reported, so call ``agents.get_skills()`` first.
+    ``agents.replace_connectors()`` can be resent: resending declares the
+    same selection again, which writes nothing if nobody changed it in the
+    meantime, overwrites a change someone else made in the meantime, and for
+    an agent that uses the default tool set is refused again with
+    ``AgentToolsUnconfigured``. Unlike ``replace_skills()``, its
+    ``unresolved`` is worked out from what is stored each time, so the resent
+    call reports the same names as the first.
     """
     try:
         return adapter.validate_python(_require_mapping(data, what))
@@ -1301,6 +1333,24 @@ def _parse_agent_skills(data: Any) -> list[str]:
 
 def _parse_agent_skills_update(data: Any) -> AgentSkillsUpdate:
     return _validate_write(_AGENT_SKILLS_UPDATE_ADAPTER, data, "agent skill update")
+
+
+def _parse_agent_connectors_read(data: Any) -> AgentConnectors:
+    """Parse ``GET /v1/agents/{agent_id}/connectors`` strictly.
+
+    The result is usually edited and written back, so a body of the wrong
+    shape must raise rather than read as an empty selection, which would clear
+    the agent's connectors on the way back.
+    """
+    return _validate_read(
+        _AGENT_CONNECTORS_ADAPTER,
+        _require_mapping(data, "agent connectors"),
+        "agent connectors",
+    )
+
+
+def _parse_agent_connectors_write(data: Any) -> AgentConnectors:
+    return _validate_write(_AGENT_CONNECTORS_ADAPTER, data, "agent connectors update")
 
 
 def _parse_mcp_server_list(data: Any) -> list[McpServer]:
