@@ -413,10 +413,13 @@ class TasksAPI:
         ``cancelled=True`` once the task is cancelled, also when an earlier
         call already cancelled it; ``cancelled=False`` when the cancel is
         recorded but not applied yet. Call ``cancel()`` again in that case:
-        it reaches the same cancel and returns ``cancelled=True`` once it is
-        applied. ``wait()`` can return first: a paused task whose automatic
-        resume gives up meanwhile reads ``FAILED`` with no ``error_code``
-        although the recorded cancel still applies to it.
+        it reaches the same cancel, as long as no turn is appended to the
+        task in between, and returns ``cancelled=True`` once it is applied.
+        A request names only the task: a turn appended after the first
+        cancel was applied is the one a further call cancels. ``wait()``
+        can return first: a paused task whose automatic resume gives up
+        meanwhile reads ``FAILED`` with no ``error_code`` although the
+        recorded cancel still applies to it.
 
         A cancelled task reads ``TaskStatus.FAILED`` with
         ``error_code == "task_cancelled"``, so ``wait()`` returns for it,

@@ -426,9 +426,10 @@ class CancelResult:
     had. It is ``False`` when the cancel was recorded but not applied within
     the server's wait (HTTP 202): ``status`` is still the task's current one,
     ``cancelled_run_id`` and ``error_code`` are ``None``, and calling
-    ``cancel()`` again reaches the same cancel. A paused task whose
-    automatic resume gave up meanwhile reads ``FAILED`` here, and the cancel
-    still applies to it.
+    ``cancel()`` again reaches the same cancel, as long as no turn is
+    appended to the task in between. A paused task whose automatic resume
+    gave up meanwhile reads ``FAILED`` here, and the cancel still applies
+    to it.
 
     The other fields describe the task as ``get()`` reads it now. Once
     cancelled it reads ``TaskStatus.FAILED`` with
