@@ -13,17 +13,32 @@ class XAgentError(Exception):
         message: human-readable description; may change between server versions.
         http_status: HTTP status code if the error came from an HTTP response;
             None for transport-level failures and client-side timeouts.
+        details: the ``details`` object of the server's error response, as
+            sent, when the server attached one; otherwise None. Its keys
+            depend on the error code and may grow between server versions.
+            It can be ``{}``, which is not the same as None. Errors the SDK
+            raises itself, and responses without the V1 error envelope, have
+            None.
     """
 
     code: str
     message: str
     http_status: int | None
+    details: dict[str, Any] | None
 
-    def __init__(self, code: str, message: str, http_status: int | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        http_status: int | None = None,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(f"[{code}] {message}")
         self.code = code
         self.message = message
         self.http_status = http_status
+        self.details = details
 
 
 # Server-mapped errors (V1 envelope stable codes).
@@ -46,6 +61,10 @@ class TaskBusy(XAgentError):
     still queued, and cannot accept a new turn or a reply yet, or when a
     concurrent ``reply()`` already claimed it. ``TemporarilyUnavailable``
     is the other retryable code in this hierarchy.
+
+    When ``reply()`` raises it because the server did not take the answer,
+    ``details["accepted"]`` is ``False``: nothing was written and the reply
+    can be sent again. ``details`` is None when the task is simply busy.
     """
 
 
@@ -147,6 +166,9 @@ class TemporarilyUnavailable(XAgentError):
     state is usable. The task is left exactly as it was (still
     ``WAITING_FOR_USER``, same ``run_id``, no partial write). Safe to
     retry after a short backoff.
+
+    When the server could not take the answer at all, ``details["accepted"]``
+    is ``False``: nothing was written and the reply can be sent again.
     """
 
 
@@ -487,7 +509,9 @@ def from_response(resp: httpx.Response) -> XAgentError:
     Caller must have already confirmed ``resp.status_code >= 400``.
 
     Recognizes:
-      - V1 envelope: ``{"error": {"code": ..., "message": ...}}``
+      - V1 envelope: ``{"error": {"code": ..., "message": ...}}``, with an
+        optional ``details`` object that is kept on the exception (a
+        ``details`` value that is not an object is dropped)
       - Legacy FastAPI validation fallback: HTTP 422 with ``{"detail": [...]}``
         -> InvalidInput
       - Anything else (non-JSON body, missing ``error`` key, unknown ``code``)
@@ -512,8 +536,14 @@ def from_response(resp: httpx.Response) -> XAgentError:
     if not isinstance(code, str) or not isinstance(message, str):
         return InternalError("internal_error", _fallback_message(body), status)
 
+    details = error_obj.get("details")
     cls = _CODE_MAP.get(code, InternalError)
-    return cls(code, message, status)
+    return cls(
+        code,
+        message,
+        status,
+        details=details if isinstance(details, dict) else None,
+    )
 
 
 def _fallback_message(value: Any) -> str:

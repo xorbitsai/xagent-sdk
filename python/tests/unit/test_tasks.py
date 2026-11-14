@@ -16,6 +16,7 @@ from xagent_sdk import (
     CreateTaskResult,
     InteractionNotResumable,
     InteractionResponseRequired,
+    InternalError,
     InvalidInput,
     MalformedResponse,
     NoPendingInteraction,
@@ -27,6 +28,7 @@ from xagent_sdk import (
     TaskStatus,
     TaskTimeout,
     TemporarilyUnavailable,
+    XAgentError,
 )
 
 from ._fixtures import response
@@ -473,6 +475,51 @@ class TestErrorMappingPerEndpoint:
         # Each XAgentError subclass carries the server code; mypy can't
         # know exc_cls is a subclass here, so cast via attribute access.
         assert excinfo.value.code == code  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize(
+        ("status", "code", "details", "exc_cls"),
+        [
+            (
+                409,
+                "task_busy",
+                {"accepted": False, "task_id": 10, "retry_with_new_id": True},
+                TaskBusy,
+            ),
+            (409, "task_busy", None, TaskBusy),
+            (
+                503,
+                "temporarily_unavailable",
+                {"accepted": False, "retry_with_new_id": True},
+                TemporarilyUnavailable,
+            ),
+            (
+                504,
+                "reply_outcome_unknown",
+                {"accepted": True, "task_id": 10, "command_id": "c-1"},
+                InternalError,
+            ),
+        ],
+        ids=["busy-not-accepted", "busy-plain", "unavailable", "outcome-unknown"],
+    )
+    def test_reply_errors_carry_the_server_details(
+        self,
+        make_client: Callable[..., AgentClient],
+        status: int,
+        code: str,
+        details: dict[str, object] | None,
+        exc_cls: type[XAgentError],
+    ) -> None:
+        error: dict[str, object] = {"code": code, "message": "m"}
+        if details is not None:
+            error["details"] = details
+
+        def h(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(status, json={"error": error})
+
+        with make_client(h) as c, pytest.raises(exc_cls) as excinfo:
+            c.tasks.reply(10, agent_id=1, message="x")
+        assert type(excinfo.value) is exc_cls
+        assert excinfo.value.details == details
 
     def test_steps_422(self, make_client: Callable[..., AgentClient]) -> None:
         def h(req: httpx.Request) -> httpx.Response:

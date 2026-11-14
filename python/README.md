@@ -327,7 +327,7 @@ is a partial mitigation, not a guarantee.
 ### 7. Error handling
 
 All SDK exceptions inherit from `XAgentError` and carry `code`,
-`message`, and `http_status`. Server-mapped codes:
+`message`, `http_status`, and `details`. Server-mapped codes:
 
 | Exception | HTTP | Server code |
 |---|---|---|
@@ -353,6 +353,29 @@ address a skill are rejected locally with `ValueError` before any
 request, so this 404 means the server has no such route -- typically a
 server older than this SDK. It is distinguishable from `SkillNotFound`
 by exception type.
+
+`details` is the `details` object of the server's error response, as
+sent, or `None` when there is none. Its keys depend on the code and may
+grow between server versions, and it can be `{}`, which is not the same
+as `None`. For example, when `reply()` fails because the server did not
+take the answer, `details["accepted"]` is `False`; when the server took
+it but could not tell the outcome (`InternalError`, code
+`reply_outcome_unknown`), it is `True`:
+
+```python
+from xagent_sdk import InternalError, TaskBusy
+
+try:
+    user.tasks.reply(task_id, agent_id=agent_id, message="Yes, go ahead")
+except TaskBusy as e:
+    if e.details and e.details.get("accepted") is False:
+        ...  # the server did not take this reply; it is safe to send it again
+    else:
+        ...  # the task is busy; try again later
+except InternalError as e:
+    if e.details and e.details.get("accepted") is True:
+        ...  # the reply was taken; read the task instead of sending it again
+```
 
 SDK-coined codes:
 
