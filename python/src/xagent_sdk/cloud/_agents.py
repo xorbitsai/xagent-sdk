@@ -231,9 +231,16 @@ class WorkspaceAgentsAPI:
         Only the named key stops working; the agent's other keys are left
         alone. A task the key already started keeps running, but any later
         request made with the key is refused with ``InvalidAPIKey`` and an
-        event stream opened with it is closed. Revocation cannot be undone.
-        Calling this again for the same key is safe: it returns
+        event stream opened with it is closed. No API call reverses a
+        revocation. Calling this again for the same key is safe: it returns
         ``revoked=False`` with the original ``revoked_at``.
+
+        One exception: while a key rotation is still settling, the keys it
+        replaced are already revoked, so revoking one of them here changes
+        nothing (``revoked=False``) and does not stop the server from
+        restoring that key if the rotation's new key cannot be delivered.
+        Once the rotation has settled, list the keys again and revoke the
+        key if it is active.
 
         Args:
             agent_id: An agent of this workspace.
