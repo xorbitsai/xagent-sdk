@@ -65,7 +65,7 @@ the rule and path it reports, and the description suffix fragments a client
 writes for constraint keywords. It is a byte-for-byte copy of
 `tests/fixtures/structured_output/structured_schema_corpus.json` in the
 server repository, SHA-256
-`5f8ef162f956483be8d2d5e32a40c9ae0765b61bdee3ea5dff1748201cbdbe9d`. The
+`a5ba545a1031f39ec50a1232350c7ee6c2be9ac383acd1e81b376ae4cf49139c`. The
 Python suite checks that digest; when the server's corpus changes, copy the
 new file and update the digest here and in that test.
 

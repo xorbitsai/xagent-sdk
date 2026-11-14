@@ -9,7 +9,7 @@ value: N5 and N6 on ``json_schema.name`` and ``json_schema.description``, the
 two character checks of S1 (no NaN or Infinity, no NUL or surrogate code point
 in any key or string), and S3 to S10, S12a and S13 on the schema. The size
 rules (the 16 KiB limit of S1, and S2, S11 and S12b) and the outer rules N1 to
-N4 and N7 are left to the server. A value these checks accept can still be
+N4, N7 and N9 are left to the server. A value these checks accept can still be
 refused by the server under one of those rules.
 
 Every judgement about a JSON value goes through :func:`json_kind` first: a
@@ -199,7 +199,7 @@ RULE_TEXTS: dict[str, str] = {
     "N2": 'type must be "text" or "json_schema".',
     "N3": (
         "A response_format may only have the key type, "
-        'plus json_schema when type is "json_schema".'
+        'plus json_schema and accept_partial when type is "json_schema".'
     ),
     "N4": (
         "json_schema must be an object with a schema key and no keys other "
@@ -215,6 +215,7 @@ RULE_TEXTS: dict[str, str] = {
         "non-strict structured output is not supported."
     ),
     "N8": "Structured output is not supported for workforce keys.",
+    "N9": "accept_partial, when present, must be true or false.",
     "S1": (
         "The schema must be JSON of at most 16384 bytes, with no NaN or "
         "Infinity, no NUL or surrogate characters, and no excessively "
