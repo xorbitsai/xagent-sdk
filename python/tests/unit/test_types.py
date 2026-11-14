@@ -132,6 +132,16 @@ class TestParseTaskInfo:
         assert t.status is TaskStatus.WAITING_FOR_USER
         assert t.completed_at is None
 
+    def test_cancelled_task_is_failed_with_an_error_code(self) -> None:
+        t = _parse_task_info(response("task_info_cancelled"))
+        assert t.status is TaskStatus.FAILED
+        assert t.error_code == "task_cancelled"
+
+    def test_error_code_defaults_to_none_for_an_older_server(self) -> None:
+        # A server that predates the field omits the key entirely.
+        t = _parse_task_info(response("task_info_completed"))
+        assert t.error_code is None
+
     def test_unknown_status_rejected(self) -> None:
         with pytest.raises(ValidationError):
             _parse_task_info(

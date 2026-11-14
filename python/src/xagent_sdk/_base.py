@@ -61,6 +61,8 @@ def _json_body(resp: httpx.Response, what: str, expected_status: int = 200) -> A
     Every JSON endpoint decodes its success body here. Each endpoint answers
     success with exactly one status: 200, or 202 for the task writes that
     accept a turn (create, append, reply), passed as ``expected_status``.
+    Task cancel is the exception with two (200 applied, 202 accepted); its
+    caller passes the one it received.
     This client does not follow redirects, and ``_request`` lets every
     status below 400 through, so a 3xx, a 204 or another unexpected success
     status reaches here; like the task event stream (``_events.py``), it is

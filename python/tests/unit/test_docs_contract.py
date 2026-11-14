@@ -265,7 +265,7 @@ canonical unit-test path."""
 _TASKS_API_DOC = """\
 The ``client.tasks`` namespace, on both ``AgentClient`` and ``UserClient``.
 
-Six of these methods map one-to-one onto a v1 endpoint. Five of them
+Seven of these methods map one-to-one onto a v1 endpoint. Six of them
 build a request body, hand it to the owning client's ``_request`` for
 transport + error mapping, then parse the success body into a frozen
 dataclass. With a ``response_format``, ``create()`` and ``append()`` also
@@ -311,7 +311,8 @@ See the `UserClient` docstring for which agents and tasks a personal key
 can reach."""
 
 _README_USER_TASKS_ROW = (
-    "| `user.tasks.create / append / reply / get / steps / events / wait / run` "
+    "| `user.tasks.create / append / reply / cancel / get / steps / events "
+    "/ wait / run` "
     "| as in the `AgentClient` table "
     "| Any agent you can see (`user.agents.list()`); the task runs as you, not "
     "as the agent's owner. Every personal key of yours sees the tasks any of "

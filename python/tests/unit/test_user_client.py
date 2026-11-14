@@ -160,6 +160,7 @@ _TASK_CALLS: dict[str, tuple[Callable[[Any], object], int, str]] = {
         202,
         "reply_task",
     ),
+    "cancel": (lambda c: c.tasks.cancel(10), 200, "cancel_task"),
     "get": (lambda c: c.tasks.get(10), 200, "task_info_completed"),
     "steps": (lambda c: c.tasks.steps(10), 200, "steps_full"),
 }
@@ -172,7 +173,7 @@ def test_task_call_table_covers_every_plain_tasks_method() -> None:
         if not n.startswith("_") and callable(getattr(TasksAPI, n))
     }
     assert public - {"events", "wait", "run"} == set(_TASK_CALLS)
-    assert len(_TASK_CALLS) == 5
+    assert len(_TASK_CALLS) == 6
 
 
 @pytest.mark.parametrize("method", list(_TASK_CALLS))

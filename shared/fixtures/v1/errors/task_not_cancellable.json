@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "task_not_cancellable",
+    "message": "This task has already ended and cannot be cancelled."
+  }
+}

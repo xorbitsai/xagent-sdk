@@ -15,12 +15,14 @@ from xagent_sdk.errors import (
 )
 from xagent_sdk.types import (
     AppendResult,
+    CancelResult,
     CreateTaskResult,
     RunResult,
     Step,
     TaskInfo,
     TaskStatus,
     _parse_append,
+    _parse_cancel,
     _parse_create_task,
     _parse_features,
     _parse_steps,
@@ -53,7 +55,7 @@ _STRUCTURED_OUTPUT_FEATURE = "structured_output"
 class TasksAPI:
     """The ``client.tasks`` namespace, on both ``AgentClient`` and ``UserClient``.
 
-    Six of these methods map one-to-one onto a v1 endpoint. Five of them
+    Seven of these methods map one-to-one onto a v1 endpoint. Six of them
     build a request body, hand it to the owning client's ``_request`` for
     transport + error mapping, then parse the success body into a frozen
     dataclass. With a ``response_format``, ``create()`` and ``append()`` also
@@ -400,6 +402,62 @@ class TasksAPI:
             "POST", f"/v1/chat/tasks/{task_id}/reply", json=body
         )
         return _parse_append(_json_body(resp, "task reply", 202))
+
+    def cancel(self, task_id: int) -> CancelResult:
+        """``POST /v1/chat/tasks/{task_id}/cancel`` -- stop a task that has
+        not ended yet.
+
+        Works on a task that is running, still queued to start, waiting
+        for an answer, or paused. The server waits a short, bounded time
+        for the cancel to be applied and the result says which happened:
+        ``cancelled=True`` once the task is cancelled, ``cancelled=False``
+        when the cancel is recorded but not applied yet -- call again
+        (it reaches the same request) or ``wait()`` for the task.
+
+        A cancelled task reads ``TaskStatus.FAILED`` with
+        ``error_code == "task_cancelled"``, so ``wait()`` returns for it,
+        and it accepts ``append()`` like any failed task. Calling
+        ``cancel()`` again on it returns ``cancelled=True``.
+
+        A workforce run is one task: cancelling it stops its members.
+
+        Limits to know about:
+
+        - Work already handed to a code-execution process, and a call to a
+          remote A2A agent, is not interrupted; the task is cancelled but
+          that work runs to its own end.
+        - A task cancelled while still queued for its first run never gets
+          a ``run_id``, so a concurrent ``run()`` or
+          ``wait(expected_run_id=...)`` for it raises ``RunMismatch``.
+        - A turn you appended and cancelled while it was still queued is
+          withdrawn without changing the task: the task keeps showing the
+          turn before it, and only ``cancelled_run_id`` names the withdrawn
+          run. A caller waiting for the appended turn must compare
+          ``run_id`` with the one ``append()`` returned.
+        - On ``/steps`` the last assistant message of a cancelled task is
+          the generic failure text.
+
+        Unlike ``cancel-question`` on the server (not wrapped by this SDK),
+        cancelling a ``WAITING_FOR_USER`` task ends it as cancelled rather
+        than completed.
+
+        Raises:
+            TaskNotFound: (404) the task does not exist or is not this
+                key's.
+            TaskNotCancellable: (409) the task already ended without being
+                cancelled. Do not retry.
+            TaskBusy: (409) the task changed state while the cancel was
+                applied, or an answer is being applied to it. Retry.
+            InternalError: (503) the server could not apply the cancel;
+                retry. Also what an older server answers, as an
+                unrecognized 404/405.
+            MalformedResponse: the success body did not match.
+        """
+        resp = self._client._request("POST", f"/v1/chat/tasks/{task_id}/cancel")
+        # The one task write with two success statuses: applied, or accepted.
+        applied = resp.status_code != 202
+        body = _json_body(resp, "task cancel", 200 if applied else 202)
+        return _parse_cancel(body, cancelled=applied)
 
     def get(self, task_id: int) -> TaskInfo:
         """``GET /v1/chat/tasks/{task_id}`` -- snapshot the current task

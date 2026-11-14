@@ -347,6 +347,7 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `ConnectorForbidden` | 403 | `connector_forbidden` -- raised by `mcp_servers.update()`, `delete()` and `set_enabled()`, and by `create()` when the server refuses you a new connector; `details["reason"]` is `team_shared` (you see the connector only through your team, so it is read-only) or `not_permitted` (for example deleting a team-owned connector without being a team administrator) |
 | `ConnectorToolsUnavailable` | 502 | `connector_tools_unavailable` -- raised by `mcp_servers.list_tools()` when no tools were loaded; `details["reason"]` and `details["failures"]` (a list of `{"phase", "attempts"}`) say what failed |
 | `TaskBusy` | 409 | `task_busy` |
+| `TaskNotCancellable` | 409 | `task_not_cancellable` -- raised by `cancel()` when the task already ended without being cancelled; do not retry |
 | `SkillAlreadyExists` | 409 | `skill_already_exists` -- raised by `skills.create()` / `skills.upload()` |
 | `InteractionResponseRequired` | 409 | `interaction_response_required` -- raised by `append()` on a `WAITING_FOR_USER` task; use `reply()` instead |
 | `NoPendingInteraction` | 409 | `no_pending_interaction` -- raised by `reply()` when the task is not `WAITING_FOR_USER` |
@@ -935,7 +936,7 @@ can reach.
 | `user.agents.list_keys(agent_id, *, include_revoked=False)` | `list[RuntimeKeyInfo]` | GET `/v1/agents/{agent_id}/api-keys`; newest first, never includes a secret; revoked keys only with `include_revoked=True`, paused keys always; 404 → `AgentNotFound`; a body that is not the expected array → `MalformedResponse`, never an empty list; a server without this route answers 404 → `InternalError` |
 | `user.agents.revoke_key(agent_id, key_id)` | `RevokeKeyResult` | DELETE `/v1/agents/{agent_id}/api-keys/{key_id}`; revokes that one key and leaves the agent's other keys working; no call reverses it; calling again is safe and returns `revoked=False`; a key that a still-settling rotation had already revoked is such a no-op and can be restored if that rotation's new key cannot be delivered, so list the keys again once the rotation settles and revoke the key if it is active; unknown agent → `AgentNotFound`, a key id the agent does not have → `APIKeyNotFound`; a server without this route answers 404 or 405 → `InternalError` |
 | `user.agents.replace_skills(agent_id, skills)` | `AgentSkillsUpdate` | PUT `/v1/agents/{agent_id}/skills`; 404 → `AgentNotFound`; replaces the whole list, `[]` clears it, and the later of two writers wins; a single string raises `TypeError` before any request; a new name that is neither visible nor valid → `InvalidInput` (400); `unresolved_for_caller` lists added names you cannot see, stored anyway |
-| `user.tasks.create / append / reply / get / steps / events / wait / run` | as in the `AgentClient` table | Any agent you can see (`user.agents.list()`); the task runs as you, not as the agent's owner. Every personal key of yours sees the tasks any of them created, until the task's agent is deleted. An older server answers `InvalidAPIKey` (401) here. |
+| `user.tasks.create / append / reply / cancel / get / steps / events / wait / run` | as in the `AgentClient` table | Any agent you can see (`user.agents.list()`); the task runs as you, not as the agent's owner. Every personal key of yours sees the tasks any of them created, until the task's agent is deleted. An older server answers `InvalidAPIKey` (401) here. |
 | `user.skills.list()` | `list[SkillSummary]` | GET `/v1/skills`; your own skills first, in server order; a body that is not an array of skills raises `MalformedResponse` (never `[]`) |
 | `user.skills.get(name)` | `SkillDetail` | GET `/v1/skills/{name}`; includes `skill_md` and `files`; 404 → `SkillNotFound`; `""`, `"."`, `".."` or a name containing `/` raises `ValueError` before any request |
 | `user.skills.create(*, name, skill_md)` | `SkillSummary` | POST `/v1/skills`; the same name with the same content returns 200 again, so a retry is safe; any other clash → `SkillAlreadyExists`; bad name or content → `InvalidInput` |
@@ -962,6 +963,7 @@ only.
 | `agent.tasks.create(*, agent_id, message, metadata=None, dispatch_class=None, priority=None, prompt_context=None, response_format=None, accept_partial=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` when the server queues the task for its dispatcher or `'running'` when it runs the task in-process; `dispatch_class` (`'interactive'`/`'batch'`) and `priority` (-10..10) apply to the new task only, the server validates them (422 → `InvalidInput`) and an older server ignores them; the result's `dispatch_class` shows the class the server gave the start command (`None` if not dispatched through a queue or on an older server); `run_id` names the run it started; `response_format` (a `dict` or a Pydantic model) asks for a structured result, see [Example 12](#12-structured-output) (`UnsupportedSchema` / `UnsupportedFeature`); `accept_partial=True` also keeps the values extracted from an incomplete result (see [Partial results](#partial-results)) |
 | `agent.tasks.append(task_id, *, agent_id, message, metadata=None, prompt_context=None, response_format=None, accept_partial=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='pending'` (queued) or `'running'` (in-process); raises `TaskBusy` if the prior turn is still queued or running, `InteractionResponseRequired` if `WAITING_FOR_USER`; `run_id` names the new run; `response_format` replaces the task's format as a whole, including `accept_partial` (`{"type": "text"}` removes it, `None` keeps it) |
 | `agent.tasks.reply(task_id, *, agent_id, message)` | `AppendResult` | POST `/v1/chat/tasks/{id}/reply`; answers a `WAITING_FOR_USER` task's pending question and resumes its server-side run (the result's `run_id` is that run, not a new one); not idempotent |
+| `agent.tasks.cancel(task_id)` | `CancelResult` | POST `/v1/chat/tasks/{id}/cancel`; stops a task that is running, queued, waiting for an answer or paused; `cancelled=True` once it is cancelled (also when it already was), `False` when the cancel is recorded but not applied yet -- call again or `wait()`; raises `TaskNotCancellable` if the task already ended on its own, `TaskBusy` if it changed state meanwhile; `cancelled_run_id` names the run that was cancelled |
 | `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER`; `run_id`, the `structured_output*` fields and `completion_outcome`; `TaskInfo.parsed(model=None, *, expected_run_id=None)` reads the structured result |
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
 | `agent.tasks.events(task_id, *, timeout=None)` | `TaskEventStream` | GET `/v1/chat/tasks/{id}/events` (SSE); iterate decoded `StreamEvent` frames as the task runs; `closed_by` tells how the stream ended |
@@ -1058,6 +1060,33 @@ The minted runtime key is an ordinary agent key — drive it with
   See [Example 6](#6-answer-a-pending-question) above for the retry
   caveat (`reply()` is not idempotent).
 - `COMPLETED`, `FAILED` — terminal; `wait()` returns
+
+A cancelled task is `FAILED` with `error_code == "task_cancelled"`; every
+other failure has `error_code` `None`. There is no separate cancelled
+status, so code that waits for `COMPLETED`/`FAILED` keeps working:
+
+```python
+result = agent.tasks.cancel(task_id)
+if not result.cancelled:  # recorded, not applied within the server's wait
+    info = agent.tasks.wait(task_id)
+    cancelled = info.error_code == "task_cancelled"
+```
+
+`cancel()` stops the agent's own work, including a workforce's members.
+It does not interrupt code already handed to a code-execution process or
+a call to a remote A2A agent; those run to their own end. A cancelled task
+accepts `append()` like any failed task.
+
+Two cases to know when you cancel a turn that is still queued:
+
+- A task cancelled before its first run started has no `run_id`, so a
+  concurrent `run()` or `wait(expected_run_id=...)` for it raises
+  `RunMismatch`.
+- A turn you appended to a finished task and cancelled before it started
+  is withdrawn without changing the task: `get()` keeps showing the turn
+  before it, and only `CancelResult.cancelled_run_id` names the withdrawn
+  run. If something else waits for that appended turn, have it compare
+  `run_id` with the one `append()` returned.
 
 ## Configuration
 

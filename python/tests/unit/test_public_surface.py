@@ -37,6 +37,7 @@ EXPECTED_SURFACE: set[str] = {
     # Runtime dataclasses
     "CreateTaskResult",
     "AppendResult",
+    "CancelResult",
     "TaskInfo",
     "PendingInteraction",
     "Step",
@@ -58,6 +59,7 @@ EXPECTED_SURFACE: set[str] = {
     "APIKeyNotFound",
     "TaskNotFound",
     "TaskBusy",
+    "TaskNotCancellable",
     "InteractionResponseRequired",
     "NoPendingInteraction",
     "InteractionNotResumable",
