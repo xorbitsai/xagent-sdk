@@ -323,13 +323,18 @@ _SDK_ONLY_REASON_CODES = frozenset(
 
 @dataclass(frozen=True)
 class StructuredOutputReason:
-    """Why a task has no structured result: ``TaskInfo.structured_output_reason``.
+    """Why a task has no structured result, or only a partial one:
+    ``TaskInfo.structured_output_reason``.
 
     ``code`` is one of the server codes in ``StructuredOutputReasonCode`` (or a
     code a later server adds) and ``message`` the server's sentence for it.
     ``missing_fields`` lists, as JSON Pointers, up to 20 positions the answer
     did not state; ``unexpressible_fields`` up to 20 positions it stated in a
-    form the schema cannot hold. Both are empty when the server sent none.
+    form the schema cannot hold. Both are empty when the server sent none. They
+    come with ``information_missing`` and ``value_not_expressible``, and, when
+    the task's ``response_format`` sets ``accept_partial``, also with
+    ``agent_partial`` and ``agent_blocked`` on a task whose
+    ``structured_output`` holds values.
     """
 
     code: str
@@ -400,9 +405,22 @@ class TaskInfo:
     all three are ``None``. ``structured_output_status`` is ``"ready"``,
     ``"incomplete"`` or ``"failed"`` (see ``StructuredOutputStatus``; kept as a
     plain ``str``). When it is ``"ready"``, ``structured_output`` holds the
-    result and the reason is ``None``; otherwise ``structured_output`` is
-    ``None`` and ``structured_output_reason`` says why. ``parsed()`` reads
-    these fields for you.
+    result and the reason is ``None``. Otherwise ``structured_output_reason``
+    says why and ``structured_output`` is ``None``, except that when the task's
+    ``response_format`` sets ``accept_partial`` and the status is
+    ``"incomplete"``, it holds the values the server could extract, with
+    ``None`` where a value is missing or cannot be written; it is still
+    ``None`` when nothing could be kept, so check it before reading it.
+    ``parsed()`` reads these fields for you and raises for such a task, with
+    the values in ``StructuredOutputError.partial_output``.
+
+    ``completion_outcome`` is how the agent rated the run: ``"completed"``,
+    ``"partial"`` or ``"blocked"`` (kept as a plain ``str``). It is ``None``
+    when the task's response format does not set accept_partial (the server
+    then omits the key), or when the run is not completed or recorded no
+    rating. A missing key and a null both read as ``None``. Whether the
+    structured result is complete is told by ``structured_output_status``, not
+    by this field.
     """
 
     task_id: int
@@ -418,6 +436,7 @@ class TaskInfo:
     structured_output: dict[str, Any] | None = None
     structured_output_status: str | None = None
     structured_output_reason: StructuredOutputReason | None = None
+    completion_outcome: str | None = None
 
     @overload
     def parsed(
@@ -457,7 +476,9 @@ class TaskInfo:
             StructuredOutputError: the status is not ``"ready"`` (``code``,
                 ``message`` and the two field lists come from
                 ``structured_output_reason``, and ``status`` is the
-                status); or the snapshot has no structured
+                status; ``partial_output`` is a copy of
+                ``structured_output`` when the status is ``"incomplete"`` and
+                it holds values); or the snapshot has no structured
                 result at all, because the task is not ``COMPLETED``, has no
                 ``response_format`` or the server predates the fields
                 (``no_structured_output``, ``status`` ``None``); or
@@ -509,6 +530,12 @@ class TaskInfo:
             status=status,
             missing_fields=reason.missing_fields,
             unexpressible_fields=reason.unexpressible_fields,
+            partial_output=(
+                copy.deepcopy(self.structured_output)
+                if status == StructuredOutputStatus.INCOMPLETE
+                and type(self.structured_output) is dict
+                else None
+            ),
         )
 
 
@@ -623,9 +650,9 @@ class RunResult(Generic[_ParsedT]):
     ``run_id`` is the run ``run()`` started (``CreateTaskResult.run_id``);
     ``None`` when the server predates the field or the result was built
     without one. ``run()`` has already checked that ``info`` belongs to
-    that run. The ``structured_output*`` properties read the fields of the
-    same name on ``info``, and ``parsed()`` is ``info.parsed()`` checked
-    against ``run_id``.
+    that run. The ``structured_output*`` properties and ``completion_outcome``
+    read the fields of the same name on ``info``, and ``parsed()`` is
+    ``info.parsed()`` checked against ``run_id``.
 
     ``model`` is the Pydantic model class ``run()`` was given as
     ``response_format``, and ``None`` for a ``dict`` or no format.
@@ -692,6 +719,10 @@ class RunResult(Generic[_ParsedT]):
     @property
     def structured_output_reason(self) -> StructuredOutputReason | None:
         return self.info.structured_output_reason
+
+    @property
+    def completion_outcome(self) -> str | None:
+        return self.info.completion_outcome
 
     @overload
     def parsed(self, model: None = None) -> _ParsedT: ...

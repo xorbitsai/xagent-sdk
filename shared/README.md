@@ -45,10 +45,19 @@ row below.
 | `task_info_waiting.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with a structured `pending_interaction.interactions` list |
 | `task_info_structured_ready.json` | `GET /v1/chat/tasks/{id}` (200) | Completed task with a `response_format`: `run_id`, `structured_output_status=ready`, the result in `structured_output`, `structured_output_reason=null` |
 | `task_info_structured_incomplete.json` | `GET /v1/chat/tasks/{id}` (200) | Completed task whose structured result is `incomplete`: `structured_output=null`, and a `structured_output_reason` with `code`, `message`, `missing_fields` and `unexpressible_fields` |
+| `task_info_structured_partial.json` | `GET /v1/chat/tasks/{id}` (200) | Completed task whose `response_format` sets `accept_partial` and whose structured result is `incomplete` with `information_missing`: `structured_output` holds the extracted values with `null` at the gaps, and `completion_outcome="completed"` |
+| `task_info_structured_agent_partial.json` | `GET /v1/chat/tasks/{id}` (200) | The same switch, with the agent's own rating `partial`: `code=agent_partial`, `structured_output` holds values, and `structured_output_reason` also carries `missing_fields` and `unexpressible_fields`; `completion_outcome="partial"` |
+| `task_info_structured_agent_blocked.json` | `GET /v1/chat/tasks/{id}` (200) | The same switch, with the agent's own rating `blocked`: `code=agent_blocked`, `structured_output` holds values, `structured_output_reason` carries `missing_fields`; `completion_outcome="blocked"` |
 | `task_info_waiting_plain.json` | `GET /v1/chat/tasks/{id}` (200) | `status=waiting_for_user` with `pending_interaction.interactions=null` (question asked with no structured controls) |
 | `reply_task.json` | `POST /v1/chat/tasks/{id}/reply` (202) | Same shape as `append_task.json`: `status=running`, `accepted_at` |
 | `steps_full.json` | `GET /v1/chat/tasks/{id}/steps` (200) | Wrapper with all four `Step` types present (`message`, `thinking`, `tool_call`, `agent_delegation`) |
 | `task_events_stream.json` | `GET /v1/chat/tasks/{id}/events` (200, `text/event-stream`) | Not a single response body -- `frames` is the ordered sequence of one connection: status, a `tool_call` step's start/complete pair, a `message.delta` sequence, `message.completed`, then the `task.completed` closing frame. `closing_frame_variants` is a separate, unordered list -- one connection cannot end three different ways, so `task.input_required` and `stream.error` live outside `frames` rather than pretending to follow it. Each client's test loader turns these into its own SSE wire bytes rather than storing the raw text directly, so the fixture stays language-agnostic; the server actually emits `event: <name>\ndata: <json>\n\n` (LF-terminated), and `\r\n` is equally legal SSE -- the Python suite exercises both wire forms against the same fixture data. |
+
+The `completion_outcome` key is in a task response only when the task's
+`response_format` sets `accept_partial`, so only the three `accept_partial`
+fixtures above carry it; every other `task_info_*.json` and
+`task_events_stream.json` stands for a task without the switch and has no such
+key.
 
 ### `fixtures/v1/structured_output_reason_codes.json`
 

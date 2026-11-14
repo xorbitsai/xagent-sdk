@@ -468,7 +468,10 @@ class TasksAPI:
             structured fields carry the same values as the fields of the
             same name on ``get()`` (the reason as the raw object, not a
             ``StructuredOutputReason``), and a server that predates them
-            leaves them out -- plus
+            leaves them out -- plus ``"completion_outcome": str | None``
+            only when the task's ``response_format`` sets
+            ``accept_partial`` (absent otherwise; see
+            ``TaskInfo.completion_outcome``), plus
             ``"snapshot_truncated": True`` and ``"snapshot_total_steps":
             int`` together, only on the two attach-time fast-path exits
             where the step snapshot handed to this connection was cut
