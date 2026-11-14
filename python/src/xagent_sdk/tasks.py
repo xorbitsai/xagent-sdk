@@ -458,9 +458,8 @@ class TasksAPI:
                 applied, or a queued turn has no run of its own yet -- or
                 it changed state while the cancel was applied. Retry.
             InternalError: (503) the server could not apply the cancel;
-                retry. A server without this endpoint answers 404 or 405
-                with no v1 error code, which also maps here; retrying does
-                not help then.
+                retry. A server without this endpoint answers 404, which
+                also surfaces as this error; retrying does not help then.
             MalformedResponse: the success body did not match.
         """
         resp = self._client._request("POST", f"/v1/chat/tasks/{task_id}/cancel")
