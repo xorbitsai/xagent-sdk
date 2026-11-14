@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from xagent_sdk._base import _json_body
 from xagent_sdk._events import TaskEventStream, open_task_event_stream
-from xagent_sdk._structured import ModelT, expected_echo, prepare_response_format
+from xagent_sdk._structured import ModelT, expected_echo, prepare_task_format
 from xagent_sdk.errors import (
     TaskTimeout,
     UnsupportedFeature,
@@ -126,6 +126,7 @@ class TasksAPI:
         priority: int | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
         response_format: dict[str, Any] | type[BaseModel] | None = None,
+        accept_partial: bool | None = None,
     ) -> CreateTaskResult:
         """``POST /v1/chat/tasks`` -- start a new task with the first user
         message. The server returns 202 with ``status='pending'`` when
@@ -205,10 +206,30 @@ class TasksAPI:
              does not, the task was created but the format may not be in
              force, and ``UnsupportedFeature`` is raised with that
              ``task_id``.
+
+        ``accept_partial`` is ``None`` (the default) to leave the request as
+        it is, or a ``bool`` that sets ``accept_partial`` in the
+        ``response_format`` sent: ``True`` writes ``"accept_partial": true``,
+        ``False`` writes nothing (the server treats an absent key as false). It
+        needs a ``response_format`` of type ``json_schema``, a dict or a
+        Pydantic model class. A ``bool`` with no ``response_format``, or with
+        ``{"type": "text"}``, raises ``ValueError``; so does a ``bool`` that
+        contradicts an ``accept_partial`` key already in the dict, and a value
+        that is neither ``None`` nor a ``bool`` raises ``TypeError``, all
+        before any request. With the switch set, a result the server could
+        only partly extract is kept in ``TaskInfo.structured_output`` (``None``
+        where a value is missing or cannot be written) when
+        ``structured_output_status`` is ``'incomplete'``; it is still ``None``
+        when nothing could be kept. This also holds when the agent rated its
+        own run partial or blocked (``structured_output_reason.code`` is then
+        ``agent_partial`` or ``agent_blocked``). ``TaskInfo.parsed()`` still raises
+        ``StructuredOutputError`` for such a task; its ``partial_output`` holds
+        the values. The server runs one more extraction for every run the agent
+        rated partial or blocked. A server that predates the switch refuses it
+        with ``InvalidInput``.
         """
-        sent_format: Any = None
+        sent_format = prepare_task_format(response_format, accept_partial)
         if response_format is not None:
-            sent_format = prepare_response_format(response_format)
             self._require_structured_output()
         body: dict[str, Any] = {
             "agent_id": agent_id,
@@ -240,6 +261,7 @@ class TasksAPI:
         metadata: dict[str, Any] | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
         response_format: dict[str, Any] | type[BaseModel] | None = None,
+        accept_partial: bool | None = None,
     ) -> AppendResult:
         """``POST /v1/chat/tasks/{task_id}/messages`` -- append the next
         user turn to an existing task. Server returns 202 with
@@ -259,12 +281,14 @@ class TasksAPI:
         class, checked and sent as described on ``create()``.
         ``None`` (the default) sends nothing and the task keeps its format; a
         ``json_schema`` value replaces it for this and later turns;
-        ``{"type": "text"}`` removes it. An ``UnsupportedFeature`` raised
-        after the server accepted the turn carries this ``task_id``.
+        ``{"type": "text"}`` removes it. A new json_schema object replaces the
+        stored one as a whole, including accept_partial: send accept_partial
+        again to keep it. ``accept_partial`` follows the rules described on
+        ``create()``. An ``UnsupportedFeature`` raised after the server
+        accepted the turn carries this ``task_id``.
         """
-        sent_format: Any = None
+        sent_format = prepare_task_format(response_format, accept_partial)
         if response_format is not None:
-            sent_format = prepare_response_format(response_format)
             self._require_structured_output()
         body: dict[str, Any] = {
             "agent_id": agent_id,
@@ -742,6 +766,7 @@ class TasksAPI:
         priority: int | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
         response_format: type[ModelT],
+        accept_partial: bool | None = None,
     ) -> RunResult[ModelT]: ...
 
     @overload
@@ -757,6 +782,7 @@ class TasksAPI:
         priority: int | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
         response_format: dict[str, Any] | None = None,
+        accept_partial: bool | None = None,
     ) -> RunResult[dict[str, Any]]: ...
 
     def run(
@@ -771,6 +797,7 @@ class TasksAPI:
         priority: int | None = None,
         prompt_context: Mapping[str, str | int | float | bool] | None = None,
         response_format: dict[str, Any] | type[BaseModel] | None = None,
+        accept_partial: bool | None = None,
     ) -> RunResult[Any]:
         """Single-turn convenience: ``create()`` + ``wait()`` + ``steps()``.
 
@@ -782,9 +809,9 @@ class TasksAPI:
             )
             steps   = client.tasks.steps(created.task_id)
 
-        ``metadata``, ``dispatch_class``, ``priority``, ``prompt_context`` and
-        ``response_format`` are passed to ``create()`` unchanged; see its
-        docstring. With a ``response_format``, read the result with
+        ``metadata``, ``dispatch_class``, ``priority``, ``prompt_context``,
+        ``response_format`` and ``accept_partial`` are passed to ``create()``
+        unchanged; see its docstring. With a ``response_format``, read the result with
         ``RunResult.parsed()``. A Pydantic model class given as
         ``response_format`` is kept as ``RunResult.model``, so ``parsed()``
         without an argument returns an instance of it
@@ -830,6 +857,7 @@ class TasksAPI:
             priority=priority,
             prompt_context=prompt_context,
             response_format=response_format,
+            accept_partial=accept_partial,
         )
         remaining = max(0.0, timeout - (time.monotonic() - start))
         info = self.wait(
