@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "agent_tools_unconfigured",
+    "message": "This agent uses the default tool set; choose its tools in the web app first."
+  }
+}

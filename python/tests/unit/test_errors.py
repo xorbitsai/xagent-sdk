@@ -15,10 +15,12 @@ import pytest
 
 from xagent_sdk import (
     AgentNotFound,
+    AgentToolsUnconfigured,
     APIKeyNotFound,
     ConnectorForbidden,
     ConnectorNameConflict,
     ConnectorNotEditable,
+    ConnectorNotShared,
     ConnectorToolsUnavailable,
     ConnectorUnavailable,
     InteractionNotResumable,
@@ -244,6 +246,8 @@ class TestFromResponseStableCodes:
             (409, "connector_name_conflict", ConnectorNameConflict),
             (409, "connector_not_editable", ConnectorNotEditable),
             (403, "connector_forbidden", ConnectorForbidden),
+            (400, "connector_not_shared", ConnectorNotShared),
+            (409, "agent_tools_unconfigured", AgentToolsUnconfigured),
         ],
     )
     def test_envelope_maps_to_subclass(

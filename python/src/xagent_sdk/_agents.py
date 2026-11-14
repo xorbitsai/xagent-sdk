@@ -3,7 +3,8 @@
 Provides agent lifecycle management for the personal-key authenticated
 caller: list the user's agents, create new ones (structured or from a
 template), rotate the runtime API key on an existing agent, list or revoke
-an agent's runtime keys, and read or replace an agent's skill list.
+an agent's runtime keys, read or replace an agent's skill list, and read or
+replace an agent's connector selection.
 
 ``create()`` and ``create_from_template()`` default to
 ``generate_runtime_key=True`` to match the backend default; the returned
@@ -13,19 +14,23 @@ the immediate response. Pass ``generate_runtime_key=False`` when the
 caller plans to rotate later via ``rotate_key()``.
 """
 
-from collections.abc import Mapping
+import operator
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from xagent_sdk._base import _json_body
 from xagent_sdk.errors import MalformedResponse
 from xagent_sdk.types import (
+    AgentConnectors,
     AgentCreateResult,
     AgentSkillsUpdate,
     AgentSummary,
     RevokeKeyResult,
     RotateKeyResult,
     RuntimeKeyInfo,
+    _parse_agent_connectors_read,
+    _parse_agent_connectors_write,
     _parse_agent_create,
     _parse_agent_list,
     _parse_agent_skills,
@@ -65,6 +70,17 @@ def _require_runtime_key(
             http_status=None,
         )
     return result
+
+
+def _agent_path(agent_id: int) -> str:
+    """The URL path of one agent, for the connector methods.
+
+    ``agent_id`` must be an integer: ``quote()`` leaves ``"."`` and ``".."``
+    as they are and the HTTP client folds them away (``".."`` would reach
+    ``/v1/connectors``), so anything that is not an integer raises
+    ``TypeError`` before a request is sent.
+    """
+    return f"/v1/agents/{quote(str(operator.index(agent_id)), safe='')}"
 
 
 class AgentsAPI:
@@ -362,3 +378,168 @@ class AgentsAPI:
             json={"skills": list(skills)},
         )
         return _parse_agent_skills_update(_json_body(resp, "agent skill update"))
+
+    def get_connectors(self, agent_id: int) -> AgentConnectors:
+        """``GET /v1/agents/{agent_id}/connectors`` -- read an agent's connectors.
+
+        Returns the connector names stored on the agent, whether it also
+        selects every MCP connector, and which of the names you cannot see.
+        Parsing is strict because the result is usually edited and written
+        back with ``replace_connectors()``: a body that is not the expected
+        object, or that lacks any of its four fields, raises
+        ``MalformedResponse`` and is never read as an empty selection, which
+        would clear the agent's connectors on the way back.
+
+        An agent that uses the default tool set reads as ``connectors=[]``
+        with ``all_connectors=True``, the same as an agent that selects every
+        MCP connector without naming any, so this result cannot tell the two
+        apart. Writing to an agent on the default tool set raises
+        ``AgentToolsUnconfigured``; the other one can be written to.
+
+        Args:
+            agent_id: An agent the key holder can see. Must be an ``int``
+                (``True`` and ``False`` count as 1 and 0); anything else
+                raises ``TypeError`` before a request is sent. The server
+                answers a number outside the positive 32-bit range with
+                ``InvalidInput``.
+
+        Raises:
+            TypeError: ``agent_id`` is not an integer; raised before any
+                request is sent.
+            InvalidAPIKey: the key is missing, is not a personal key, or is
+                revoked (HTTP 401).
+            InvalidInput: ``agent_id`` is 0, negative or 2**31 or more
+                (HTTP 422).
+            AgentNotFound: the key holder cannot see this agent (HTTP 404).
+            InternalError: a server error (HTTP 500, for example when the
+                names the key holder can see could not be read); a response
+                without the V1 error envelope, carrying its own status (for
+                example a 503 while the server starts, a 502 page from a
+                reverse proxy, or a 404 from a server without this route,
+                which is not ``AgentNotFound``).
+            XAgentTransportError: the request did not complete.
+            MalformedResponse: the response status is not 200, the body is not
+                JSON, or it is not an agent connectors object.
+        """
+        resp = self._client._request("GET", f"{_agent_path(agent_id)}/connectors")
+        return _parse_agent_connectors_read(_json_body(resp, "agent connectors"))
+
+    def replace_connectors(
+        self,
+        agent_id: int,
+        connectors: Sequence[str],
+        *,
+        all_connectors: bool,
+    ) -> AgentConnectors:
+        """``PUT /v1/agents/{agent_id}/connectors`` -- replace an agent's connectors.
+
+        ``connectors`` becomes the agent's whole list of named connectors, and
+        ``[]`` clears it. Read the current selection with ``get_connectors()``
+        first and send it back with your change, passing the ``all_connectors``
+        you read unless you mean to change it: ``all_connectors`` has no
+        default because a wrong guess would silently change which connectors
+        the agent can use. There is no conflict detection: of two concurrent
+        replacements the later one wins.
+
+        The names are stored in the order given, so a change of order alone is
+        also a write. A repeated name is kept once, at its first position;
+        ``"crm"`` and ``"CRM"`` are different names and both are kept. A name
+        is a connector or a Custom API; ``mcp_servers.list()`` does not list
+        Custom APIs. ``all_connectors=True`` selects every MCP connector, but a
+        Custom API is selected only by being named in ``connectors``.
+
+        A name that is not on the agent yet must be one the key holder can
+        see; otherwise the call is refused with ``InvalidInput`` (HTTP 400, the
+        message lists at most five). Whether a name can be seen is decided
+        after stripping surrounding whitespace, lower-casing it and replacing
+        each space and each hyphen with an underscore; the name itself is
+        stored and read back as you gave it. A connector the holder has
+        switched off can be added to a personal agent, but a task loads it
+        only once it is switched on again. A connector that only the team
+        shares is accepted too, but a task of a personal agent does not load
+        it. Names already on the agent are kept as they are even if the holder
+        cannot see them (the result lists them in ``unresolved``); only the
+        names this call adds are checked for visibility.
+
+        A team agent is also checked by a validator the deployment installs.
+        It checks the whole new list, including ``all_connectors=True``
+        itself, so it can refuse names that were already on the agent, and
+        ``ConnectorNotShared.details["connectors"]`` can name connectors you
+        did not send.
+
+        Replacing the connectors moves the agent's connector entries to the
+        end of its tool list and removes categories from that list that an
+        agent may not have, so other parts of the tool list can change too.
+
+        New tasks use the new selection at once. How long an existing task
+        keeps using the previous one depends on the task's state. If the agent
+        is the manager or an enabled worker of a workforce and its tool list
+        now differs, other than in order, from the list it had when an ongoing
+        workforce conversation started, that conversation is rejected with
+        ``workforce_config_changed`` on its next turn; a preview conversation
+        in the workforce builder is not checked. The SDK has no exception
+        class for that code, so the next ``tasks.append()`` raises
+        ``InternalError`` carrying it.
+
+        A selection cannot be sent back unchanged when it has more than 100
+        names, or when a name is empty, blank or longer than 100 characters;
+        such an agent can only be given a selection that fits.
+
+        Calling this again after a ``MalformedResponse`` or a timeout is
+        allowed: the call declares the same selection once more. If nobody
+        changed the agent in the meantime nothing is written; if someone did,
+        their change is overwritten. For an agent that uses the default tool set
+        the call is refused again with ``AgentToolsUnconfigured``.
+
+        Args:
+            agent_id: An agent the key holder can see. Must be an ``int``
+                (``True`` and ``False`` count as 1 and 0); anything else
+                raises ``TypeError`` before a request is sent.
+            connectors: The connector names, in the order to store. A tuple
+                or any other sequence of ``str`` is sent as a list; a single
+                ``str`` raises ``TypeError``.
+            all_connectors: Whether the agent also selects every MCP
+                connector. Keyword-only and required.
+
+        Raises:
+            TypeError: ``agent_id`` is not an integer, or ``connectors`` is a
+                single string, which would otherwise be sent as one name per
+                character; raised before any request is sent.
+            InvalidAPIKey: the key is missing, is not a personal key, or is
+                revoked (HTTP 401).
+            InvalidInput: a name that is not on the agent yet cannot be seen
+                by the key holder (HTTP 400, the message lists at most five);
+                or the body is not acceptable (HTTP 422: more than 100 names,
+                a name that is empty, blank or longer than 100 characters, or
+                a body of the wrong shape); or ``agent_id`` is 0, negative or
+                2**31 or more (HTTP 422).
+            AgentNotFound: the key holder cannot see this agent, or it was
+                deleted while the call was being handled (HTTP 404).
+            ConnectorNotShared: the agent's team cannot use the selection
+                (HTTP 400); see its documentation for ``details``.
+            AgentToolsUnconfigured: the agent uses the default tool set and
+                has no selection of its own (HTTP 409). Choose its tools
+                in the web app first.
+            InternalError: a server error (HTTP 500, for example when the
+                names the key holder can see could not be read, or the team's
+                validator itself failed; nothing is written in either case);
+                a response without the V1 error envelope, carrying its own
+                status (for example a 503 while the server starts, a 502 page
+                from a reverse proxy, or a 404 from a server without this
+                route, which is not ``AgentNotFound``).
+            XAgentTransportError: the request did not complete.
+            MalformedResponse: the response status is not 200, the body is not
+                JSON, or it is not an agent connectors object. The replacement
+                may already have been applied.
+        """
+        if isinstance(connectors, str):
+            raise TypeError("connectors must be a list of names, not a single string")
+        path = f"{_agent_path(agent_id)}/connectors"
+        resp = self._client._request(
+            "PUT",
+            path,
+            json={"connectors": list(connectors), "all_connectors": all_connectors},
+        )
+        return _parse_agent_connectors_write(
+            _json_body(resp, "agent connectors update")
+        )

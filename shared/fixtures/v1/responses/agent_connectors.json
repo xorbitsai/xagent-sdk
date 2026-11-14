@@ -1,0 +1,6 @@
+{
+  "agent_id": 1,
+  "connectors": ["crm", "ops"],
+  "all_connectors": false,
+  "unresolved": ["ops"]
+}

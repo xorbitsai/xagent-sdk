@@ -220,6 +220,33 @@ class ConnectorForbidden(XAgentError):
     """
 
 
+class ConnectorNotShared(XAgentError):
+    """HTTP 400, code ``connector_not_shared``.
+
+    Raised by ``UserClient.agents.replace_connectors()`` when the agent
+    belongs to a team and the team cannot use the connectors the new
+    selection names. The team's deployment decides that. It checks the whole
+    new list, including ``all_connectors=True`` itself, so the refusal can
+    name connectors that were already on the agent and that you did not send.
+
+    ``details["connectors"]`` is a list of ``{"name": str, "reason": str}``
+    objects. ``reason`` is ``not_shared``, ``disabled`` or ``unresolved``
+    today; treat any other string as ``not_shared``. ``name`` can be an empty
+    string. Nothing was written.
+    """
+
+
+class AgentToolsUnconfigured(XAgentError):
+    """HTTP 409, code ``agent_tools_unconfigured``.
+
+    Raised by ``UserClient.agents.replace_connectors()`` when the agent uses
+    the default tool set and so has no selection of its own to replace.
+    Choose its tools in the web app first. Only ``replace_connectors()``
+    raises it; ``get_connectors()`` reads such an agent as
+    ``connectors=[]`` with ``all_connectors=True``.
+    """
+
+
 class ConnectorUnavailable(XAgentError):
     """HTTP 409, code ``connector_unavailable``.
 
@@ -385,6 +412,14 @@ class MalformedResponse(XAgentError):
     same three cases. ``get_skills()`` never folds a wrong-shaped body into an
     empty list. ``replace_skills()`` may already have taken effect when it
     raises this, so call ``get_skills()`` to check what the server stored.
+
+    ``UserClient.agents.get_connectors()`` and ``replace_connectors()`` raise
+    it in the same three cases. ``get_connectors()`` never folds a wrong-shaped
+    body into an empty selection. After ``replace_connectors()`` raises it the
+    replacement may already have taken effect; the call can be repeated, which
+    declares the same selection again: nothing is written if nobody changed it
+    in the meantime, and a change someone else made in the meantime is
+    overwritten.
 
     ``UserClient.mcp_servers.list()``, ``get()`` and ``list_tools()`` raise it
     in the same three cases. ``list()`` never folds a wrong-shaped body into an
@@ -671,6 +706,8 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "connector_name_conflict": ConnectorNameConflict,
     "connector_not_editable": ConnectorNotEditable,
     "connector_forbidden": ConnectorForbidden,
+    "connector_not_shared": ConnectorNotShared,
+    "agent_tools_unconfigured": AgentToolsUnconfigured,
 }
 
 
