@@ -207,6 +207,81 @@ class SkillDetail:
 
 
 @dataclass(frozen=True)
+class McpServerAuthorization:
+    """The key holder's own OAuth authorization of an MCP connector.
+
+    ``kind`` is ``"mcp_oauth"`` for a connector with its own OAuth settings
+    or ``"builtin_oauth"`` for a platform app connection. ``status`` is
+    ``"authorized"``, ``"not_authorized"``, ``"needs_reconnect"`` or
+    ``"configuration_error"`` today. The server may add values to both, so
+    they are plain ``str`` and passed through unchanged. ``message`` says
+    what the holder can do next, or is None when nothing is needed;
+    authorization itself can only be completed in the xAgent web app.
+    """
+
+    kind: str
+    status: str
+    message: str | None
+
+
+@dataclass(frozen=True)
+class McpServer:
+    """One MCP connector the key holder can see (``/v1/mcp-servers``).
+
+    The fields mirror the server's response one to one; every field is
+    always present in a response, so a missing one is reported as
+    ``MalformedResponse``.
+
+    Fields with a fixed set of values -- ``transport``, ``access``,
+    ``kind`` -- are plain ``str``; the server may add values, which are
+    passed through unchanged. ``access`` is ``"own"`` when the holder has a
+    link to the connector (switched on or off) and ``"team"`` when it is
+    visible only because the holder's team shares it; for a team connector
+    ``enabled`` and ``user_env`` are None. ``kind`` is ``"custom"`` for a
+    connector a user created from a URL and ``"catalog"`` for a platform
+    app connection. ``can_edit`` and ``can_delete`` are hints from the
+    server, not a guarantee that a change will be accepted.
+
+    These secret values are masked: header values, the values of ``env``
+    and ``user_env``, and the ``bearer_token``, ``api_key_value``,
+    ``client_secret`` and ``access_token`` entries of ``auth`` read
+    ``"********"`` when they are set. Everything else, including other
+    ``auth`` entries and a secret written into ``url`` or
+    ``runtime_bindings``, is returned as stored.
+
+    ``authorization`` is None unless the connector uses OAuth (see
+    ``McpServerAuthorization``). ``created_at`` and ``updated_at`` are the
+    server's strings, passed through unchanged.
+    """
+
+    id: int
+    name: str
+    description: str | None
+    transport: str
+    url: str | None
+    headers: dict[str, Any] | None
+    auth: dict[str, Any] | None
+    env: dict[str, Any] | None
+    user_env: dict[str, Any] | None
+    runtime_input_schema: dict[str, Any] | None
+    runtime_bindings: Any
+    signed_uploads: Any
+    signed_uploads_error: str | None
+    allow_delegated_authorization: bool
+    access: str
+    kind: str
+    enabled: bool | None
+    can_edit: bool
+    can_delete: bool
+    app_id: str | None
+    provider: str | None
+    connected_account: str | None
+    authorization: McpServerAuthorization | None
+    created_at: str | None
+    updated_at: str | None
+
+
+@dataclass(frozen=True)
 class CreateTaskResult:
     """``POST /v1/chat/tasks`` 202 payload.
 
@@ -780,6 +855,8 @@ _SKILL_DETAIL_ADAPTER = TypeAdapter(SkillDetail)
 _SKILL_DELETED_ADAPTER = TypeAdapter(_SkillDeleted)
 _AGENT_SKILLS_ADAPTER = TypeAdapter(_AgentSkills)
 _AGENT_SKILLS_UPDATE_ADAPTER = TypeAdapter(AgentSkillsUpdate)
+_MCP_SERVER_ADAPTER = TypeAdapter(McpServer)
+_MCP_SERVER_LIST_ADAPTER = TypeAdapter(list[McpServer])
 
 
 def _require_mapping(data: Any, what: str) -> dict[str, Any]:
@@ -1036,6 +1113,26 @@ def _parse_agent_skills(data: Any) -> list[str]:
 
 def _parse_agent_skills_update(data: Any) -> AgentSkillsUpdate:
     return _validate_write(_AGENT_SKILLS_UPDATE_ADAPTER, data, "agent skill update")
+
+
+def _parse_mcp_server_list(data: Any) -> list[McpServer]:
+    """Parse the bare array returned by ``GET /v1/mcp-servers`` strictly.
+
+    A body that is not an array, or any entry that does not match, raises
+    ``MalformedResponse``: an empty list is a real answer ("no connectors"),
+    and a proxy's error page must not be reported as one.
+    """
+    if not isinstance(data, list):
+        raise MalformedResponse(
+            "malformed_response",
+            f"expected a JSON array for connector list, got {type(data).__name__}",
+            http_status=None,
+        )
+    return _validate_read(_MCP_SERVER_LIST_ADAPTER, data, "connector list")
+
+
+def _parse_mcp_server_read(data: Any, what: str) -> McpServer:
+    return _validate_read(_MCP_SERVER_ADAPTER, _require_mapping(data, what), what)
 
 
 def _parse_features(data: Any) -> list[str]:

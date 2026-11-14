@@ -20,6 +20,7 @@ import pytest
 from xagent_sdk import AgentClient, MalformedResponse, UserClient, XAgentError
 from xagent_sdk.cloud import WorkspaceClient
 
+from .test_mcp_servers import _ROUTES as MCP_SERVER_ROUTES
 from .test_skills import _ROUTES as SKILL_ROUTES
 
 _BASE = "https://test.example"
@@ -183,11 +184,12 @@ def test_no_method_decodes_a_success_body_directly() -> None:
 
 
 def test_case_list_covers_every_helper_call() -> None:
-    # Binds _CASES and the skill tests' route list to the code: a new JSON
-    # method must be registered in one of them, or this count goes stale.
+    # Binds _CASES and the skill and connector tests' route lists to the code:
+    # a new JSON method must be registered in one of them, or this count goes
+    # stale.
     calls = sum(
         len(re.findall(r"_json_body\(resp,", path.read_text()))
         for path in _SRC.rglob("*.py")
     )
     # tasks.create is one call site shared by the user and agent clients.
-    assert calls == len(_CASES) - 1 + len(SKILL_ROUTES)
+    assert calls == len(_CASES) - 1 + len(SKILL_ROUTES) + len(MCP_SERVER_ROUTES)

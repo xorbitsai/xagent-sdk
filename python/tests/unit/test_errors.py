@@ -173,7 +173,7 @@ class TestCodeMapFixtures:
             for path in errors_dir.glob("*.json")
         }
         assert fixture_codes == set(_CODE_MAP)
-        assert len(_CODE_MAP) == 14
+        assert len(_CODE_MAP) == 15
 
 
 class TestFromResponseFallback:

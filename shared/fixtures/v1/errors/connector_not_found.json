@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "connector_not_found",
+    "message": "Connector not found or not accessible."
+  }
+}

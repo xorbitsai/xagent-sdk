@@ -27,6 +27,8 @@ EXPECTED_SURFACE: set[str] = {
     "AgentSkillsUpdate",
     "SkillSummary",
     "SkillDetail",
+    "McpServer",
+    "McpServerAuthorization",
     # Runtime dataclasses
     "CreateTaskResult",
     "AppendResult",
@@ -60,6 +62,7 @@ EXPECTED_SURFACE: set[str] = {
     "TemplateNotFound",
     "SkillNotFound",
     "SkillAlreadyExists",
+    "ConnectorNotFound",
     "MalformedResponse",
     "XAgentTransportError",
     "TaskTimeout",

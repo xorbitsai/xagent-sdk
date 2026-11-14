@@ -121,6 +121,15 @@ class SkillAlreadyExists(XAgentError):
     """
 
 
+class ConnectorNotFound(XAgentError):
+    """HTTP 404, code ``connector_not_found``.
+
+    Raised by ``UserClient.mcp_servers`` methods that take a ``server_id``:
+    the key holder cannot see a connector with this id. A connector that
+    does not exist and one the holder cannot see get the same answer.
+    """
+
+
 class InteractionResponseRequired(XAgentError):
     """HTTP 409, code ``interaction_response_required``.
 
@@ -241,6 +250,9 @@ class MalformedResponse(XAgentError):
     same three cases. ``get_skills()`` never folds a wrong-shaped body into an
     empty list. ``replace_skills()`` may already have taken effect when it
     raises this, so call ``get_skills()`` to check what the server stored.
+
+    ``UserClient.mcp_servers.list()`` and ``get()`` raise it in the same three
+    cases. ``list()`` never folds a wrong-shaped body into an empty list.
 
     ``TaskInfo.parsed()`` and ``RunResult.parsed()`` raise it when the
     structured result fields break the server's contract: a ``"ready"``
@@ -507,6 +519,7 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "temporarily_unavailable": TemporarilyUnavailable,
     "skill_not_found": SkillNotFound,
     "skill_already_exists": SkillAlreadyExists,
+    "connector_not_found": ConnectorNotFound,
 }
 
 
