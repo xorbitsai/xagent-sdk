@@ -424,17 +424,26 @@ class CancelResult:
     ``cancelled`` is ``True`` when the server answered that the task is
     cancelled (HTTP 200), whether this call did it or an earlier one already
     had. It is ``False`` when the cancel was recorded but not applied within
-    the server's wait (HTTP 202): the task is still in ``status``, and
-    calling ``cancel()`` again reaches the same request.
+    the server's wait (HTTP 202): ``status`` is still the task's current one,
+    ``cancelled_run_id`` and ``error_code`` are ``None``, and calling
+    ``cancel()`` again reaches the same cancel. A paused task whose
+    automatic resume gave up meanwhile reads ``FAILED`` here, and the cancel
+    still applies to it.
 
-    A cancelled task reads ``TaskStatus.FAILED`` with
-    ``error_code == "task_cancelled"``, here and on ``TaskInfo``.
+    The other fields describe the task as ``get()`` reads it now. Once
+    cancelled it reads ``TaskStatus.FAILED`` with
+    ``error_code == "task_cancelled"``, unless a later turn followed: while
+    one is queued to start it reads ``PENDING`` with ``error_code`` ``None``
+    (``run_id`` is still the cancelled run), and once one has started
+    ``status``, ``run_id``, ``state_version`` and ``error_code`` describe
+    that turn.
 
-    ``cancelled_run_id`` is the run that was cancelled. It differs from
-    ``run_id`` when a turn was withdrawn while it was still queued to start:
-    a new task then has no ``run_id`` at all, and a task you appended to
-    keeps showing the turn before it -- its ``status`` and ``error_code``
-    are that turn's, not the withdrawn one's.
+    ``cancelled_run_id`` is the run that was cancelled, so it differs from
+    ``run_id`` once a later turn has started, and when a turn was withdrawn
+    while it was still queued to start: a new task then has no ``run_id``
+    at all, and a task you appended to keeps showing the turn before it --
+    its ``status`` and ``error_code`` are that turn's, not the withdrawn
+    one's.
     """
 
     task_id: int
@@ -606,7 +615,10 @@ class TaskInfo:
     ``error_code`` is a machine-readable reason for a ``FAILED`` status when
     the server defines one: ``"task_cancelled"`` for a task stopped with
     ``client.tasks.cancel()``. ``None`` for every other failure and status,
-    and on a server that predates the field. Kept as a plain ``str``.
+    including once a later turn of a cancelled task is queued or running,
+    and on a server that predates the field. Kept as a plain ``str``. The
+    closing ``task.completed`` frame of ``events()`` carries the same value
+    under ``data["error_code"]``.
     """
 
     task_id: int

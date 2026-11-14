@@ -408,16 +408,23 @@ class TasksAPI:
         not ended yet.
 
         Works on a task that is running, still queued to start, waiting
-        for an answer, or paused. The server waits a short, bounded time
-        for the cancel to be applied and the result says which happened:
-        ``cancelled=True`` once the task is cancelled, ``cancelled=False``
-        when the cancel is recorded but not applied yet -- call again
-        (it reaches the same request) or ``wait()`` for the task.
+        for an answer, or paused. The server waits about 10 seconds
+        for the cancel to be applied, and the result says which happened:
+        ``cancelled=True`` once the task is cancelled, also when an earlier
+        call already cancelled it; ``cancelled=False`` when the cancel is
+        recorded but not applied yet. Call ``cancel()`` again in that case:
+        it reaches the same cancel and returns ``cancelled=True`` once it is
+        applied. ``wait()`` can return first: a paused task whose automatic
+        resume gives up meanwhile reads ``FAILED`` with no ``error_code``
+        although the recorded cancel still applies to it.
 
         A cancelled task reads ``TaskStatus.FAILED`` with
         ``error_code == "task_cancelled"``, so ``wait()`` returns for it,
-        and it accepts ``append()`` like any failed task. Calling
-        ``cancel()`` again on it returns ``cancelled=True``.
+        and it accepts ``append()`` like any failed task. A task that was
+        waiting for an answer has its question closed: ``reply()`` then
+        raises ``NoPendingInteraction``. This differs from ``cancel-question``
+        on the server (not wrapped by this SDK), which leaves the task
+        completed. A paused task is no longer resumed automatically.
 
         A workforce run is one task: cancelling it stops its members.
 
@@ -433,24 +440,27 @@ class TasksAPI:
           withdrawn without changing the task: the task keeps showing the
           turn before it, and only ``cancelled_run_id`` names the withdrawn
           run. A caller waiting for the appended turn must compare
-          ``run_id`` with the one ``append()`` returned.
+          ``run_id`` with the one ``append()`` returned. Calling
+          ``cancel()`` again returns the same result while the task has not
+          changed since; it does not cancel the turn before it.
         - On ``/steps`` the last assistant message of a cancelled task is
           the generic failure text.
-
-        Unlike ``cancel-question`` on the server (not wrapped by this SDK),
-        cancelling a ``WAITING_FOR_USER`` task ends it as cancelled rather
-        than completed.
 
         Raises:
             TaskNotFound: (404) the task does not exist or is not this
                 key's.
             TaskNotCancellable: (409) the task already ended without being
-                cancelled. Do not retry.
-            TaskBusy: (409) the task changed state while the cancel was
-                applied, or an answer is being applied to it. Retry.
+                cancelled: it completed or failed on its own, also while
+                the cancel was being applied, or another turn replaced the
+                one the cancel was aimed at. Do not retry.
+            TaskBusy: (409) the task cannot be cancelled in its current
+                state yet -- an answer to its question is queued or being
+                applied, or a queued turn has no run of its own yet -- or
+                it changed state while the cancel was applied. Retry.
             InternalError: (503) the server could not apply the cancel;
-                retry. Also what an older server answers, as an
-                unrecognized 404/405.
+                retry. A server without this endpoint answers 404 or 405
+                with no v1 error code, which also maps here; retrying does
+                not help then.
             MalformedResponse: the success body did not match.
         """
         resp = self._client._request("POST", f"/v1/chat/tasks/{task_id}/cancel")
@@ -527,16 +537,16 @@ class TasksAPI:
             str}``, with the same optional ``"truncated": True`` as
             ``message.delta``.
           - ``task.completed`` (closing) -- ``{"status": str, "output":
-            str | None, "error": str | None, "structured_output": dict |
-            None, "structured_output_status": str | None,
-            "structured_output_reason": dict | None}`` -- the three
-            structured fields carry the same values as the fields of the
-            same name on ``get()`` (the reason as the raw object, not a
-            ``StructuredOutputReason``), and a server that predates them
-            leaves them out -- plus ``"completion_outcome": str | None``
-            only when the task's ``response_format`` sets
-            ``accept_partial`` (absent otherwise; see
-            ``TaskInfo.completion_outcome``), plus
+            str | None, "error": str | None, "error_code": str | None,
+            "structured_output": dict | None, "structured_output_status":
+            str | None, "structured_output_reason": dict | None}`` --
+            ``error_code`` and the three structured fields carry the same
+            values as the fields of the same name on ``get()`` (the reason
+            as the raw object, not a ``StructuredOutputReason``), and a
+            server that predates them leaves them out -- plus
+            ``"completion_outcome": str | None`` only when the task's
+            ``response_format`` sets ``accept_partial`` (absent otherwise;
+            see ``TaskInfo.completion_outcome``), plus
             ``"snapshot_truncated": True`` and ``"snapshot_total_steps":
             int`` together, only on the two attach-time fast-path exits
             where the step snapshot handed to this connection was cut

@@ -70,9 +70,10 @@ class TaskBusy(XAgentError):
     Raised when the task is currently ``RUNNING`` or has an earlier turn
     still queued, and cannot accept a new turn or a reply yet, or when a
     concurrent ``reply()`` already claimed it. ``cancel()`` raises it when
-    the task changed state while the cancel was being applied, or an answer
-    is still being applied to it. ``TemporarilyUnavailable`` is the other
-    retryable code in this hierarchy.
+    an answer to the task's question is queued or being applied, when a
+    queued turn has no run of its own yet, or when the task changed state
+    while the cancel was being applied. ``TemporarilyUnavailable`` is the
+    other retryable code in this hierarchy.
 
     When ``reply()`` raises it because the server did not take the answer,
     ``details["accepted"]`` is ``False``: nothing was written and the reply
@@ -267,8 +268,10 @@ class TaskNotCancellable(XAgentError):
     """HTTP 409, code ``task_not_cancellable``.
 
     Raised by ``cancel()`` when the task already ended without being
-    cancelled: it ``COMPLETED``, or ``FAILED`` on its own. Do not retry; a
-    task that only cannot be cancelled *yet* raises ``TaskBusy`` instead.
+    cancelled: it ``COMPLETED``, or ``FAILED`` on its own, including while
+    the cancel was being applied, or another turn replaced the one the
+    cancel was aimed at. Do not retry; a task that only cannot be cancelled
+    *yet* raises ``TaskBusy`` instead.
     """
 
 

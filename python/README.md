@@ -963,7 +963,7 @@ only.
 | `agent.tasks.create(*, agent_id, message, metadata=None, dispatch_class=None, priority=None, prompt_context=None, response_format=None, accept_partial=None)` | `CreateTaskResult` | POST `/v1/chat/tasks`; returns immediately, `status='pending'` when the server queues the task for its dispatcher or `'running'` when it runs the task in-process; `dispatch_class` (`'interactive'`/`'batch'`) and `priority` (-10..10) apply to the new task only, the server validates them (422 → `InvalidInput`) and an older server ignores them; the result's `dispatch_class` shows the class the server gave the start command (`None` if not dispatched through a queue or on an older server); `run_id` names the run it started; `response_format` (a `dict` or a Pydantic model) asks for a structured result, see [Example 12](#12-structured-output) (`UnsupportedSchema` / `UnsupportedFeature`); `accept_partial=True` also keeps the values extracted from an incomplete result (see [Partial results](#partial-results)) |
 | `agent.tasks.append(task_id, *, agent_id, message, metadata=None, prompt_context=None, response_format=None, accept_partial=None)` | `AppendResult` | POST `/v1/chat/tasks/{id}/messages`; `status='pending'` (queued) or `'running'` (in-process); raises `TaskBusy` if the prior turn is still queued or running, `InteractionResponseRequired` if `WAITING_FOR_USER`; `run_id` names the new run; `response_format` replaces the task's format as a whole, including `accept_partial` (`{"type": "text"}` removes it, `None` keeps it) |
 | `agent.tasks.reply(task_id, *, agent_id, message)` | `AppendResult` | POST `/v1/chat/tasks/{id}/reply`; answers a `WAITING_FOR_USER` task's pending question and resumes its server-side run (the result's `run_id` is that run, not a new one); not idempotent |
-| `agent.tasks.cancel(task_id)` | `CancelResult` | POST `/v1/chat/tasks/{id}/cancel`; stops a task that is running, queued, waiting for an answer or paused; `cancelled=True` once it is cancelled (also when it already was), `False` when the cancel is recorded but not applied yet -- call again or `wait()`; raises `TaskNotCancellable` if the task already ended on its own, `TaskBusy` if it changed state meanwhile; `cancelled_run_id` names the run that was cancelled |
+| `agent.tasks.cancel(task_id)` | `CancelResult` | POST `/v1/chat/tasks/{id}/cancel`; stops a task that is running, queued, waiting for an answer or paused; `cancelled=True` once it is cancelled (also when it already was), `False` when the cancel is recorded but not applied yet -- call again, it reaches the same cancel; raises `TaskNotCancellable` if the task already ended on its own (do not retry), `TaskBusy` if it cannot be cancelled yet or changed state meanwhile (retry); `cancelled_run_id` names the run that was cancelled; see [Cancelling a task](#cancelling-a-task) |
 | `agent.tasks.get(task_id)` | `TaskInfo` | GET `/v1/chat/tasks/{id}`; latest-turn `input`/`output`; `pending_interaction` when `WAITING_FOR_USER`; `run_id`, the `structured_output*` fields and `completion_outcome`; `TaskInfo.parsed(model=None, *, expected_run_id=None)` reads the structured result |
 | `agent.tasks.steps(task_id)` | `list[Step]` | GET `/v1/chat/tasks/{id}/steps`; full timeline |
 | `agent.tasks.events(task_id, *, timeout=None)` | `TaskEventStream` | GET `/v1/chat/tasks/{id}/events` (SSE); iterate decoded `StreamEvent` frames as the task runs; `closed_by` tells how the stream ended |
@@ -1061,32 +1061,65 @@ The minted runtime key is an ordinary agent key — drive it with
   caveat (`reply()` is not idempotent).
 - `COMPLETED`, `FAILED` — terminal; `wait()` returns
 
+### Cancelling a task
+
 A cancelled task is `FAILED` with `error_code == "task_cancelled"`; every
-other failure has `error_code` `None`. There is no separate cancelled
-status, so code that waits for `COMPLETED`/`FAILED` keeps working:
+other failure has `error_code` `None`. The closing `task.completed` frame
+of `events()` carries the same `error_code`. There is no separate
+cancelled status, so code that waits for `COMPLETED`/`FAILED` keeps
+working.
+
+`cancel()` works on a task that is running, queued, waiting for an answer
+or paused. The server waits about 10 seconds for the cancel to be
+applied. When it is not applied by then, `cancelled` is `False`; call
+`cancel()` again, which reaches the same cancel rather than a new one:
 
 ```python
 result = agent.tasks.cancel(task_id)
-if not result.cancelled:  # recorded, not applied within the server's wait
-    info = agent.tasks.wait(task_id)
-    cancelled = info.error_code == "task_cancelled"
+while not result.cancelled:  # recorded, not applied yet
+    result = agent.tasks.cancel(task_id)
 ```
+
+Prefer this to `wait()` here: a paused task whose automatic resume gives
+up meanwhile reads `FAILED` with no `error_code`, although the recorded
+cancel still applies to it.
+
+The cancel errors, and which to retry:
+
+- `TaskNotCancellable` -- the task already ended without being cancelled
+  (it completed or failed on its own, also while the cancel was being
+  applied). Do not retry.
+- `TaskBusy` -- the task cannot be cancelled yet: an answer to its
+  question is queued or being applied, a queued turn has no run of its
+  own yet, or it changed state while the cancel was applied. Retry.
+- `InternalError` with `http_status == 503` -- the cancel could not be
+  applied. Retry.
 
 `cancel()` stops the agent's own work, including a workforce's members.
 It does not interrupt code already handed to a code-execution process or
 a call to a remote A2A agent; those run to their own end. A cancelled task
-accepts `append()` like any failed task.
+accepts `append()` like any failed task. A task that was waiting for an
+answer has its question closed, so `reply()` then raises
+`NoPendingInteraction`; a paused task is no longer resumed automatically.
+
+After a cancel, `CancelResult` describes the task as `get()` reads it,
+and `cancelled_run_id` names the run that was cancelled. If you appended
+another turn meanwhile, the task reads `PENDING` with `error_code` `None`
+while that turn is queued, and once it starts `status` and `run_id` are
+that turn's, so `run_id` is no longer `cancelled_run_id`.
 
 Two cases to know when you cancel a turn that is still queued:
 
 - A task cancelled before its first run started has no `run_id`, so a
   concurrent `run()` or `wait(expected_run_id=...)` for it raises
   `RunMismatch`.
-- A turn you appended to a finished task and cancelled before it started
-  is withdrawn without changing the task: `get()` keeps showing the turn
-  before it, and only `CancelResult.cancelled_run_id` names the withdrawn
-  run. If something else waits for that appended turn, have it compare
-  `run_id` with the one `append()` returned.
+- A turn you appended to a finished or paused task and cancelled before
+  it started is withdrawn without changing the task: `get()` keeps
+  showing the turn before it, and only `CancelResult.cancelled_run_id`
+  names the withdrawn run. If something else waits for that appended
+  turn, have it compare `run_id` with the one `append()` returned.
+  Calling `cancel()` again returns the same result while the task has
+  not changed since; it does not cancel the turn before it.
 
 ## Configuration
 
