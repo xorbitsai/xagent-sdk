@@ -122,12 +122,23 @@ class TestRoutes:
         assert captured[0].url.raw_path == raw_path
         assert captured[0].content == b""
 
+    def test_every_public_method_is_registered(self) -> None:
+        # Member binding: a public method added to ``ModelsAPI`` has to be
+        # registered in ``_ROUTES``, and so is covered by every table-driven
+        # test here. ``AgentsAPI`` methods are bound in ``test_skills.py``.
+        assert {m for (ns, m) in _ROUTES if ns == "models"} == {
+            n for n in vars(ModelsAPI) if not n.startswith("_")
+        }
+        assert set(_ROUTES) == set(_CALLS) == set(_FIXTURES)
+
     def test_models_is_a_models_api_on_the_user_client(self) -> None:
         with _make_user(lambda req: httpx.Response(200, json=[])) as c:
             assert isinstance(c.models, ModelsAPI)
 
     def test_get_returns_every_field_with_the_two_renames(self) -> None:
         wire = response("agent_detail")
+        # A server field the list (and so ``AgentDetail``) lacks fails here.
+        assert set(wire) == set(_AGENT_WIRE_FIELDS)
         # Guard: the fixture exercises non-empty and null values.
         assert wire["unresolved_models"]
         assert wire["models"]["general"] is not None
@@ -159,6 +170,10 @@ class TestRoutes:
             models = c.models.list()
         assert [type(m) for m in models] == [ModelInfo] * len(wire)
         for model, item in zip(models, wire, strict=True):
+            # A server field ``ModelInfo`` lacks fails here, and so does an
+            # attribute that is not a wire field.
+            assert set(item) == set(_MODEL_FIELDS)
+            assert set(vars(model)) == set(_MODEL_FIELDS)
             for name in _MODEL_FIELDS:
                 assert getattr(model, name) == item[name], name
 

@@ -75,7 +75,7 @@ def _require_runtime_key(
 
 
 def _agent_path(agent_id: int) -> str:
-    """The URL path of one agent, for the connector methods.
+    """The URL path of one agent, for ``get()`` and the connector methods.
 
     ``agent_id`` must be an integer: ``quote()`` leaves ``"."`` and ``".."``
     as they are and the HTTP client folds them away (``".."`` would reach
@@ -113,8 +113,8 @@ class AgentsAPI:
 
         Parsing is strict because the result is usually read, changed in one
         place and sent back: a body that is not the expected object, or that
-        lacks any field or has one of the wrong type, raises
-        ``MalformedResponse`` and is never read as an empty value.
+        lacks any field or has one that cannot be read as its declared type,
+        raises ``MalformedResponse`` and is never read as an empty value.
         ``AgentDetail.models`` is the one exception for its values, which are
         kept as the server stores them.
 

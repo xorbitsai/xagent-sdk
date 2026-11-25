@@ -986,13 +986,16 @@ you) is `owner_user_id`.
 | `owner_user_id` | `user_id` |
 | every other attribute | the same name |
 
-`models` maps a slot (`general`, `small_fast`, `visual`, `compact`) to a model
-id, or to `None` for a slot that is not set, and is `None` when the agent has
-no model settings. Its values are returned as stored, even a value that is not
-an integer id. `unresolved_models` lists the slots whose model you cannot use:
-a task you start falls back to another model there. `team_id` is `None` for a
-personal agent. All other fields are always present, so a missing field or one
-of the wrong type raises `MalformedResponse`.
+`models` is the agent's model settings as stored; an agent with none has `None`
+or an empty object. It maps slots (`general`, `small_fast`, `visual`, `compact`) to model ids, but
+a slot may be missing, a slot that is not set may hold `None`, `""`, `0` or
+`False`, and other keys may appear, so read a slot with `models.get(slot)`
+rather than `models[slot]`. Its values are returned as stored, even a value
+that is not an integer id. `unresolved_models` lists the slots whose model you
+cannot use: a task you start falls back to another model there. `team_id` is
+`None` for a personal agent. Every field, including `team_id` and `models`, is
+always present, even when its value is `None`, so a missing field, or one that
+cannot be read as its declared type, raises `MalformedResponse`.
 
 `ModelInfo` has the wire field names. Only a model whose `category` is `"llm"`
 takes effect in an agent's model slot when a task runs.
@@ -1028,7 +1031,7 @@ can reach.
 | `user.agents.list_keys(agent_id, *, include_revoked=False)` | `list[RuntimeKeyInfo]` | GET `/v1/agents/{agent_id}/api-keys`; newest first, never includes a secret; revoked keys only with `include_revoked=True`, paused keys always; 404 → `AgentNotFound`; a body that is not the expected array → `MalformedResponse`, never an empty list; a server without this route answers 404 → `InternalError` |
 | `user.agents.revoke_key(agent_id, key_id)` | `RevokeKeyResult` | DELETE `/v1/agents/{agent_id}/api-keys/{key_id}`; revokes that one key and leaves the agent's other keys working; no call reverses it; calling again is safe and returns `revoked=False`; a key that a still-settling rotation had already revoked is such a no-op and can be restored if that rotation's new key cannot be delivered, so list the keys again once the rotation settles and revoke the key if it is active; unknown agent → `AgentNotFound`, a key id the agent does not have → `APIKeyNotFound`; a server without this route answers 404 or 405 → `InternalError` |
 | `user.agents.replace_skills(agent_id, skills)` | `AgentSkillsUpdate` | PUT `/v1/agents/{agent_id}/skills`; 404 → `AgentNotFound`; replaces the whole list, `[]` clears it, and the later of two writers wins; a single string raises `TypeError` before any request; a new name that is neither visible nor valid → `InvalidInput` (400); `unresolved_for_caller` lists added names you cannot see, stored anyway |
-| `user.agents.get(agent_id)` | `AgentDetail` | GET `/v1/agents/{agent_id}`; `agent_id` must be an `int` (anything else raises `TypeError` before any request); wire `id` is `agent_id` and wire `user_id` is `owner_user_id`; 404 → `AgentNotFound`; out-of-range id → `InvalidInput` (422); a body that is not the expected object, or lacks a field or has one of the wrong type, raises `MalformedResponse` (`models` only has to be an object or `None`) |
+| `user.agents.get(agent_id)` | `AgentDetail` | GET `/v1/agents/{agent_id}`; `agent_id` must be an `int` (anything else raises `TypeError` before any request); wire `id` is `agent_id` and wire `user_id` is `owner_user_id`; 404 → `AgentNotFound`; out-of-range id → `InvalidInput` (422); a body that is not the expected object, or lacks a field or has one that cannot be read as its declared type, raises `MalformedResponse` (`models` only has to be an object or `None`) |
 | `user.agents.get_connectors(agent_id)` | `AgentConnectors` | GET `/v1/agents/{agent_id}/connectors`; `agent_id` must be an `int` (anything else raises `TypeError` before any request); 404 → `AgentNotFound`; a body that is not the expected object, or lacks any of its four fields, raises `MalformedResponse` (never an empty selection); `connectors=[]` with `all_connectors=True` can also be an agent that uses the default tool set |
 | `user.agents.replace_connectors(agent_id, connectors, *, all_connectors)` | `AgentConnectors` | PUT `/v1/agents/{agent_id}/connectors`; replaces the whole selection, `[]` clears it, and the later of two writers wins; `all_connectors` is required and has no default; a single string, or an `agent_id` that is not an `int`, raises `TypeError` before any request; 404 → `AgentNotFound`; an added name you cannot see → `InvalidInput` (400); a team that cannot use the selection → `ConnectorNotShared`; an agent on the default tool set → `AgentToolsUnconfigured`; `unresolved` lists names on the agent that you cannot see |
 | `user.tasks.create / append / reply / cancel / get / steps / events / wait / run` | as in the `AgentClient` table | Any agent you can see (`user.agents.list()`); the task runs as you, not as the agent's owner. Every personal key of yours sees the tasks any of them created, until the task's agent is deleted. An older server answers `InvalidAPIKey` (401) here. |

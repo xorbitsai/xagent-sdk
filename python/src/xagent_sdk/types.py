@@ -238,25 +238,31 @@ class AgentDetail:
     the wire ``user_id`` (the agent's owner, which is not necessarily the key
     holder) is ``owner_user_id``. Every other attribute has the wire name.
 
-    ``models`` maps a slot name (``general``, ``small_fast``, ``visual``,
-    ``compact``) to a model id from ``models.list()``, or to ``None`` for a
-    slot that is not set; it is ``None`` when the agent has no model settings
-    at all. Only the outer shape is checked: the values are returned as the
-    server stores them, because the web app can store a value that is not an
-    integer id, and the agent must stay readable so it can be corrected.
+    ``models`` is the agent's model settings as the server stores them; an
+    agent with none has ``None`` or an empty object. It maps slot names
+    (``general``, ``small_fast``, ``visual``, ``compact``) to model ids from
+    ``models.list()``, but a slot may be missing, a slot that is not set may
+    hold ``None``, ``""``, ``0`` or ``False``, and keys other than the four
+    slots may appear, so read a slot with ``models.get(slot)`` rather than
+    ``models[slot]``. Only the outer shape is checked: the values are returned
+    unchanged, because the web app can store a value that is not an integer
+    id, and the agent must stay readable so it can be corrected.
     ``unresolved_models`` lists the slots whose model the key holder cannot
     use, so a task the holder starts falls back to another model there; a slot
     holding a set value that is not an integer id is always listed.
 
     ``team_id`` is ``None`` for a personal agent. ``visibility`` is ``"team"``
-    or ``"admins"`` and ``status`` is ``"draft"``, ``"published"`` or
-    ``"archived"`` today; both are plain ``str`` and the server may add values.
-    ``execution_mode`` is a plain ``str`` as well. Timestamps are ISO 8601
-    strings, passed through unchanged.
+    or ``"admins"`` and only matters for a team agent: a personal agent is
+    managed only by its owner, whatever the value. ``status`` is ``"draft"``,
+    ``"published"`` or ``"archived"`` today. Both are plain ``str`` and the
+    server may add values. ``execution_mode`` is a plain ``str`` as well.
+    Timestamps are ISO 8601 strings, passed through unchanged.
 
-    Every field is always present in a response, so a missing one, or one of
-    the wrong type, is reported as ``MalformedResponse`` rather than read as
-    an empty value that a read-modify-write would send back.
+    Every field, including ``team_id`` and ``models``, is always present in a
+    response, even when its value is ``None``, so a missing one, or one that
+    cannot be read as its declared type, is reported as ``MalformedResponse``
+    rather than read as an empty value that a read-modify-write would send
+    back.
     """
 
     agent_id: int
