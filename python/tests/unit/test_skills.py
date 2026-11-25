@@ -40,6 +40,7 @@ from xagent_sdk._skills import SkillsAPI
 
 from ._fixtures import error_envelope, response
 from .test_agent_connectors import _ROUTES as _CONNECTOR_ROUTES
+from .test_agent_detail_models import _ROUTES as _DETAIL_ROUTES
 
 _Handler = Callable[[httpx.Request], httpx.Response]
 _Call = Callable[[UserClient], object]
@@ -374,9 +375,10 @@ class TestRoutes:
         # Member binding: a public method added to ``SkillsAPI`` has to be
         # registered in ``_ROUTES`` (and so is covered by the tests here and
         # in ``TestUnexpectedSuccessResponses``); one added to ``AgentsAPI``
-        # has to be registered there, in the connector routes of
-        # ``test_agent_connectors.py`` (covered there), or deliberately added
-        # to the set of older agent methods.
+        # has to be registered there, in the routes of
+        # ``test_agent_connectors.py`` or ``test_agent_detail_models.py``
+        # (covered there), or deliberately added to the set of older agent
+        # methods.
         assert {m for (ns, m) in _ROUTES if ns == "skills"} == {
             n for n in vars(SkillsAPI) if not n.startswith("_")
         }
@@ -384,6 +386,7 @@ class TestRoutes:
             _LEGACY_AGENT_METHODS
             | {m for (ns, m) in _ROUTES if ns == "agents"}
             | {m for (ns, m) in _CONNECTOR_ROUTES if ns == "agents"}
+            | {m for (ns, m) in _DETAIL_ROUTES if ns == "agents"}
         )
 
         captured: list[httpx.Request] = []
