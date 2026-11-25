@@ -231,6 +231,94 @@ class AgentConnectors:
 
 
 @dataclass(frozen=True)
+class AgentDetail:
+    """``GET /v1/agents/{agent_id}`` payload: one agent's full configuration.
+
+    The SDK renames two wire fields: the wire ``id`` is ``agent_id`` here, and
+    the wire ``user_id`` (the agent's owner, which is not necessarily the key
+    holder) is ``owner_user_id``. Every other attribute has the wire name.
+
+    ``models`` is the agent's model settings as the server stores them; an
+    agent with none has ``None`` or an empty object. It maps slot names
+    (``general``, ``small_fast``, ``visual``, ``compact``) to model ids from
+    ``models.list()``, but a slot may be missing, a slot that is not set may
+    hold ``None``, ``""``, ``0`` or ``False``, and keys other than the four
+    slots may appear, so read a slot with ``models.get(slot)`` rather than
+    ``models[slot]``. Only the outer shape is checked: the values are returned
+    unchanged, because the web app can store a value that is not an integer
+    id, and the agent must stay readable so it can be corrected.
+    ``unresolved_models`` lists the slots whose model the key holder cannot
+    use, so a task the holder starts falls back to another model there; a slot
+    holding a set value that is not an integer id is always listed.
+
+    ``team_id`` is ``None`` for a personal agent. ``visibility`` is ``"team"``
+    or ``"admins"`` and only matters for a team agent: a personal agent is
+    managed only by its owner, whatever the value. ``status`` is ``"draft"``,
+    ``"published"`` or ``"archived"`` today. Both are plain ``str`` and the
+    server may add values. ``execution_mode`` is a plain ``str`` as well.
+    Timestamps are ISO 8601 strings, passed through unchanged.
+
+    Every field, including ``team_id`` and ``models``, is always present in a
+    response, even when its value is ``None``, so a missing one, or one that
+    cannot be read as its declared type, is reported as ``MalformedResponse``
+    rather than read as an empty value that a read-modify-write would send
+    back.
+    """
+
+    agent_id: int
+    owner_user_id: int
+    team_id: int | None
+    visibility: str
+    name: str
+    description: str | None
+    instructions: str | None
+    execution_mode: str
+    models: dict[str, Any] | None
+    unresolved_models: list[str]
+    knowledge_bases: list[str]
+    skills: list[str]
+    tool_categories: list[str]
+    suggested_prompts: list[str]
+    prompt_context_fields: list[dict[str, Any]]
+    logo_url: str | None
+    status: str
+    published_at: str | None
+    created_at: str
+    updated_at: str
+    widget_enabled: bool
+    allowed_domains: list[str]
+    share_enabled: bool
+    share_updated_at: str | None
+
+
+@dataclass(frozen=True)
+class ModelInfo:
+    """One model the key holder can use (``GET /v1/models``).
+
+    ``id`` is what an agent's model slot stores; it is specific to the
+    deployment you call, and the same model has another ``id`` elsewhere, so
+    use ``model_id`` (a stable, readable identifier) to find it again.
+    ``category`` says what the model is for (``"llm"``, ``"embedding"``, ...).
+    Only an ``"llm"`` model takes effect in an agent's model slot when a task
+    runs. ``agents.create_from_template()`` also accepts a model of another
+    category in ``overrides["models"]``, and ``agents.get()`` then lists that
+    slot in ``unresolved_models``. ``abilities`` is for example
+    ``["chat", "vision"]``. ``is_platform`` is ``True`` for a model the
+    platform manages and ``owned_by_you`` for one the key holder registered.
+    ``category`` is a plain ``str``; the server may add values.
+    """
+
+    id: int
+    model_id: str
+    model_name: str
+    model_provider: str
+    category: str
+    abilities: list[str]
+    is_platform: bool
+    owned_by_you: bool
+
+
+@dataclass(frozen=True)
 class SkillSummary:
     """``GET /v1/skills`` list entry and the body of every skill write.
 
@@ -1017,6 +1105,8 @@ _SKILL_DELETED_ADAPTER = TypeAdapter(_SkillDeleted)
 _AGENT_SKILLS_ADAPTER = TypeAdapter(_AgentSkills)
 _AGENT_SKILLS_UPDATE_ADAPTER = TypeAdapter(AgentSkillsUpdate)
 _AGENT_CONNECTORS_ADAPTER = TypeAdapter(AgentConnectors)
+_AGENT_DETAIL_ADAPTER = TypeAdapter(AgentDetail)
+_MODEL_INFO_LIST_ADAPTER = TypeAdapter(list[ModelInfo])
 _MCP_SERVER_ADAPTER = TypeAdapter(McpServer)
 _MCP_SERVER_LIST_ADAPTER = TypeAdapter(list[McpServer])
 _MCP_SERVER_TOOLS_ADAPTER = TypeAdapter(McpServerTools)
@@ -1351,6 +1441,43 @@ def _parse_agent_connectors_read(data: Any) -> AgentConnectors:
 
 def _parse_agent_connectors_write(data: Any) -> AgentConnectors:
     return _validate_write(_AGENT_CONNECTORS_ADAPTER, data, "agent connectors update")
+
+
+def _parse_agent_detail(data: Any) -> AgentDetail:
+    """Parse ``GET /v1/agents/{agent_id}`` strictly.
+
+    The wire ``id`` and ``user_id`` become ``agent_id`` and ``owner_user_id``.
+    A body that carries ``agent_id`` or ``owner_user_id`` itself does not fill
+    those fields: only the wire names count, so a missing ``id`` is reported
+    instead of being filled from another key.
+    """
+    body = _require_mapping(data, "agent detail")
+    renamed = {
+        k: v
+        for k, v in body.items()
+        if k not in ("agent_id", "owner_user_id", "id", "user_id")
+    }
+    if "id" in body:
+        renamed["agent_id"] = body["id"]
+    if "user_id" in body:
+        renamed["owner_user_id"] = body["user_id"]
+    return _validate_read(_AGENT_DETAIL_ADAPTER, renamed, "agent detail")
+
+
+def _parse_model_list(data: Any) -> list[ModelInfo]:
+    """Parse the bare array returned by ``GET /v1/models`` strictly.
+
+    An empty array is a real answer ("no models"), so a body that is not an
+    array, or any entry that does not match, raises ``MalformedResponse``
+    rather than being read as an empty list.
+    """
+    if not isinstance(data, list):
+        raise MalformedResponse(
+            "malformed_response",
+            f"expected a JSON array for model list, got {type(data).__name__}",
+            http_status=None,
+        )
+    return _validate_read(_MODEL_INFO_LIST_ADAPTER, data, "model list")
 
 
 def _parse_mcp_server_list(data: Any) -> list[McpServer]:

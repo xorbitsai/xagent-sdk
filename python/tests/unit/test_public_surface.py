@@ -28,6 +28,8 @@ EXPECTED_SURFACE: set[str] = {
     "RevokeKeyResult",
     "AgentSkillsUpdate",
     "AgentConnectors",
+    "AgentDetail",
+    "ModelInfo",
     "SkillSummary",
     "SkillDetail",
     "McpServer",

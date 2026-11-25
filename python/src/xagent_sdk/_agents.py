@@ -24,6 +24,7 @@ from xagent_sdk.errors import MalformedResponse
 from xagent_sdk.types import (
     AgentConnectors,
     AgentCreateResult,
+    AgentDetail,
     AgentSkillsUpdate,
     AgentSummary,
     RevokeKeyResult,
@@ -32,6 +33,7 @@ from xagent_sdk.types import (
     _parse_agent_connectors_read,
     _parse_agent_connectors_write,
     _parse_agent_create,
+    _parse_agent_detail,
     _parse_agent_list,
     _parse_agent_skills,
     _parse_agent_skills_update,
@@ -73,7 +75,7 @@ def _require_runtime_key(
 
 
 def _agent_path(agent_id: int) -> str:
-    """The URL path of one agent, for the connector methods.
+    """The URL path of one agent, for ``get()`` and the connector methods.
 
     ``agent_id`` must be an integer: ``quote()`` leaves ``"."`` and ``".."``
     as they are and the HTTP client folds them away (``".."`` would reach
@@ -100,6 +102,48 @@ class AgentsAPI:
         """
         resp = self._client._request("GET", "/v1/agents")
         return _parse_agent_list(_json_body(resp, "agent list"))
+
+    def get(self, agent_id: int) -> AgentDetail:
+        """``GET /v1/agents/{agent_id}`` -- read one agent's full configuration.
+
+        Returns the agent's full configuration for any agent the key holder
+        can see, including a team agent; ``agents.list()`` returns only the
+        short summaries. The result's ``agent_id`` and ``owner_user_id`` are
+        the wire fields ``id`` and ``user_id``; see ``AgentDetail``.
+
+        Parsing is strict because the result is usually read, changed in one
+        place and sent back: a body that is not the expected object, or that
+        lacks any field or has one that cannot be read as its declared type,
+        raises ``MalformedResponse`` and is never read as an empty value.
+        ``AgentDetail.models`` is the one exception for its values, which are
+        kept as the server stores them.
+
+        Args:
+            agent_id: An agent the key holder can see. Must be an ``int``
+                (``True`` and ``False`` count as 1 and 0); anything else
+                raises ``TypeError`` before a request is sent. The server
+                answers a number outside the positive 32-bit range with
+                ``InvalidInput``.
+
+        Raises:
+            TypeError: ``agent_id`` is not an integer; raised before any
+                request is sent.
+            InvalidAPIKey: the key is missing, is not a personal key, or is
+                revoked (HTTP 401).
+            InvalidInput: ``agent_id`` is 0, negative or 2**31 or more
+                (HTTP 422).
+            AgentNotFound: the key holder cannot see this agent (HTTP 404).
+            InternalError: a server error (HTTP 500); a response without the
+                V1 error envelope, carrying its own status (for example a 503
+                while the server starts, a 502 page from a reverse proxy, or
+                a 404 from a server without this route, which is not
+                ``AgentNotFound``).
+            XAgentTransportError: the request did not complete.
+            MalformedResponse: the response status is not 200, the body is not
+                JSON, or it is not an agent object.
+        """
+        resp = self._client._request("GET", _agent_path(agent_id))
+        return _parse_agent_detail(_json_body(resp, "agent detail"))
 
     def create(
         self,

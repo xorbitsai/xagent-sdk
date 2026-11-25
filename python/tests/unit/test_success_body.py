@@ -8,7 +8,8 @@ these cases escapes as ``json.JSONDecodeError``, which is not an
 ``XAgentError``. The ``skills.*``, ``agents.get_skills()`` and
 ``agents.replace_skills()`` methods are covered in ``test_skills.py``, and
 ``agents.get_connectors()`` and ``agents.replace_connectors()`` in
-``test_agent_connectors.py``.
+``test_agent_connectors.py``, and ``agents.get()`` and ``models.list()`` in
+``test_agent_detail_models.py``.
 """
 
 import pathlib
@@ -23,6 +24,7 @@ from xagent_sdk import AgentClient, MalformedResponse, UserClient, XAgentError
 from xagent_sdk.cloud import WorkspaceClient
 
 from .test_agent_connectors import _ROUTES as AGENT_CONNECTOR_ROUTES
+from .test_agent_detail_models import _ROUTES as AGENT_DETAIL_MODEL_ROUTES
 from .test_mcp_servers import _ROUTES as MCP_SERVER_ROUTES
 from .test_skills import _ROUTES as SKILL_ROUTES
 
@@ -205,9 +207,9 @@ def test_no_method_decodes_a_success_body_directly() -> None:
 
 
 def test_case_list_covers_every_helper_call() -> None:
-    # Binds _CASES and the skill and connector tests' route lists to the code:
-    # a new JSON method must be registered in one of them, or this count goes
-    # stale.
+    # Binds _CASES and the route lists of the skill, MCP connector, agent
+    # connector and agent detail/model tests to the code: a new JSON method
+    # must be registered in one of them, or this count goes stale.
     calls = sum(
         len(re.findall(r"_json_body\(resp,", path.read_text()))
         for path in _SRC.rglob("*.py")
@@ -219,4 +221,5 @@ def test_case_list_covers_every_helper_call() -> None:
         + len(SKILL_ROUTES)
         + len(MCP_SERVER_ROUTES)
         + len(AGENT_CONNECTOR_ROUTES)
+        + len(AGENT_DETAIL_MODEL_ROUTES)
     )

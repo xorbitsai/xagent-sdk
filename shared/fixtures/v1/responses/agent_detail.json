@@ -1,0 +1,47 @@
+{
+  "id": 2,
+  "user_id": 2,
+  "name": "Invoice Helper",
+  "description": "Answers support questions.",
+  "instructions": "Be concise.",
+  "execution_mode": "balanced",
+  "models": {
+    "general": 3,
+    "small_fast": 1,
+    "visual": 2147483000,
+    "compact": null
+  },
+  "knowledge_bases": [],
+  "skills": [
+    "summarize"
+  ],
+  "tool_categories": [
+    "knowledge",
+    "mcp"
+  ],
+  "suggested_prompts": [
+    "How do I reset my password?",
+    "Where is my invoice?"
+  ],
+  "prompt_context_fields": [
+    {
+      "name": "order_ref",
+      "max_length": 64,
+      "description": "The order reference number."
+    }
+  ],
+  "logo_url": null,
+  "status": "draft",
+  "published_at": null,
+  "created_at": "2026-05-20T10:00:00.000000",
+  "updated_at": "2026-05-29T10:00:00.000000",
+  "widget_enabled": true,
+  "allowed_domains": [],
+  "share_enabled": false,
+  "share_updated_at": null,
+  "team_id": 1,
+  "visibility": "team",
+  "unresolved_models": [
+    "visual"
+  ]
+}

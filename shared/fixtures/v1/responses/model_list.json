@@ -1,0 +1,41 @@
+[
+  {
+    "id": 3,
+    "model_id": "owner-chat",
+    "model_name": "gpt-4o",
+    "model_provider": "openai",
+    "category": "llm",
+    "abilities": [
+      "chat",
+      "vision",
+      "tool_calling"
+    ],
+    "is_platform": false,
+    "owned_by_you": true
+  },
+  {
+    "id": 1,
+    "model_id": "shared-chat",
+    "model_name": "gpt-4o-mini",
+    "model_provider": "openai",
+    "category": "llm",
+    "abilities": [
+      "chat",
+      "tool_calling"
+    ],
+    "is_platform": false,
+    "owned_by_you": false
+  },
+  {
+    "id": 2,
+    "model_id": "shared-embed",
+    "model_name": "text-embedding-3-small",
+    "model_provider": "openai",
+    "category": "embedding",
+    "abilities": [
+      "embedding"
+    ],
+    "is_platform": false,
+    "owned_by_you": false
+  }
+]

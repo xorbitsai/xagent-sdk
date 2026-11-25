@@ -421,6 +421,10 @@ class MalformedResponse(XAgentError):
     in the meantime, and a change someone else made in the meantime is
     overwritten.
 
+    ``UserClient.agents.get()`` and ``models.list()`` raise it in the same
+    three cases. ``agents.get()`` never folds a wrong-shaped body into an empty
+    agent, and ``models.list()`` never folds one into an empty list.
+
     ``UserClient.mcp_servers.list()``, ``get()`` and ``list_tools()`` raise it
     in the same three cases. ``list()`` never folds a wrong-shaped body into an
     empty list. ``mcp_servers.create()``, ``update()``, ``delete()`` and
