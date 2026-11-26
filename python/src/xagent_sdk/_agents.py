@@ -3,8 +3,9 @@
 Provides agent lifecycle management for the personal-key authenticated
 caller: list the user's agents, create new ones (structured or from a
 template), rotate the runtime API key on an existing agent, list or revoke
-an agent's runtime keys, read or replace an agent's skill list, and read or
-replace an agent's connector selection.
+an agent's runtime keys, read or replace an agent's skill list, read or
+replace an agent's connector selection, read or change an agent's
+configuration, and list the models its slots can take.
 
 ``create()`` and ``create_from_template()`` default to
 ``generate_runtime_key=True`` to match the backend default; the returned
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from xagent_sdk._base import _json_body
+from xagent_sdk._mcp_servers import _UNSET, _Unset
 from xagent_sdk.errors import MalformedResponse
 from xagent_sdk.types import (
     AgentConnectors,
@@ -27,6 +29,7 @@ from xagent_sdk.types import (
     AgentDetail,
     AgentSkillsUpdate,
     AgentSummary,
+    ModelForAgent,
     RevokeKeyResult,
     RotateKeyResult,
     RuntimeKeyInfo,
@@ -37,6 +40,8 @@ from xagent_sdk.types import (
     _parse_agent_list,
     _parse_agent_skills,
     _parse_agent_skills_update,
+    _parse_agent_write,
+    _parse_model_for_agent_list,
     _parse_revoke_key,
     _parse_rotate_key,
     _parse_runtime_key_list,
@@ -50,6 +55,7 @@ if TYPE_CHECKING:
 # type. Reference it through a module-scope alias instead.
 _StrList = list[str]
 _KeyList = list[RuntimeKeyInfo]
+_ModelForAgentList = list[ModelForAgent]
 
 
 def _require_runtime_key(
@@ -75,7 +81,8 @@ def _require_runtime_key(
 
 
 def _agent_path(agent_id: int) -> str:
-    """The URL path of one agent, for ``get()`` and the connector methods.
+    """The URL path of one agent, for ``get()``, ``update()``,
+    ``list_assignable_models()`` and the connector methods.
 
     ``agent_id`` must be an integer: ``quote()`` leaves ``"."`` and ``".."``
     as they are and the HTTP client folds them away (``".."`` would reach
@@ -144,6 +151,194 @@ class AgentsAPI:
         """
         resp = self._client._request("GET", _agent_path(agent_id))
         return _parse_agent_detail(_json_body(resp, "agent detail"))
+
+    def update(
+        self,
+        agent_id: int,
+        *,
+        name: str | _Unset = _UNSET,
+        description: str | _Unset = _UNSET,
+        instructions: str | _Unset = _UNSET,
+        models: Mapping[str, int | None] | _Unset = _UNSET,
+    ) -> AgentDetail:
+        """``PATCH /v1/agents/{agent_id}`` -- change an agent's name,
+        description, instructions or model slots.
+
+        Only the arguments you pass are sent; an argument you leave out keeps
+        its stored value. Passing nothing sends ``{}``, changes nothing and
+        returns the current configuration. ``name``, ``description`` and
+        ``instructions`` cannot be ``None``: the type hints exclude it, and a
+        ``None`` passed anyway is sent as ``null`` and refused (HTTP 400); to
+        empty ``description`` or ``instructions`` pass ``""``. A value equal
+        to the stored one changes nothing.
+
+        ``models`` is merged slot by slot: only the slots in the mapping
+        change (``general``, ``small_fast``, ``visual`` and ``compact``), the
+        others keep their stored value. A slot set to an ``int`` takes that
+        model id; a slot set to ``None`` clears it, so a task falls back to
+        the model of the task itself or to the default model, which can
+        differ with whoever starts the task. ``{}`` changes nothing. The
+        mapping is copied into the request body.
+
+        A slot sent with the model it already stores is left as it is and is
+        not checked, so it is not reported in the error below even if that
+        model is no longer usable. Any other slot can be set only to a model
+        that ``list_assignable_models()`` lists with ``owner_can_use`` set to
+        ``True``. The ``AgentDetail.models`` value ``get()`` returns cannot
+        always be passed back as is: it is ``None`` for an agent without
+        models, which raises ``TypeError`` before any request, and a value
+        saved in the web app can hold keys other than the four slots, or
+        slot values other than ``None`` or an integer from 1 to 2**31 - 1,
+        which the server refuses with ``InvalidInput`` (HTTP 422).
+
+        The new values apply to tasks started after the call returns. A task
+        that is already running can keep using the previous values for a
+        while: the server keeps the agent's settings cached per task, and how
+        long depends on the task's state and on the server process. If the
+        agent is the manager or an enabled worker of a workforce and its
+        ``instructions`` or ``models`` changed, an ongoing workforce
+        conversation can be rejected with ``workforce_config_changed`` on its
+        next turn (a preview conversation in the workforce builder is not
+        checked, and neither is a conversation that started before the
+        check). The result is the agent as stored after the change, read as in
+        ``get()``. Nothing checks that the agent is unchanged since you read
+        it: of two concurrent writers, the later one overwrites the earlier
+        one's value for the same field or slot. To change one slot without a
+        read, pass only that slot.
+
+        A task resolves each model slot as the user it runs as. If that user
+        cannot use the model, a task started on this agent falls back to a
+        default model for that slot without an error; when another agent
+        calls this agent, such a ``general`` model fails the call and such a
+        model in another slot is left unused. For an agent your team shares,
+        prefer models that are shared with the team.
+        ``AgentDetail.unresolved_models`` of ``get()`` lists the slots that
+        fall back for you.
+
+        Raises:
+            TypeError: ``agent_id`` is not an integer, or ``models`` is
+                ``None``; raised before any request is sent.
+            InvalidAPIKey: the key is missing, is not a personal key, or is
+                revoked (HTTP 401).
+            AgentNotFound: the key holder cannot see this agent (HTTP 404).
+                The same error comes back if the change was stored but the
+                key holder can no longer see the agent when the server reads
+                it again: the change took effect although the call raised.
+            InvalidInput: the server rejected the request and nothing was
+                changed; ``http_status`` says which kind.
+
+                HTTP 422: a value is malformed (an empty ``name``, a
+                ``name`` over 200 characters, text containing a NUL
+                character, a ``description`` or ``instructions`` over
+                1000000 characters, a model id that is zero,
+                negative, a ``bool`` or over 2**31 - 1, an unknown slot name,
+                a value the server cannot read as the expected type), or
+                ``agent_id`` is out of range.
+
+                HTTP 400: ``name``, ``description`` or ``instructions`` is
+                ``None``; ``name`` is already used by another agent; or
+                ``description`` or ``instructions`` is longer than 10000
+                characters (up to 1000000) and also longer than the value
+                stored now (a
+                stored value that is already longer can be kept or
+                shortened). A request refused for one of these is not
+                checked for its model slots.
+            ModelNotAssignable: a model slot cannot take the requested model
+                (HTTP 400) and nothing was changed. ``details["models"]`` is
+                a list with one entry for each refused slot, in the order
+                ``general``, ``small_fast``, ``visual``, ``compact``:
+                ``{"slot": str, "id": int, "reason": str}``, where ``id`` is
+                the requested model's id. ``reason`` is one of:
+
+                - ``"unavailable"``: you cannot use the model (it does not
+                  exist, is switched off, or is not visible to you).
+                - ``"not_llm"``: you can use it, but it is not an ``llm``
+                  model.
+                - ``"owner_cannot_use"``: you can use it, but the agent's
+                  owner cannot; this entry also carries ``owner_user_id``,
+                  the owner's user id.
+
+                Treat any other string as ``"unavailable"``. A slot whose
+                value did not change is never listed.
+            InternalError: a server error (HTTP 500); a response without the
+                V1 error envelope, carrying its own status. The change may
+                or may not have been stored; call ``get()`` to see.
+            XAgentTransportError: the request did not complete. The change
+                may or may not have been stored; call ``get()`` to see.
+            MalformedResponse: the response status is not 200, the body is
+                not JSON, or it is not an agent object. The change may
+                already be stored; repeating the call is safe (it declares
+                the same values again), or call ``get()`` to see what is
+                stored.
+        """
+        path = _agent_path(agent_id)
+        body: dict[str, Any] = {}
+        for key, value in (
+            ("name", name),
+            ("description", description),
+            ("instructions", instructions),
+        ):
+            if value is not _UNSET:
+                body[key] = value
+        if models is not _UNSET:
+            body["models"] = dict(models)
+        resp = self._client._request("PATCH", path, json=body)
+        return _parse_agent_write(_json_body(resp, "agent update"))
+
+    def list_assignable_models(self, agent_id: int) -> _ModelForAgentList:
+        """``GET /v1/agents/{agent_id}/assignable-models`` -- list the models
+        you can put in this agent's model slots.
+
+        Returns every ``llm`` model the key holder can use, each as a
+        ``ModelForAgent``: the ``ModelInfo`` fields plus ``owner_can_use``,
+        which says whether the agent's owner can use the model too. A model
+        the owner cannot use is listed with ``owner_can_use=False``, not left
+        out; ``update(models=...)`` can set a slot only to a model listed
+        with ``owner_can_use=True``. A model the owner can use but the key
+        holder cannot is not listed. An empty list means the server answered
+        that the key holder can use no ``llm`` model. The entries come in
+        the order the server sends them (the server does not guarantee an
+        order).
+
+        A model's ``id`` is specific to the deployment you call. To find a
+        model by its ``model_id`` string here, pick the entry whose
+        ``model_id`` matches and use its ``id``.
+
+        Parsing is strict: if any entry does not match the expected shape,
+        including an ``owner_can_use`` that is missing or cannot be read as a
+        bool, the whole call raises ``MalformedResponse`` rather than
+        returning a partial list. A body that is not a JSON array also
+        raises it; it is never read as an empty list.
+
+        Args:
+            agent_id: An agent the key holder can see. Must be an ``int``
+                (``True`` and ``False`` count as 1 and 0); anything else
+                raises ``TypeError`` before a request is sent. The server
+                answers a number outside the positive 32-bit range with
+                ``InvalidInput``.
+
+        Raises:
+            TypeError: ``agent_id`` is not an integer; raised before any
+                request is sent.
+            InvalidAPIKey: the key is missing, is not a personal key, or is
+                revoked (HTTP 401).
+            InvalidInput: ``agent_id`` is 0, negative or 2**31 or more
+                (HTTP 422).
+            AgentNotFound: the key holder cannot see this agent (HTTP 404).
+            InternalError: a server error (HTTP 500); a response without the
+                V1 error envelope, carrying its own status (for example a 503
+                while the server starts, a 502 page from a reverse proxy, or
+                a 404 from a server without this route, which is not
+                ``AgentNotFound``).
+            XAgentTransportError: the request did not complete.
+            MalformedResponse: the response status is not 200, the body is not
+                JSON, or it is not an array of models that each carry
+                ``owner_can_use``.
+        """
+        resp = self._client._request(
+            "GET", f"{_agent_path(agent_id)}/assignable-models"
+        )
+        return _parse_model_for_agent_list(_json_body(resp, "assignable models"))
 
     def create(
         self,

@@ -236,6 +236,25 @@ class ConnectorNotShared(XAgentError):
     """
 
 
+class ModelNotAssignable(XAgentError):
+    """HTTP 400, code ``model_not_assignable``.
+
+    Raised by ``UserClient.agents.update()`` when a model slot it changes
+    cannot take the requested model. Nothing was written.
+    ``agents.list_assignable_models()`` lists the models a slot can take:
+    those with ``owner_can_use=True``.
+
+    ``details["models"]`` is a list with one entry for each refused slot, in
+    the order ``general``, ``small_fast``, ``visual``, ``compact``:
+    ``{"slot": str, "id": int, "reason": str}``, where ``id`` is the
+    requested model's id, plus ``owner_user_id`` (the agent owner's user id)
+    when ``reason`` is ``owner_cannot_use``. ``reason`` is ``unavailable``,
+    ``not_llm`` or ``owner_cannot_use`` today; treat any other string as
+    ``unavailable``. A slot sent with the model it already stores is not
+    checked and never listed.
+    """
+
+
 class AgentToolsUnconfigured(XAgentError):
     """HTTP 409, code ``agent_tools_unconfigured``.
 
@@ -424,6 +443,14 @@ class MalformedResponse(XAgentError):
     ``UserClient.agents.get()`` and ``models.list()`` raise it in the same
     three cases. ``agents.get()`` never folds a wrong-shaped body into an empty
     agent, and ``models.list()`` never folds one into an empty list.
+
+    ``UserClient.agents.update()`` raises it in the same three cases, and also
+    when a 200 body does not match the expected shape; the server has accepted
+    the change by then. Repeating the call is safe, or call ``agents.get()`` to
+    see what the server stored. ``agents.list_assignable_models()`` raises
+    it in the same three cases, also for an entry whose ``owner_can_use`` is
+    missing or cannot be read as a bool, and never folds a wrong-shaped body
+    into an empty list.
 
     ``UserClient.mcp_servers.list()``, ``get()`` and ``list_tools()`` raise it
     in the same three cases. ``list()`` never folds a wrong-shaped body into an
@@ -711,6 +738,7 @@ _CODE_MAP: dict[str, type[XAgentError]] = {
     "connector_not_editable": ConnectorNotEditable,
     "connector_forbidden": ConnectorForbidden,
     "connector_not_shared": ConnectorNotShared,
+    "model_not_assignable": ModelNotAssignable,
     "agent_tools_unconfigured": AgentToolsUnconfigured,
 }
 

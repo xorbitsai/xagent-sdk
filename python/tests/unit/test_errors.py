@@ -29,6 +29,7 @@ from xagent_sdk import (
     InvalidAPIKey,
     InvalidInput,
     McpOAuthAuthorizationFailed,
+    ModelNotAssignable,
     NoPendingInteraction,
     RateLimited,
     SkillAlreadyExists,
@@ -247,6 +248,7 @@ class TestFromResponseStableCodes:
             (409, "connector_not_editable", ConnectorNotEditable),
             (403, "connector_forbidden", ConnectorForbidden),
             (400, "connector_not_shared", ConnectorNotShared),
+            (400, "model_not_assignable", ModelNotAssignable),
             (409, "agent_tools_unconfigured", AgentToolsUnconfigured),
         ],
     )

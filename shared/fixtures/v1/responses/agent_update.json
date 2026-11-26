@@ -1,0 +1,36 @@
+{
+  "id": 1,
+  "user_id": 2,
+  "name": "Support Assistant",
+  "description": "Answers support questions.",
+  "instructions": "Be concise.",
+  "execution_mode": "balanced",
+  "models": {
+    "general": 3,
+    "small_fast": 1,
+    "visual": 2147483000,
+    "compact": 1
+  },
+  "knowledge_bases": [],
+  "skills": [],
+  "tool_categories": [],
+  "suggested_prompts": [
+    "How do I reset my password?"
+  ],
+  "prompt_context_fields": [],
+  "logo_url": null,
+  "status": "draft",
+  "published_at": null,
+  "created_at": "2026-05-20T10:00:00.000000",
+  "updated_at": "2026-05-30T10:00:00.000000",
+  "widget_enabled": true,
+  "allowed_domains": [],
+  "share_enabled": false,
+  "share_updated_at": null,
+  "team_id": 1,
+  "visibility": "team",
+  "unresolved_models": [
+    "general",
+    "visual"
+  ]
+}

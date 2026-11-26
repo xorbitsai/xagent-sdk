@@ -1,0 +1,21 @@
+{
+  "error": {
+    "code": "model_not_assignable",
+    "message": "These model slots cannot use the requested model: general (owner_cannot_use), small_fast (not_llm). The agent's owner cannot use this model, so tasks started with the agent's runtime keys would fall back to another model. Choose a model with owner_can_use true in GET /v1/agents/{agent_id}/assignable-models, or change it in the web app.",
+    "details": {
+      "models": [
+        {
+          "slot": "general",
+          "id": 4,
+          "reason": "owner_cannot_use",
+          "owner_user_id": 2
+        },
+        {
+          "slot": "small_fast",
+          "id": 2,
+          "reason": "not_llm"
+        }
+      ]
+    }
+  }
+}
