@@ -319,6 +319,24 @@ class ModelInfo:
 
 
 @dataclass(frozen=True)
+class ModelForAgent(ModelInfo):
+    """One model of ``agents.list_assignable_models()``: a ``ModelInfo`` that
+    also says whether the agent's owner can use it.
+
+    Only ``llm`` models are listed, because only those take effect in an
+    agent's model slots. ``owner_can_use`` is ``True`` when the agent's owner
+    can use the model too, which ``agents.update()`` requires to change a
+    slot to it; it is always ``True`` when you own the agent. Tasks started
+    with the agent's runtime keys run as the owner, so a model the owner
+    cannot use would fall back to another model there. ``owner_can_use`` is
+    always present; a missing value, or one that cannot be read as a
+    bool, raises ``MalformedResponse``.
+    """
+
+    owner_can_use: bool
+
+
+@dataclass(frozen=True)
 class SkillSummary:
     """``GET /v1/skills`` list entry and the body of every skill write.
 
@@ -1107,6 +1125,7 @@ _AGENT_SKILLS_UPDATE_ADAPTER = TypeAdapter(AgentSkillsUpdate)
 _AGENT_CONNECTORS_ADAPTER = TypeAdapter(AgentConnectors)
 _AGENT_DETAIL_ADAPTER = TypeAdapter(AgentDetail)
 _MODEL_INFO_LIST_ADAPTER = TypeAdapter(list[ModelInfo])
+_MODEL_FOR_AGENT_LIST_ADAPTER = TypeAdapter(list[ModelForAgent])
 _MCP_SERVER_ADAPTER = TypeAdapter(McpServer)
 _MCP_SERVER_LIST_ADAPTER = TypeAdapter(list[McpServer])
 _MCP_SERVER_TOOLS_ADAPTER = TypeAdapter(McpServerTools)
@@ -1146,7 +1165,8 @@ def _validate_write(adapter: TypeAdapter[T], data: Any, what: str) -> T:
     ``skills.upload()`` and ``skills.update()`` are idempotent replays and
     safe to resend, and so are ``agents.revoke_key()``, which reports an
     already revoked key with ``revoked=False``, and ``mcp_servers.update()``
-    and ``mcp_servers.set_enabled()``; ``mcp_servers.create()`` is not (a
+    and ``mcp_servers.set_enabled()``, and ``agents.update()``, which
+    declares the same values again; ``mcp_servers.create()`` is not (a
     repeat gets ``ConnectorNameConflict``).
     ``agents.replace_skills()`` is not: resending can lose the unresolved
     names the first call reported, so call ``agents.get_skills()`` first.
@@ -1443,15 +1463,15 @@ def _parse_agent_connectors_write(data: Any) -> AgentConnectors:
     return _validate_write(_AGENT_CONNECTORS_ADAPTER, data, "agent connectors update")
 
 
-def _parse_agent_detail(data: Any) -> AgentDetail:
-    """Parse ``GET /v1/agents/{agent_id}`` strictly.
+def _rename_agent_detail(data: Any, what: str = "agent detail") -> dict[str, Any]:
+    """Check ``data`` is an object and apply the two wire-to-SDK renames.
 
     The wire ``id`` and ``user_id`` become ``agent_id`` and ``owner_user_id``.
     A body that carries ``agent_id`` or ``owner_user_id`` itself does not fill
     those fields: only the wire names count, so a missing ``id`` is reported
     instead of being filled from another key.
     """
-    body = _require_mapping(data, "agent detail")
+    body = _require_mapping(data, what)
     renamed = {
         k: v
         for k, v in body.items()
@@ -1461,7 +1481,14 @@ def _parse_agent_detail(data: Any) -> AgentDetail:
         renamed["agent_id"] = body["id"]
     if "user_id" in body:
         renamed["owner_user_id"] = body["user_id"]
-    return _validate_read(_AGENT_DETAIL_ADAPTER, renamed, "agent detail")
+    return renamed
+
+
+def _parse_agent_detail(data: Any) -> AgentDetail:
+    """Parse ``GET /v1/agents/{agent_id}`` strictly."""
+    return _validate_read(
+        _AGENT_DETAIL_ADAPTER, _rename_agent_detail(data), "agent detail"
+    )
 
 
 def _parse_model_list(data: Any) -> list[ModelInfo]:
@@ -1478,6 +1505,22 @@ def _parse_model_list(data: Any) -> list[ModelInfo]:
             http_status=None,
         )
     return _validate_read(_MODEL_INFO_LIST_ADAPTER, data, "model list")
+
+
+def _parse_model_for_agent_list(data: Any) -> list[ModelForAgent]:
+    """Parse the bare array returned by
+    ``GET /v1/agents/{agent_id}/assignable-models`` strictly.
+
+    Same rules as ``_parse_model_list``, and every entry must also carry
+    ``owner_can_use`` as a value that can be read as a bool.
+    """
+    if not isinstance(data, list):
+        raise MalformedResponse(
+            "malformed_response",
+            f"expected a JSON array for assignable models, got {type(data).__name__}",
+            http_status=None,
+        )
+    return _validate_read(_MODEL_FOR_AGENT_LIST_ADAPTER, data, "assignable models")
 
 
 def _parse_mcp_server_list(data: Any) -> list[McpServer]:
@@ -1498,6 +1541,19 @@ def _parse_mcp_server_list(data: Any) -> list[McpServer]:
 
 def _parse_mcp_server_read(data: Any, what: str) -> McpServer:
     return _validate_read(_MCP_SERVER_ADAPTER, _require_mapping(data, what), what)
+
+
+def _parse_agent_write(data: Any) -> AgentDetail:
+    """Parse the body of ``PATCH /v1/agents/{agent_id}`` strictly.
+
+    Same shape and renames as ``_parse_agent_detail``, but the server has
+    already accepted the change, so a body that does not match says so.
+    """
+    return _validate_write(
+        _AGENT_DETAIL_ADAPTER,
+        _rename_agent_detail(data, "agent update"),
+        "agent update",
+    )
 
 
 def _parse_mcp_server_write(data: Any, what: str) -> McpServer:

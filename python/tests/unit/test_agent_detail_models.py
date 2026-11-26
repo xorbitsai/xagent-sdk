@@ -1,4 +1,7 @@
-"""Tests for ``UserClient.agents.get()`` and ``UserClient.models.list()``.
+"""Tests for ``agents.get()``, ``models.list()`` and the shared route checks.
+
+``agents.update()`` and ``agents.list_assignable_models()`` are registered here
+for the route and error-mapping checks and tested in ``test_agent_update.py``.
 
 Each block pins one invariant: how ``agent_id`` becomes a path, which
 arguments are refused before any request, how the wire fields map onto
@@ -52,13 +55,29 @@ def _json_response(body: Any) -> httpx.Response:
 
 _CALLS: dict[tuple[str, str], _Call] = {
     ("agents", "get"): lambda u: u.agents.get(7),
+    ("agents", "update"): lambda u: u.agents.update(7, name="Renamed"),
     ("models", "list"): lambda u: u.models.list(),
+    ("agents", "list_assignable_models"): lambda u: u.agents.list_assignable_models(7),
 }
-_FIXTURES = {("agents", "get"): "agent_detail", ("models", "list"): "model_list"}
+_FIXTURES = {
+    ("agents", "get"): "agent_detail",
+    ("agents", "update"): "agent_update",
+    ("models", "list"): "model_list",
+    ("agents", "list_assignable_models"): "agent_assignable_models",
+}
 # HTTP method and raw request path of each canonical call.
 _ROUTES: dict[tuple[str, str], tuple[str, bytes]] = {
     ("agents", "get"): ("GET", b"/v1/agents/7"),
+    ("agents", "update"): ("PATCH", b"/v1/agents/7"),
     ("models", "list"): ("GET", b"/v1/models"),
+    ("agents", "list_assignable_models"): (
+        "GET",
+        b"/v1/agents/7/assignable-models",
+    ),
+}
+# Request body of each canonical call; a call that sends none is not listed.
+_BODIES: dict[tuple[str, str], dict[str, Any]] = {
+    ("agents", "update"): {"name": "Renamed"},
 }
 _KEYS = list(_CALLS)
 _IDS = [f"{ns}.{m}" for ns, m in _KEYS]
@@ -104,7 +123,7 @@ _MODEL_FIELDS = [
 
 class TestRoutes:
     @pytest.mark.parametrize("key", _KEYS, ids=_IDS)
-    def test_methods_send_expected_method_path_and_no_body(
+    def test_methods_send_expected_method_path_and_body(
         self, key: tuple[str, str]
     ) -> None:
         captured: list[httpx.Request] = []
@@ -120,7 +139,10 @@ class TestRoutes:
         assert len(captured) == 1
         assert captured[0].method == method
         assert captured[0].url.raw_path == raw_path
-        assert captured[0].content == b""
+        if key in _BODIES:
+            assert json.loads(captured[0].content) == _BODIES[key]
+        else:
+            assert captured[0].content == b""
 
     def test_every_public_method_is_registered(self) -> None:
         # Member binding: a public method added to ``ModelsAPI`` has to be
@@ -268,8 +290,8 @@ class TestUnexpectedSuccessResponses:
         self, key: tuple[str, str], kind: str
     ) -> None:
         status, kwargs, expected_status = _UNEXPECTED_SUCCESS[kind]
-        if status == 201 and key == ("agents", "get"):
-            kwargs = {"json": response("agent_detail")}
+        if status == 201 and key[0] == "agents":
+            kwargs = {"json": response(_FIXTURES[key])}
         with (
             _make_user(lambda req: httpx.Response(status, **kwargs)) as c,
             pytest.raises(MalformedResponse) as exc,

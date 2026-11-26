@@ -1,0 +1,29 @@
+[
+  {
+    "id": 4,
+    "model_id": "member-chat",
+    "model_name": "gpt-4.1-mini",
+    "model_provider": "openai",
+    "category": "llm",
+    "abilities": [
+      "chat"
+    ],
+    "is_platform": false,
+    "owned_by_you": true,
+    "owner_can_use": false
+  },
+  {
+    "id": 1,
+    "model_id": "shared-chat",
+    "model_name": "gpt-4o-mini",
+    "model_provider": "openai",
+    "category": "llm",
+    "abilities": [
+      "chat",
+      "tool_calling"
+    ],
+    "is_platform": false,
+    "owned_by_you": false,
+    "owner_can_use": true
+  }
+]

@@ -39,8 +39,11 @@ class ModelsAPI:
         Only a model whose ``category`` is ``"llm"`` takes effect in an
         agent's model slot when a task runs. ``agents.create_from_template()``
         also accepts a model of another category in ``overrides["models"]``,
-        and ``agents.get()`` then lists that slot in ``unresolved_models``.
-        A model's ``id`` is specific to the deployment you call; use
+        and ``agents.get()`` then lists that slot in ``unresolved_models``;
+        ``agents.update()`` refuses to change a slot to one. To choose a
+        model for a slot, use ``agents.list_assignable_models()``, which
+        lists only ``llm`` models and says which ones the agent's owner can
+        use. A model's ``id`` is specific to the deployment you call; use
         ``model_id`` to find the same model in another deployment.
 
         Parsing is strict: if any entry does not match the expected shape,

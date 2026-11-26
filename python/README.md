@@ -346,6 +346,7 @@ All SDK exceptions inherit from `XAgentError` and carry `code`,
 | `ConnectorNotEditable` | 409 | `connector_not_editable` -- raised by `mcp_servers.update()` and `delete()`; `details["reason"]` is `catalog` (an app connection from the catalog, changed only in the web app), `managed_elsewhere` (another account manages its OAuth connection), `authorized_by_others` (other accounts hold authorizations that changing `url`, `auth.issuer` or `auth.resource_metadata_url` would keep; make that change in the web app) or `unknown` |
 | `ConnectorForbidden` | 403 | `connector_forbidden` -- raised by `mcp_servers.update()`, `delete()` and `set_enabled()`, and by `create()` when the server refuses you a new connector; `details["reason"]` is `team_shared` (you see the connector only through your team, so it is read-only) or `not_permitted` (for example deleting a team-owned connector without being a team administrator) |
 | `ConnectorNotShared` | 400 | `connector_not_shared` -- raised by `agents.replace_connectors()` when the agent belongs to a team and the team cannot use the new selection; the team's deployment decides, and it checks the whole new list, so `details["connectors"]` (a list of `{"name", "reason"}`) can name connectors you did not send; `reason` is `not_shared`, `disabled` or `unresolved` today, treat any other string as `not_shared`; `name` can be an empty string; nothing was written |
+| `ModelNotAssignable` | 400 | `model_not_assignable` -- raised by `agents.update()` when a model slot it changes cannot take the requested model; nothing is written; `details["models"]` lists each refused slot, in slot order, as `{"slot", "id", "reason"}` (`id` is the requested model's id), plus `owner_user_id` when `reason` is `owner_cannot_use`; `reason` is `unavailable`, `not_llm` or `owner_cannot_use` (treat any other string as `unavailable`), and a slot sent with the model it already stores is never listed |
 | `AgentToolsUnconfigured` | 409 | `agent_tools_unconfigured` -- raised by `agents.replace_connectors()` when the agent uses the default tool set and has no selection of its own; choose its tools in the web app first; `get_connectors()` never raises it |
 | `ConnectorToolsUnavailable` | 502 | `connector_tools_unavailable` -- raised by `mcp_servers.list_tools()` when no tools were loaded; `details["reason"]` and `details["failures"]` (a list of `{"phase", "attempts"}`) say what failed |
 | `TaskBusy` | 409 | `task_busy` |
@@ -401,7 +402,7 @@ SDK-coined codes:
 | Exception | Cause |
 |---|---|
 | `XAgentTransportError` | network / DNS / TLS error below the HTTP layer, or an `events()` stream whose last frame was not a closing frame |
-| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `agents.get_connectors()` and `agents.replace_connectors()` raise it in the same three cases -- `get_connectors()` never turns a wrong body into an empty selection -- and after it on `replace_connectors()` the replacement may already have been applied, and calling it again declares the same selection once more (nothing is written if nobody changed the agent in the meantime; a change someone else made in the meantime is overwritten); `agents.get()` and `models.list()` raise it in the same three cases -- `agents.get()` never turns a wrong body into an empty agent, and `models.list()` never turns one into an empty list; `mcp_servers.list()`, `mcp_servers.get()` and `mcp_servers.list_tools()` raise it in the same three cases -- `mcp_servers.list()` never turns a wrong body into an empty list -- and `mcp_servers.create()`, `update()`, `delete()` and `set_enabled()` raise it in those cases too, after the server may already have applied the write: `update()` and `set_enabled()` can be repeated safely, a repeated `delete()` raises `ConnectorNotFound` (or `ConnectorForbidden` while your team still shares the connector), and a repeated `create()` raises `ConnectorNameConflict`; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
+| `MalformedResponse` | HTTP succeeded but the body did not match the shape the SDK needs; `events()` also raises it when the stream endpoint answers 200 with a content type other than `text/event-stream` or a declared charset other than UTF-8, or with a status that is neither an error nor 200 (a redirect or a 204) -- the latter carrying that status on `http_status`; `create()`/`append()`/`reply()` raise it when the 202 body does not validate, after the server accepted the write, so do not resend it blindly: a retried `create()` starts a second task, and a retried `append()`/`reply()` can send the message twice; every method that decodes JSON -- `me()`, `agents.*`, `templates.*`, `tasks.create()`/`append()`/`reply()`/`get()`/`steps()` and the `WorkspaceClient` methods -- raises it when the status is not the endpoint's success status (200, or 202 for `create()`/`append()`/`reply()`), for example a redirect or a 204, carrying that status on `http_status`, and when that body is not JSON; the `skills.*` methods raise it when the status is not 200 (a redirect or a 204 -- carrying that status on `http_status`), when a 200 body is not JSON, or when its shape is wrong -- `skills.list()` never turns a wrong body into an empty list -- and `skills.create()`/`skills.upload()`/`skills.update()` can be retried safely after it; `agents.get_skills()` and `agents.replace_skills()` raise it in the same three cases -- `get_skills()` never turns a wrong body into an empty list -- and after it on `replace_skills()` call `get_skills()` to check what the server stored; `agents.get_connectors()` and `agents.replace_connectors()` raise it in the same three cases -- `get_connectors()` never turns a wrong body into an empty selection -- and after it on `replace_connectors()` the replacement may already have been applied, and calling it again declares the same selection once more (nothing is written if nobody changed the agent in the meantime; a change someone else made in the meantime is overwritten); `agents.get()` and `models.list()` raise it in the same three cases -- `agents.get()` never turns a wrong body into an empty agent, and `models.list()` never turns one into an empty list; `agents.list_assignable_models()` raises it in the same three cases and for an entry whose `owner_can_use` is missing or cannot be read as a bool, never turning a wrong body into an empty list, and `agents.update()` raises it in those cases too, after the server may already have applied the change (repeating the call is safe, or call `agents.get()` to see what is stored); `mcp_servers.list()`, `mcp_servers.get()` and `mcp_servers.list_tools()` raise it in the same three cases -- `mcp_servers.list()` never turns a wrong body into an empty list -- and `mcp_servers.create()`, `update()`, `delete()` and `set_enabled()` raise it in those cases too, after the server may already have applied the write: `update()` and `set_enabled()` can be repeated safely, a repeated `delete()` raises `ConnectorNotFound` (or `ConnectorForbidden` while your team still shares the connector), and a repeated `create()` raises `ConnectorNameConflict`; `TaskInfo.parsed()` raises it when the structured result fields break the server's contract (a `ready` status without an object, or another status without a reason) |
 | `RunMismatch` | `wait()` / `run()` with an expected run: the snapshot about to be returned shows another run or no run (code `run_mismatch`); `TaskInfo.parsed(expected_run_id=...)` and `RunResult.parsed()` for the same reason; a subclass of `StructuredOutputError` |
 | `UnsupportedFeature` | `create()` / `append()` / `run()` with a `response_format`: `GET /v1/features` answered 404 or does not list `structured_output` (raised before the write, `task_id=None`), or the write's response did not echo the format back (`task_id` is the accepted task) |
 | `UnsupportedSchema` | a `response_format` refused before any request: it breaks a server rule checked locally (`rule`, `path` and `message` as the server reports them); a Pydantic model that cannot be converted raises its subclass `UnsupportedModel` |
@@ -1006,6 +1007,91 @@ use `model_id` to find the same model in another one.
 An empty list means you have no models. A body that is not an array of models
 raises `MalformedResponse` and is never read as an empty list.
 
+### 16. Change an agent's name, instructions or models
+
+`agents.update()` changes only the fields you pass. Read the agent, change one
+model slot, then read the result to confirm. `agents.list_assignable_models()`
+lists the models a slot can take: each has `owner_can_use`, and a slot can only
+be changed to a model whose `owner_can_use` is `True`.
+
+```python
+from xagent_sdk import ModelNotAssignable, UserClient
+
+AGENT_ID = 42
+WANTED = "gpt-4o-mini"  # the model_id string of the model you want
+
+with UserClient() as user:
+    agent = user.agents.get(AGENT_ID)
+    print(agent.models)
+
+    # A model's integer id is specific to the deployment you call, so look it
+    # up here by its model_id string.
+    choices = user.agents.list_assignable_models(AGENT_ID)
+    chosen = next(
+        m for m in choices if m.model_id == WANTED and m.owner_can_use
+    )
+
+    try:
+        updated = user.agents.update(AGENT_ID, models={"visual": chosen.id})
+    except ModelNotAssignable as exc:
+        for refused in (exc.details or {}).get("models", []):
+            print(refused["slot"], refused["id"], refused["reason"])
+        raise
+
+    # Only the visual slot changed; the other slots keep their stored model.
+    print(updated.models)
+    print(updated.unresolved_models)  # slots that still fall back for you
+```
+
+Pass only the arguments you want to change: `update(AGENT_ID, name="Billing")`
+leaves the description, instructions and models alone, and `update(AGENT_ID)`
+changes nothing and returns the current configuration. `name`, `description`
+and `instructions` cannot be `None`; pass `""` to empty the last two. In
+`models`, a slot set to an `int` takes that model, a slot set to `None` clears
+it, and a slot you leave out keeps its model. Clearing a slot means a task uses
+the model of the task itself or the default model, which can differ with whoever
+starts it.
+
+The `models` value of `agents.get()` cannot always be passed back as is. It is
+`None` for an agent without models, which raises `TypeError` before any request.
+A value saved in the web app can hold keys other than the four slots, or slot
+values other than `None` or an integer from 1 to 2**31 - 1, and the server
+refuses those with `InvalidInput` (HTTP 422). Pass only the slots you change.
+
+A slot sent with the model it already stores is left as it is and is not
+checked. Any other slot can only be changed to a model that
+`list_assignable_models()` lists with `owner_can_use` set to `True`. Otherwise
+the call raises `ModelNotAssignable` (HTTP 400) and nothing is changed;
+`details["models"]` lists each refused slot as `{"slot", "id", "reason"}`, where
+`id` is the requested model's id:
+
+| `reason` | Meaning |
+|---|---|
+| `unavailable` | you cannot use the model: it does not exist, is switched off, or is not visible to you |
+| `not_llm` | you can use it, but it is not an `llm` model |
+| `owner_cannot_use` | you can use it, but the agent's owner cannot; the entry also has `owner_user_id` |
+
+Treat any other `reason` string as `unavailable`. A request that the server
+also refuses for its name or for a description or instructions that are too
+long raises `InvalidInput` instead, and its model slots are not checked.
+
+Of two concurrent updates the later one overwrites the earlier one's value for
+the same field or slot; nothing detects the conflict. New tasks use the new
+values at once. A task that is already running can keep using the previous
+values for a while, and an ongoing workforce conversation that includes the
+agent can be rejected with `workforce_config_changed` on its next turn after
+`instructions` or `models` change (a preview conversation in the workforce
+builder is not checked, and neither is a conversation that started before the
+check). If the change was stored but you can no longer see the agent when the
+server reads it again, the call raises `AgentNotFound` although the change took
+effect.
+
+A task resolves each slot as the user it runs as. If that user cannot use the
+model, a task started on this agent falls back to a default model for that slot
+without an error. When another agent calls this agent, such a `general` model
+fails the call, and such a model in another slot is left unused. For a team
+agent, prefer models shared with the team.
+
 ## API reference
 
 All methods are synchronous.
@@ -1032,6 +1118,8 @@ can reach.
 | `user.agents.revoke_key(agent_id, key_id)` | `RevokeKeyResult` | DELETE `/v1/agents/{agent_id}/api-keys/{key_id}`; revokes that one key and leaves the agent's other keys working; no call reverses it; calling again is safe and returns `revoked=False`; a key that a still-settling rotation had already revoked is such a no-op and can be restored if that rotation's new key cannot be delivered, so list the keys again once the rotation settles and revoke the key if it is active; unknown agent → `AgentNotFound`, a key id the agent does not have → `APIKeyNotFound`; a server without this route answers 404 or 405 → `InternalError` |
 | `user.agents.replace_skills(agent_id, skills)` | `AgentSkillsUpdate` | PUT `/v1/agents/{agent_id}/skills`; 404 → `AgentNotFound`; replaces the whole list, `[]` clears it, and the later of two writers wins; a single string raises `TypeError` before any request; a new name that is neither visible nor valid → `InvalidInput` (400); `unresolved_for_caller` lists added names you cannot see, stored anyway |
 | `user.agents.get(agent_id)` | `AgentDetail` | GET `/v1/agents/{agent_id}`; `agent_id` must be an `int` (anything else raises `TypeError` before any request); wire `id` is `agent_id` and wire `user_id` is `owner_user_id`; 404 → `AgentNotFound`; out-of-range id → `InvalidInput` (422); a body that is not the expected object, or lacks a field or has one that cannot be read as its declared type, raises `MalformedResponse` (`models` only has to be an object or `None`) |
+| `user.agents.update(agent_id, *, name=..., description=..., instructions=..., models=...)` | `AgentDetail` | PATCH `/v1/agents/{agent_id}`; only the parameters you pass are sent, passing none returns the current configuration; none of `name`, `description`, `instructions` accepts `None` (pass `""` to empty the last two); `models` merges slot by slot (`{"visual": None}` clears a slot, a slot you leave out is kept) and is copied into the request; a slot sent with the model it already stores is not checked, any other slot takes only a model `list_assignable_models()` lists with `owner_can_use=True`, and `AgentDetail.models` from `get()` cannot always be passed back as is; of two concurrent writers the later one wins, and new tasks use the new values at once while a task already running can keep the previous values for a while; safe to repeat; `agent_id` must be an `int`, else `TypeError` before any request; 404 → `AgentNotFound`; a model slot that cannot take the model → `ModelNotAssignable` (400) with `details["models"]`; a name already in use, or a description or instructions over 10000 characters and longer than the stored one → `InvalidInput` (400); a malformed value, or an out-of-range id → `InvalidInput` (422); a body that is not the expected agent raises `MalformedResponse`, and the change may already be stored |
+| `user.agents.list_assignable_models(agent_id)` | `list[ModelForAgent]` | GET `/v1/agents/{agent_id}/assignable-models`; every `llm` model you can use, in server order, each with `owner_can_use`, which says whether the agent's owner can use it too; a model the owner cannot use is listed with `owner_can_use=False`, and `update()` takes only a model with `owner_can_use=True`; `[]` means you can use no `llm` model; `agent_id` must be an `int`, else `TypeError` before any request; 404 → `AgentNotFound`; an out-of-range id → `InvalidInput` (422); a body that is not an array of models, or an entry whose `owner_can_use` is missing or cannot be read as a bool, raises `MalformedResponse` (never `[]`) |
 | `user.agents.get_connectors(agent_id)` | `AgentConnectors` | GET `/v1/agents/{agent_id}/connectors`; `agent_id` must be an `int` (anything else raises `TypeError` before any request); 404 → `AgentNotFound`; a body that is not the expected object, or lacks any of its four fields, raises `MalformedResponse` (never an empty selection); `connectors=[]` with `all_connectors=True` can also be an agent that uses the default tool set |
 | `user.agents.replace_connectors(agent_id, connectors, *, all_connectors)` | `AgentConnectors` | PUT `/v1/agents/{agent_id}/connectors`; replaces the whole selection, `[]` clears it, and the later of two writers wins; `all_connectors` is required and has no default; a single string, or an `agent_id` that is not an `int`, raises `TypeError` before any request; 404 → `AgentNotFound`; an added name you cannot see → `InvalidInput` (400); a team that cannot use the selection → `ConnectorNotShared`; an agent on the default tool set → `AgentToolsUnconfigured`; `unresolved` lists names on the agent that you cannot see |
 | `user.tasks.create / append / reply / cancel / get / steps / events / wait / run` | as in the `AgentClient` table | Any agent you can see (`user.agents.list()`); the task runs as you, not as the agent's owner. Every personal key of yours sees the tasks any of them created, until the task's agent is deleted. An older server answers `InvalidAPIKey` (401) here. |
